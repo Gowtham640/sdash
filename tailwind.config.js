@@ -11,6 +11,11 @@ module.exports = {
   ],
   theme: {
   	extend: {
+  		fontFamily: {
+  			'sans': ['var(--font-open-sans)', 'sans-serif'],
+  			'sora': ['var(--font-sora)', 'sans-serif'],
+  			'open-sans': ['var(--font-open-sans)', 'sans-serif'],
+  		},
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
