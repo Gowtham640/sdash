@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
-from scraper_selenium import SRMAcademiaScraperSelenium
+from scraper_selenium_session import SRMAcademiaScraperSelenium
 
 def extract_calendar_data_from_html(html_content):
     """
