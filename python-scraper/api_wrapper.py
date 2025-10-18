@@ -1,48 +1,84 @@
 #!/usr/bin/env python3
 """
-SRM Academia Portal Scraper - API Wrapper for Next.js Integration
-Uses persistent Chrome profile-based session management
+API Wrapper for SRM Academia Portal Scraper
+Provides clean functions for Next.js to call
+Based on the working standalone code
 """
 
-from scraper_selenium import SRMAcademiaScraperSelenium
-from calendar_scraper_fixed import extract_calendar_data_from_html
 import sys
 import json
 import time
+from scraper_selenium_session import SRMAcademiaScraperSelenium
+from calendar_scraper_fixed import extract_calendar_data_from_html
 
 # ============================================================================
 # API FUNCTIONS FOR NEXT.JS INTEGRATION
 # ============================================================================
 
 def api_get_calendar_data(email, password):
-    """API function to get calendar data using the same approach as working standalone code"""
+    """API function to get calendar data using the working scraper approach"""
     scraper = None
     try:
         print(f"[API] Getting calendar data for: {email}", file=sys.stderr)
         
-        # Use the same scraper class as working code, but in headless mode
-        scraper = SRMAcademiaScraperSelenium(headless=True)
+        # Initialize scraper with session management (exactly like working code)
+        scraper = SRMAcademiaScraperSelenium(headless=True, use_session=True)
         
-        # Login using the same method as working code
-        print(f"[API] Logging in with: {email}", file=sys.stderr)
+        # Check if we have a valid session first
+        if scraper.is_session_valid():
+            print("[API] Valid session found - skipping login", file=sys.stderr)
+            
+            # Try to get calendar data without login
+            print("[API] Getting calendar HTML content...", file=sys.stderr)
+            html_content = scraper.get_calendar_data()
+            
+            if html_content:
+                print(f"[API] Got HTML content ({len(html_content)} characters)", file=sys.stderr)
+                
+                # Extract calendar data using the proven extraction logic
+                print("[API] Extracting calendar data...", file=sys.stderr)
+                calendar_data = extract_calendar_data_from_html(html_content)
+                
+                if calendar_data:
+                    print(f"[API] Successfully extracted {len(calendar_data)} calendar entries", file=sys.stderr)
+                    return {
+                        "success": True,
+                        "data": calendar_data,
+                        "type": "calendar",
+                        "count": len(calendar_data)
+                    }
+                else:
+                    print("[API] No calendar data extracted", file=sys.stderr)
+                    return {
+                        "success": True,
+                        "data": [],
+                        "type": "calendar",
+                        "count": 0
+                    }
+            else:
+                print("[API] Session expired - need to login", file=sys.stderr)
+        
+        # If no valid session or session expired, login
+        print(f"[API] Logging in for: {email}", file=sys.stderr)
         if not scraper.login(email, password):
             print("[API] Login failed!", file=sys.stderr)
             return {"success": False, "error": "Login failed"}
         
         print("[API] Login successful!", file=sys.stderr)
         
-        # Navigate to calendar page using the same URL as working code
-        planner_url = "https://academia.srmist.edu.in/#Page:Academic_Planner_2025_26_ODD"
-        print(f"[API] Navigating to: {planner_url}", file=sys.stderr)
-        scraper.driver.get(planner_url)
+        # Get calendar data using the working method
+        print("[API] Getting calendar HTML content...", file=sys.stderr)
+        html_content = scraper.get_calendar_data()
         
-        # Wait for page to load - same timing as working code
-        print("[API] Waiting for page to load...", file=sys.stderr)
-        time.sleep(10)  # Same 10 seconds as working code
+        if not html_content:
+            print("[API] Failed to get calendar HTML content", file=sys.stderr)
+            return {"success": False, "error": "Failed to get calendar data"}
         
-        # Extract calendar data using direct page source - same as working code
+        print(f"[API] Got HTML content ({len(html_content)} characters)", file=sys.stderr)
+        
+        # Extract calendar data using the proven extraction logic
         print("[API] Extracting calendar data...", file=sys.stderr)
-        calendar_data = extract_calendar_data_from_html(scraper.driver.page_source)
+        calendar_data = extract_calendar_data_from_html(html_content)
         
         if calendar_data:
             print(f"[API] Successfully extracted {len(calendar_data)} calendar entries", file=sys.stderr)
@@ -66,6 +102,7 @@ def api_get_calendar_data(email, password):
         import traceback
         traceback.print_exc(file=sys.stderr)
         return {"success": False, "error": f"API Error: {str(e)}"}
+    
     finally:
         # Always close the scraper
         if scraper:
