@@ -1,14 +1,65 @@
 #!/usr/bin/env python3
 """
-SRM Academia Portal Scraper - Complete Solution with Timetables
-Scrapes attendance data, academic planner, and unified timetables
+SRM Academia Portal Scraper - API Wrapper for Next.js Integration
+Handles API calls from Next.js and uses persistent session management
 """
 
-from scraper_selenium import SRMAcademiaScraperSelenium
-from display_attendance import extract_and_display_all_data
-from display_planner import display_academic_planner_formatted, save_planner_to_file
-from display_timetable import display_unified_timetable_formatted, save_timetable_to_file
-import time
+from persistent_session_manager import get_calendar_data
+import sys
+import json
+
+# ============================================================================
+# API FUNCTIONS FOR NEXT.JS INTEGRATION
+# ============================================================================
+
+def api_get_calendar_data(email, password):
+    """API function to get calendar data using persistent session"""
+    try:
+        print(f"[API] Getting calendar data for: {email}", file=sys.stderr)
+        calendar_data = get_calendar_data(email, password)
+        
+        if calendar_data:
+            return {
+                "success": True,
+                "data": calendar_data,
+                "type": "calendar"
+            }
+        else:
+            return {"success": False, "error": "No calendar data found"}
+    except Exception as e:
+        return {"success": False, "error": f"API Error: {str(e)}"}
+
+if __name__ == "__main__":
+    import sys
+    import json
+    
+    # Check if we're being called from Next.js API
+    if len(sys.argv) == 1:
+        try:
+            # Read JSON input from stdin
+            input_data = json.loads(sys.stdin.read())
+            
+            action = input_data.get('action')
+            email = input_data.get('email')
+            password = input_data.get('password')
+            
+            if not email or not password:
+                print(json.dumps({"success": False, "error": "Email and password required"}))
+                sys.exit(1)
+            
+            if action == 'get_calendar_data':
+                result = api_get_calendar_data(email, password)
+            else:
+                result = {"success": False, "error": "Unknown action"}
+            
+            # Output result as JSON
+            print(json.dumps(result))
+            
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}))
+    else:
+        # If called with arguments, run the main scraper
+        print("API Wrapper - Use without arguments for Next.js integration")
 
 def main():
     """Main function to scrape all data including timetables"""
