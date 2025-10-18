@@ -24,14 +24,15 @@ export default function CalendarPage() {
     fetchCalendarData();
   }, []);
 
-  const fetchCalendarData = async () => {
+  const fetchCalendarData = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
       
-      console.log('[FRONTEND] Fetching calendar data...');
+      console.log('[FRONTEND] Fetching calendar data...', forceRefresh ? '(force refresh)' : '');
       
-      const response = await fetch('/api/data/calender?email=gr8790@srmist.edu.in&password=h!Grizi34');
+      const refreshParam = forceRefresh ? '&refresh=true' : '';
+      const response = await fetch(`/api/data/calender?email=gr8790@srmist.edu.in&password=h!Grizi34${refreshParam}`);
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -96,7 +97,7 @@ export default function CalendarPage() {
         <div className="text-white text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
         <div className="text-red-400 text-2xl font-sora">Error: {error}</div>
         <button 
-          onClick={fetchCalendarData}
+          onClick={() => fetchCalendarData()}
           className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
           Retry
@@ -114,7 +115,8 @@ export default function CalendarPage() {
         <div className="relative p-4 z-10 w-[90vw] h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-start items-center overflow-y-auto">
           <div className="relative p-4 z-10 w-[80vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-3 justify-center items-center">
             {sortedEvents.map((event, index) => {
-              const isHoliday = event.content.toLowerCase().includes('holiday');
+              // Check if it's a holiday based on DO value being "-" or "DO -"
+              const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.content.toLowerCase().includes('holiday');
               const bgColor = isHoliday ? 'bg-green-500/80' : 'bg-white/10';
               const doText = isHoliday ? 'Holiday' : event.day_order;
               

@@ -2,6 +2,46 @@ import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import path from 'path';
 
+// ============================================================================
+// MEMORY CACHE CONFIGURATION
+// ============================================================================
+
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+  expires: number;
+}
+
+const memoryCache = new Map<string, CacheEntry>();
+const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+
+function getCachedResponse(email: string): any | null {
+  const cacheKey = `calendar_${email}`;
+  const cached = memoryCache.get(cacheKey);
+  
+  if (cached && Date.now() < cached.expires) {
+    console.log('[CACHE] Using memory cache');
+    return cached.data;
+  }
+  
+  // Clean up expired cache
+  if (cached) {
+    memoryCache.delete(cacheKey);
+  }
+  
+  return null;
+}
+
+function setCachedResponse(email: string, data: any): void {
+  const cacheKey = `calendar_${email}`;
+  memoryCache.set(cacheKey, {
+    data,
+    timestamp: Date.now(),
+    expires: Date.now() + CACHE_DURATION_MS
+  });
+  console.log(`[CACHE] Cached response for ${email}`);
+}
+
 export async function GET(request: NextRequest) {
   try {
     console.log('[API] Calendar API called');
@@ -10,6 +50,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const email = searchParams.get('email');
     const password = searchParams.get('password');
+    const forceRefresh = searchParams.get('refresh') === 'true';
     
     // Validate input
     if (!email || !password) {
@@ -39,10 +80,24 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    console.log(`[API] Calling Python scraper for: ${email}`);
+    // Check memory cache first (unless force refresh)
+    if (!forceRefresh) {
+      const cached = getCachedResponse(email);
+      if (cached) {
+        console.log('[API] Returning cached response');
+        return NextResponse.json(cached);
+      }
+    }
+    
+    console.log(`[API] Cache miss or force refresh - calling Python scraper for: ${email}`);
     
     // Call Python scraper
-    const result = await callPythonCalendarFunction(email, password);
+    const result = await callPythonCalendarFunction(email, password, forceRefresh);
+    
+    // Cache the result if successful
+    if (result && typeof result === 'object' && 'success' in result && result.success) {
+      setCachedResponse(email, result);
+    }
     
     console.log('[API] Python scraper completed');
     console.log('[API] Result:', result);
@@ -61,15 +116,15 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function callPythonCalendarFunction(email: string, password: string) {
+async function callPythonCalendarFunction(email: string, password: string, forceRefresh: boolean = false) {
   return new Promise((resolve, reject) => {
     console.log('[API] Starting Python process...');
     
     const pythonScriptPath = path.join(process.cwd(), 'python-scraper', 'api_wrapper.py');
     console.log('[API] Python script path:', pythonScriptPath);
     
-    const pythonProcess = spawn('python', [pythonScriptPath], {
-      cwd: process.cwd(),
+    const pythonProcess = spawn('python', ['api_wrapper.py'], {
+      cwd: path.join(process.cwd(), 'python-scraper'),
       env: { ...process.env }
     });
 
@@ -90,7 +145,8 @@ async function callPythonCalendarFunction(email: string, password: string) {
     const inputData = JSON.stringify({
       action: 'get_calendar_data',
       email: email,
-      password: password
+      password: password,
+      force_refresh: forceRefresh
     });
     
     console.log('[API] Sending input to Python:', inputData);

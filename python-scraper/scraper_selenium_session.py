@@ -51,7 +51,7 @@ class SRMAcademiaScraperSelenium:
             raise
     
     def is_session_valid(self):
-        """Check if the current session is still valid - conservative approach"""
+        """Check if the current session is still valid by actually testing it"""
         if not self.use_session:
             return False
         
@@ -70,10 +70,23 @@ class SRMAcademiaScraperSelenium:
                     print("[SESSION] Session expired (30 days)")
                     return False
             
-            # If session file exists and not expired, assume it's valid
-            # This avoids unnecessary login attempts
-            print("[SESSION] Session file exists and not expired - assuming valid")
-            return True
+            # Actually test the session by trying to access a protected page
+            try:
+                print("[SESSION] Testing session validity...")
+                self.driver.get("https://academia.srmist.edu.in/#Page:Dashboard")
+                time.sleep(3)
+                
+                # Check if we're redirected to login page
+                if "Login" in self.driver.title or "signinFrame" in self.driver.page_source:
+                    print("[SESSION] Session invalid - redirected to login page")
+                    return False
+                else:
+                    print("[SESSION] Session valid - can access protected pages")
+                    return True
+                    
+            except Exception as e:
+                print(f"[SESSION] Error testing session: {e}")
+                return False
                 
         except Exception as e:
             print(f"[SESSION] Error reading session file: {e}")
@@ -103,10 +116,8 @@ class SRMAcademiaScraperSelenium:
         try:
             print(f"\n=== LOGIN WITH SELENIUM (Session: {self.use_session}) ===")
             
-            # Check if we already have a valid session
-            if self.use_session and self.is_session_valid():
-                print("[SESSION] Using existing valid session - skipping login")
-                return True
+            # Don't skip login - always attempt it when this method is called
+            # The session validation should be done before calling this method
             
             print(f"[STEP 1] Loading portal page...")
             self.driver.get("https://academia.srmist.edu.in/")
