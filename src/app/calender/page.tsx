@@ -68,18 +68,18 @@ export default function CalendarPage() {
 
   const displayEvents = convertPythonDataToCalendarEvents(calendarData);
   
-  // Ensure we always have at least 7 events for the UI (pad with empty events if needed)
-  while (displayEvents.length < 7) {
-    displayEvents.push({
-      date: '',
-      day_name: '',
-      content: '',
-      day_order: ''
-    });
-  }
-
-  // Take only the first 7 events for display
-  const eventsToShow = displayEvents.slice(0, 7);
+  // Sort events chronologically by date (DD/MM/YYYY format)
+  const sortedEvents = displayEvents.sort((a, b) => {
+    if (!a.date || !b.date) return 0;
+    
+    // Parse dates from DD/MM/YYYY format
+    const parseDate = (dateStr: string) => {
+      const [day, month, year] = dateStr.split('/').map(Number);
+      return new Date(year, month - 1, day);
+    };
+    
+    return parseDate(a.date).getTime() - parseDate(b.date).getTime();
+  });
 
   if (loading) {
     return (
@@ -106,11 +106,14 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="relative bg-black items-center  min-h-screen flex flex-col overflow-hidden pt-10 gap-16">
+    <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-8">
         <div className="text-white text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
-        <div className="relative p-4 z-10 w-[90vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-10 justify-center items-center">
-          <div className="relative p-4 z-10 w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-5 justify-center items-center">
-            {eventsToShow.map((event, index) => {
+        <div className="text-white text-lg font-sora opacity-70">
+          Showing {sortedEvents.length} calendar events
+        </div>
+        <div className="relative p-4 z-10 w-[90vw] h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-start items-center overflow-y-auto">
+          <div className="relative p-4 z-10 w-[80vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-3 justify-center items-center">
+            {sortedEvents.map((event, index) => {
               const isHoliday = event.content.toLowerCase().includes('holiday');
               const bgColor = isHoliday ? 'bg-green-500/80' : 'bg-white/10';
               const doText = isHoliday ? 'Holiday' : event.day_order;
@@ -118,11 +121,11 @@ export default function CalendarPage() {
               return (
                 <div 
                   key={index}
-                  className={`relative p-4 z-10 w-[56vw] h-auto backdrop-blur ${bgColor} border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-row gap-10 justify-between items-center`}
+                  className={`relative p-3 z-10 w-[76vw] h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl text-white text-lg font-sora flex flex-row gap-8 justify-between items-center hover:bg-white/20 transition-colors`}
                 >
-                  <p className="text-white text-xl font-sora font-bold">{event.date}</p>
-                  <p className="text-white text-xl font-sora">{event.content}</p>
-                  <p className="text-white text-xl font-sora font-bold">{doText}</p>
+                  <p className="text-white text-lg font-sora font-bold min-w-[120px]">{event.date}</p>
+                  <p className="text-white text-lg font-sora flex-1 text-center">{event.content || 'No event'}</p>
+                  <p className="text-white text-lg font-sora font-bold min-w-[80px] text-right">{doText}</p>
                 </div>
               );
             })}

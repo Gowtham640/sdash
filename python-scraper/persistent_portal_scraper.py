@@ -8,6 +8,7 @@ import os
 import time
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -336,10 +337,9 @@ class PersistentPortalScraper:
             }
     
     def extract_calendar_data(self, html_content):
-        """Extract calendar data from HTML using the proven two-pass parsing strategy"""
+        """Extract calendar data from HTML using the proven logic from calendar_scraper_fixed.py"""
         try:
             from bs4 import BeautifulSoup
-            import re
             
             soup = BeautifulSoup(html_content, 'html.parser')
             calendar_data = []
@@ -384,35 +384,18 @@ class PersistentPortalScraper:
                     "count": 0
                 }
             
-            # FIRST PASS: Month Header Detection
-            month_positions = {}
-            header_row = rows[0]  # First row contains month headers
-            header_cells = header_row.find_all(['td', 'th'])
+            # Find the header row to identify month positions
+            header_row = None
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) >= 5:
+                    cell_texts = [cell.get_text().strip() for cell in cells]
+                    if "Jul '25" in cell_texts and "Aug '25" in cell_texts:
+                        header_row = row
+                        break
             
-            # Regex pattern to match month headers like "Jul '25", "Aug '25"
-            month_pattern = re.compile(r'^([A-Za-z]{3})\s*\'?(\d{2})$')
-            
-            for col_idx, cell in enumerate(header_cells):
-                cell_text = cell.get_text().strip()
-                match = month_pattern.match(cell_text)
-                if match:
-                    month_name = match.group(1)
-                    year = "20" + match.group(2)  # Convert "25" to "2025"
-                    
-                    # Calculate data block start position
-                    # Month header is at col_idx, data starts at col_idx - 2
-                    data_start_col = max(0, col_idx - 2)
-                    month_positions[month_name] = {
-                        'start_col': data_start_col,
-                        'year': year,
-                        'header_col': col_idx
-                    }
-            
-            print(f"[PERSISTENT] Found months: {list(month_positions.keys())}", file=sys.stderr)
-            print(f"[PERSISTENT] Month positions: {month_positions}", file=sys.stderr)
-            
-            if not month_positions:
-                print("[PERSISTENT] No month headers found", file=sys.stderr)
+            if not header_row:
+                print("[PERSISTENT] Header row with month names not found", file=sys.stderr)
                 return {
                     "success": True,
                     "data": [],
@@ -420,67 +403,50 @@ class PersistentPortalScraper:
                     "count": 0
                 }
             
-            # SECOND PASS: Data Extraction
-            for row_idx, row in enumerate(rows[1:], 1):  # Skip header row
+            # Extract month positions from header row (using proven logic)
+            month_positions = {}
+            header_cells = header_row.find_all(['td', 'th'])
+            for i, cell in enumerate(header_cells):
+                cell_text = cell.get_text().strip()
+                if "'25" in cell_text or "'26" in cell_text:
+                    month_positions[i] = cell_text
+            
+            print(f"[PERSISTENT] Found months: {list(month_positions.keys())}", file=sys.stderr)
+            print(f"[PERSISTENT] Month positions: {month_positions}", file=sys.stderr)
+            
+            # Process data rows (using proven simple logic)
+            for row in rows[1:]:  # Skip header row
                 cells = row.find_all(['td', 'th'])
-                if len(cells) < max(pos['start_col'] + 4 for pos in month_positions.values()):
-                    continue  # Skip rows that don't have enough columns
-                
-                # Extract data for each month
-                for month_name, month_info in month_positions.items():
-                    start_col = month_info['start_col']
-                    year = month_info['year']
+                if len(cells) >= 5:
+                    # Extract data from each cell (simple column extraction)
+                    date_cell = cells[0].get_text().strip()
+                    day_cell = cells[1].get_text().strip()
+                    event_cell = cells[2].get_text().strip()
+                    do_cell = cells[3].get_text().strip()
                     
-                    # Extract data from the 5-column block
-                    if start_col + 3 < len(cells):
-                        dt_raw = cells[start_col].get_text().strip()
-                        day_name = cells[start_col + 1].get_text().strip()
-                        event_content = cells[start_col + 2].get_text().strip()
-                        day_order_raw = cells[start_col + 3].get_text().strip()
-                        
-                        # Skip empty entries
-                        if not dt_raw or dt_raw == '-' or dt_raw.startswith('---'):
-                            continue
-                        
-                        # Validate and format day number
-                        try:
-                            day_num = int(dt_raw)
-                            if not (1 <= day_num <= 31):
-                                continue
-                        except ValueError:
-                            continue
-                        
-                        # Validate and format day order
-                        day_order = "-"
-                        if day_order_raw and day_order_raw != '-':
-                            try:
-                                do_num = int(day_order_raw)
-                                if 1 <= do_num <= 5:
-                                    day_order = f"DO {do_num}"
-                            except ValueError:
-                                pass
-                        
-                        # Construct full date
-                        month_num = {
-                            'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
-                            'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
-                            'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
-                        }.get(month_name, '01')
-                        
-                        formatted_date = f"{day_num:02d}/{month_num}/{year}"
-                        
-                        # Create calendar entry
-                        entry = {
-                            'date': formatted_date,
-                            'day_name': day_name,
-                            'content': event_content,
-                            'day_order': day_order,
-                            'month': month_num,
-                            'month_name': month_name,
-                            'year': year
-                        }
-                        
-                        calendar_data.append(entry)
+                    # Skip empty rows or separator rows
+                    if not date_cell or date_cell == '-' or date_cell.startswith('---'):
+                        continue
+                    
+                    # Parse date (using proven logic)
+                    try:
+                        if '/' in date_cell:
+                            date_obj = datetime.strptime(date_cell, '%d/%m/%Y')
+                            formatted_date = date_obj.strftime('%d/%m/%Y')
+                        else:
+                            formatted_date = date_cell
+                    except:
+                        formatted_date = date_cell
+                    
+                    # Create calendar entry (using proven structure)
+                    entry = {
+                        'date': formatted_date,
+                        'day_name': day_cell,
+                        'content': event_cell,
+                        'day_order': do_cell
+                    }
+                    
+                    calendar_data.append(entry)
             
             print(f"[PERSISTENT] Extracted {len(calendar_data)} calendar entries", file=sys.stderr)
             

@@ -4,37 +4,76 @@ SRM Academia Portal Scraper - API Wrapper for Next.js Integration
 Uses persistent Chrome profile-based session management
 """
 
-from persistent_portal_scraper import fetch_portal_data, close_persistent_scraper
+from scraper_selenium import SRMAcademiaScraperSelenium
+from calendar_scraper_fixed import extract_calendar_data_from_html
 import sys
 import json
+import time
 
 # ============================================================================
 # API FUNCTIONS FOR NEXT.JS INTEGRATION
 # ============================================================================
 
 def api_get_calendar_data(email, password):
-    """API function to get calendar data using persistent session"""
+    """API function to get calendar data using the same approach as working standalone code"""
+    scraper = None
     try:
         print(f"[API] Getting calendar data for: {email}", file=sys.stderr)
         
-        # Use the persistent scraper
-        result = fetch_portal_data(
-            url="https://academia.srmist.edu.in/#Page:Academic_Planner_2025_26_ODD",
-            email=email,
-            password=password,
-            extract_data=True
-        )
+        # Use the same scraper class as working code, but in headless mode
+        scraper = SRMAcademiaScraperSelenium(headless=True)
         
-        if result and result.get('success'):
+        # Login using the same method as working code
+        print(f"[API] Logging in with: {email}", file=sys.stderr)
+        if not scraper.login(email, password):
+            print("[API] Login failed!", file=sys.stderr)
+            return {"success": False, "error": "Login failed"}
+        
+        print("[API] Login successful!", file=sys.stderr)
+        
+        # Navigate to calendar page using the same URL as working code
+        planner_url = "https://academia.srmist.edu.in/#Page:Academic_Planner_2025_26_ODD"
+        print(f"[API] Navigating to: {planner_url}", file=sys.stderr)
+        scraper.driver.get(planner_url)
+        
+        # Wait for page to load - same timing as working code
+        print("[API] Waiting for page to load...", file=sys.stderr)
+        time.sleep(10)  # Same 10 seconds as working code
+        
+        # Extract calendar data using direct page source - same as working code
+        print("[API] Extracting calendar data...", file=sys.stderr)
+        calendar_data = extract_calendar_data_from_html(scraper.driver.page_source)
+        
+        if calendar_data:
+            print(f"[API] Successfully extracted {len(calendar_data)} calendar entries", file=sys.stderr)
             return {
                 "success": True,
-                "data": result.get('data', []),
-                "type": "calendar"
+                "data": calendar_data,
+                "type": "calendar",
+                "count": len(calendar_data)
             }
         else:
-            return {"success": False, "error": result.get('error', 'No calendar data found')}
+            print("[API] No calendar data extracted", file=sys.stderr)
+            return {
+                "success": True,
+                "data": [],
+                "type": "calendar",
+                "count": 0
+            }
+            
     except Exception as e:
+        print(f"[API] Error getting calendar data: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         return {"success": False, "error": f"API Error: {str(e)}"}
+    finally:
+        # Always close the scraper
+        if scraper:
+            try:
+                scraper.close()
+                print("[API] Scraper closed", file=sys.stderr)
+            except Exception as e:
+                print(f"[API] Error closing scraper: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     import sys
@@ -58,7 +97,7 @@ if __name__ == "__main__":
                 result = api_get_calendar_data(email, password)
             else:
                 result = {"success": False, "error": "Unknown action"}
-            
+        
             # Output result as JSON (only once)
             print(json.dumps(result))
             sys.exit(0)  # Exit immediately after outputting result
