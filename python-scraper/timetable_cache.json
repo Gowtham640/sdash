@@ -1,0 +1,365 @@
+{
+  "data": {
+    "metadata": {
+      "generated_at": "2025-10-19T23:33:43.689582",
+      "source": "SRM Academia Portal",
+      "academic_year": "2025-26 ODD",
+      "format": "Day Order (DO) Timetable"
+    },
+    "time_slots": [
+      "08:00-08:50",
+      "08:50-09:40",
+      "09:45-10:35",
+      "10:40-11:30",
+      "11:35-12:25",
+      "12:30-01:20",
+      "01:25-02:15",
+      "02:20-03:10",
+      "03:10-04:00",
+      "04:00-04:50"
+    ],
+    "slot_mapping": {
+      "Slot": "Course Title",
+      "A": "Transforms and Boundary Value Problems",
+      "B": "Data Structures and Algorithms",
+      "C": "Computer Organization and Architecture",
+      "D": "Advanced Programming Practice",
+      "F": "Operating Systems",
+      "G": "UHV-II: Universal Human Values \u2013 Understanding Harmony and Ethical Human Conduct",
+      "P16": "Professional Ethics",
+      "P39": "Operating Systems",
+      "P40": "Operating Systems",
+      "P3": "Data Structures and Algorithms",
+      "P4": "Data Structures and Algorithms"
+    },
+    "timetable": {
+      "DO 1": {
+        "do_name": "DO 1",
+        "time_slots": {
+          "08:00-08:50": {
+            "slot_code": "A",
+            "course_title": "Transforms and Boundary Value Problems",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "08:50-09:40": {
+            "slot_code": "P11",
+            "course_title": "P11",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "09:45-10:35": {
+            "slot_code": "C",
+            "course_title": "Computer Organization and Architecture",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "10:40-11:30": {
+            "slot_code": "P31",
+            "course_title": "P31",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "11:35-12:25": {
+            "slot_code": "E",
+            "course_title": "E",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "12:30-01:20": {
+            "slot_code": "P1",
+            "course_title": "P1",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "01:25-02:15": {
+            "slot_code": "B",
+            "course_title": "Data Structures and Algorithms",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "02:20-03:10": {
+            "slot_code": "P21",
+            "course_title": "P21",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "03:10-04:00": {
+            "slot_code": "D",
+            "course_title": "Advanced Programming Practice",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "04:00-04:50": {
+            "slot_code": "P41",
+            "course_title": "P41",
+            "slot_type": "Lab",
+            "is_alternate": false
+          }
+        }
+      },
+      "DO 2": {
+        "do_name": "DO 2",
+        "time_slots": {
+          "08:00-08:50": {
+            "slot_code": "A/X",
+            "course_title": "Transforms and Boundary Value Problems",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "08:50-09:40": {
+            "slot_code": "P12/X",
+            "course_title": "P12/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "09:45-10:35": {
+            "slot_code": "C/X",
+            "course_title": "Computer Organization and Architecture",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "10:40-11:30": {
+            "slot_code": "P32/X",
+            "course_title": "P32/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "11:35-12:25": {
+            "slot_code": "E/X",
+            "course_title": "E/X",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "12:30-01:20": {
+            "slot_code": "P2/X",
+            "course_title": "P2/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "01:25-02:15": {
+            "slot_code": "B/X",
+            "course_title": "Data Structures and Algorithms",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "02:20-03:10": {
+            "slot_code": "P22/X",
+            "course_title": "P22/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "03:10-04:00": {
+            "slot_code": "D/X",
+            "course_title": "Advanced Programming Practice",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "04:00-04:50": {
+            "slot_code": "P42/X",
+            "course_title": "P42/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          }
+        }
+      },
+      "DO 3": {
+        "do_name": "DO 3",
+        "time_slots": {
+          "08:00-08:50": {
+            "slot_code": "F/X",
+            "course_title": "Operating Systems",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "08:50-09:40": {
+            "slot_code": "P13/X",
+            "course_title": "P13/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "09:45-10:35": {
+            "slot_code": "A/X",
+            "course_title": "Transforms and Boundary Value Problems",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "10:40-11:30": {
+            "slot_code": "P33/X",
+            "course_title": "P33/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "11:35-12:25": {
+            "slot_code": "C/X",
+            "course_title": "Computer Organization and Architecture",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "12:30-01:20": {
+            "slot_code": "P3/X",
+            "course_title": "Data Structures and Algorithms",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "01:25-02:15": {
+            "slot_code": "G/X",
+            "course_title": "UHV-II: Universal Human Values \u2013 Understanding Harmony and Ethical Human Conduct",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "02:20-03:10": {
+            "slot_code": "P23/X",
+            "course_title": "P23/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          },
+          "03:10-04:00": {
+            "slot_code": "B/X",
+            "course_title": "Data Structures and Algorithms",
+            "slot_type": "Other",
+            "is_alternate": true
+          },
+          "04:00-04:50": {
+            "slot_code": "P43/X",
+            "course_title": "P43/X",
+            "slot_type": "Lab",
+            "is_alternate": true
+          }
+        }
+      },
+      "DO 4": {
+        "do_name": "DO 4",
+        "time_slots": {
+          "08:00-08:50": {
+            "slot_code": "F",
+            "course_title": "Operating Systems",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "08:50-09:40": {
+            "slot_code": "P14",
+            "course_title": "P14",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "09:45-10:35": {
+            "slot_code": "D",
+            "course_title": "Advanced Programming Practice",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "10:40-11:30": {
+            "slot_code": "P34",
+            "course_title": "P34",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "11:35-12:25": {
+            "slot_code": "F",
+            "course_title": "Operating Systems",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "12:30-01:20": {
+            "slot_code": "P4",
+            "course_title": "Data Structures and Algorithms",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "01:25-02:15": {
+            "slot_code": "A",
+            "course_title": "Transforms and Boundary Value Problems",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "02:20-03:10": {
+            "slot_code": "P24",
+            "course_title": "P24",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "03:10-04:00": {
+            "slot_code": "E",
+            "course_title": "E",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "04:00-04:50": {
+            "slot_code": "P44",
+            "course_title": "P44",
+            "slot_type": "Lab",
+            "is_alternate": false
+          }
+        }
+      },
+      "DO 5": {
+        "do_name": "DO 5",
+        "time_slots": {
+          "08:00-08:50": {
+            "slot_code": "G",
+            "course_title": "UHV-II: Universal Human Values \u2013 Understanding Harmony and Ethical Human Conduct",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "08:50-09:40": {
+            "slot_code": "P15",
+            "course_title": "P15",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "09:45-10:35": {
+            "slot_code": "B",
+            "course_title": "Data Structures and Algorithms",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "10:40-11:30": {
+            "slot_code": "P35",
+            "course_title": "P35",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "11:35-12:25": {
+            "slot_code": "D",
+            "course_title": "Advanced Programming Practice",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "12:30-01:20": {
+            "slot_code": "P5",
+            "course_title": "P5",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "01:25-02:15": {
+            "slot_code": "G",
+            "course_title": "UHV-II: Universal Human Values \u2013 Understanding Harmony and Ethical Human Conduct",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "02:20-03:10": {
+            "slot_code": "P25",
+            "course_title": "P25",
+            "slot_type": "Lab",
+            "is_alternate": false
+          },
+          "03:10-04:00": {
+            "slot_code": "C",
+            "course_title": "Computer Organization and Architecture",
+            "slot_type": "Theory",
+            "is_alternate": false
+          },
+          "04:00-04:50": {
+            "slot_code": "P45",
+            "course_title": "P45",
+            "slot_type": "Lab",
+            "is_alternate": false
+          }
+        }
+      }
+    }
+  },
+  "timestamp": "2025-10-19T23:33:43.689582",
+  "cache_duration_hours": 6
+}

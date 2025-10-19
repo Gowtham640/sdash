@@ -301,7 +301,7 @@ export default function CalendarPage() {
                 <div className="text-white text-lg font-sora font-bold mb-2">
                   DO {doNumber}
             </div>
-                <div className="text-white text-3xl font-sora font-bold">
+                <div className="text-green-500 text-3xl font-sora font-bold">
                   {dayOrderStats[doNumber]}
             </div>
                 <div className="text-white/70 text-sm font-sora">

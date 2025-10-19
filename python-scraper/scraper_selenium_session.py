@@ -5,6 +5,7 @@ Based on the working standalone code
 """
 
 import os
+import sys
 import json
 import time
 from datetime import datetime, timedelta
@@ -44,10 +45,10 @@ class SRMAcademiaScraperSelenium:
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             self.wait = WebDriverWait(self.driver, 20)
-            print("[OK] Selenium WebDriver initialized with session management")
+            print("[OK] Selenium WebDriver initialized with session management", file=sys.stderr)
         except Exception as e:
-            print(f"[FAIL] Could not initialize WebDriver: {e}")
-            print("[INFO] Make sure you have Chrome and chromedriver installed")
+            print(f"[FAIL] Could not initialize WebDriver: {e}", file=sys.stderr)
+            print("[INFO] Make sure you have Chrome and chromedriver installed", file=sys.stderr)
             raise
     
     def is_session_valid(self):
@@ -56,7 +57,7 @@ class SRMAcademiaScraperSelenium:
             return False
         
         if not os.path.exists(self.session_file):
-            print("[SESSION] No session file found")
+            print("[SESSION] No session file found", file=sys.stderr)
             return False
         
         try:
@@ -67,29 +68,29 @@ class SRMAcademiaScraperSelenium:
             if 'timestamp' in session_data:
                 session_time = datetime.fromisoformat(session_data['timestamp'])
                 if datetime.now() - session_time > timedelta(seconds=self.session_timeout):
-                    print("[SESSION] Session expired (30 days)")
+                    print("[SESSION] Session expired (30 days)", file=sys.stderr)
                     return False
             
             # Actually test the session by trying to access a protected page
             try:
-                print("[SESSION] Testing session validity...")
+                print("[SESSION] Testing session validity...", file=sys.stderr)
                 self.driver.get("https://academia.srmist.edu.in/#Page:Dashboard")
                 time.sleep(3)
                 
                 # Check if we're redirected to login page
                 if "Login" in self.driver.title or "signinFrame" in self.driver.page_source:
-                    print("[SESSION] Session invalid - redirected to login page")
+                    print("[SESSION] Session invalid - redirected to login page", file=sys.stderr)
                     return False
                 else:
-                    print("[SESSION] Session valid - can access protected pages")
+                    print("[SESSION] Session valid - can access protected pages", file=sys.stderr)
                     return True
                     
             except Exception as e:
-                print(f"[SESSION] Error testing session: {e}")
+                print(f"[SESSION] Error testing session: {e}", file=sys.stderr)
                 return False
                 
         except Exception as e:
-            print(f"[SESSION] Error reading session file: {e}")
+            print(f"[SESSION] Error reading session file: {e}", file=sys.stderr)
             return False
     
     def save_session(self, email):
@@ -107,91 +108,91 @@ class SRMAcademiaScraperSelenium:
             with open(self.session_file, 'w') as f:
                 json.dump(session_data, f)
             
-            print(f"[SESSION] Session saved for {email}")
+            print(f"[SESSION] Session saved for {email}", file=sys.stderr)
         except Exception as e:
-            print(f"[SESSION] Error saving session: {e}")
+            print(f"[SESSION] Error saving session: {e}", file=sys.stderr)
     
     def login(self, email, password):
         """Login to the academia portal using Selenium with session management"""
         try:
-            print(f"\n=== LOGIN WITH SELENIUM (Session: {self.use_session}) ===")
+            print(f"\n=== LOGIN WITH SELENIUM (Session: {self.use_session}) ===", file=sys.stderr)
             
             # Don't skip login - always attempt it when this method is called
             # The session validation should be done before calling this method
             
-            print(f"[STEP 1] Loading portal page...")
+            print(f"[STEP 1] Loading portal page...", file=sys.stderr)
             self.driver.get("https://academia.srmist.edu.in/")
             time.sleep(3)
             
-            print(f"[OK] Page loaded: {self.driver.title}")
+            print(f"[OK] Page loaded: {self.driver.title}", file=sys.stderr)
             
             # Switch to the iframe
-            print("[STEP 2] Switching to login iframe...")
+            print("[STEP 2] Switching to login iframe...", file=sys.stderr)
             try:
                 iframe = self.wait.until(
                     EC.presence_of_element_located((By.ID, "signinFrame"))
                 )
                 self.driver.switch_to.frame(iframe)
-                print("[OK] Switched to iframe")
+                print("[OK] Switched to iframe", file=sys.stderr)
             except TimeoutException:
-                print("[ERROR] Could not find login iframe")
+                print("[ERROR] Could not find login iframe", file=sys.stderr)
                 return False
             
             # Find and fill email field
-            print("[STEP 3] Entering email...")
+            print("[STEP 3] Entering email...", file=sys.stderr)
             try:
                 email_field = self.wait.until(
                     EC.presence_of_element_located((By.ID, "login_id"))
                 )
                 email_field.clear()
                 email_field.send_keys(email)
-                print(f"[OK] Email entered: {email}")
+                print(f"[OK] Email entered: {email}", file=sys.stderr)
             except TimeoutException:
-                print("[ERROR] Could not find email field")
+                print("[ERROR] Could not find email field", file=sys.stderr)
                 self.driver.switch_to.default_content()
                 return False
             
             # Click Next button to reveal password field
-            print("[STEP 4] Clicking Next button...")
+            print("[STEP 4] Clicking Next button...", file=sys.stderr)
             try:
                 next_button = self.driver.find_element(By.ID, "nextbtn")
                 next_button.click()
-                print("[OK] Next button clicked")
+                print("[OK] Next button clicked", file=sys.stderr)
                 time.sleep(2)  # Wait for password field to appear
             except NoSuchElementException:
-                print("[ERROR] Could not find Next button")
+                print("[ERROR] Could not find Next button", file=sys.stderr)
                 self.driver.switch_to.default_content()
                 return False
             
             # Find and fill password field
-            print("[STEP 5] Entering password...")
+            print("[STEP 5] Entering password...", file=sys.stderr)
             try:
                 password_field = self.wait.until(
                     EC.presence_of_element_located((By.ID, "password"))
                 )
                 password_field.clear()
                 password_field.send_keys(password)
-                print("[OK] Password entered")
+                print("[OK] Password entered", file=sys.stderr)
             except TimeoutException:
-                print("[ERROR] Could not find password field")
+                print("[ERROR] Could not find password field", file=sys.stderr)
                 self.driver.switch_to.default_content()
                 return False
             
             # Click login button (same as next button)
-            print("[STEP 6] Clicking login button...")
+            print("[STEP 6] Clicking login button...", file=sys.stderr)
             try:
                 login_button = self.wait.until(
                     EC.element_to_be_clickable((By.ID, "nextbtn"))
                 )
                 login_button.click()
-                print("[OK] Login button clicked")
+                print("[OK] Login button clicked", file=sys.stderr)
             except TimeoutException:
-                print("[ERROR] Could not find login button")
+                print("[ERROR] Could not find login button", file=sys.stderr)
                 self.driver.switch_to.default_content()
                 return False
             
             # Wait for login to complete
-            print("[STEP 7] Waiting for login to complete...")
+            print("[STEP 7] Waiting for login to complete...", file=sys.stderr)
             time.sleep(5)
             
             # Switch back to default content
@@ -204,7 +205,7 @@ class SRMAcademiaScraperSelenium:
                     lambda driver: "Dashboard" in driver.title or "academia" in driver.current_url
                 )
                 
-                print("[OK] Login successful!")
+                print("[OK] Login successful!", file=sys.stderr)
                 
                 # Save session if enabled
                 if self.use_session:
@@ -213,11 +214,11 @@ class SRMAcademiaScraperSelenium:
                 return True
                 
             except TimeoutException:
-                print("[ERROR] Login failed - timeout waiting for dashboard")
+                print("[ERROR] Login failed - timeout waiting for dashboard", file=sys.stderr)
                 return False
                 
         except Exception as e:
-            print(f"[ERROR] Login failed: {e}")
+            print(f"[ERROR] Login failed: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             return False
@@ -225,44 +226,44 @@ class SRMAcademiaScraperSelenium:
     def get_calendar_data(self):
         """Get calendar data from the academic planner page"""
         try:
-            print("\n=== GETTING CALENDAR DATA ===")
+            print("\n=== GETTING CALENDAR DATA ===", file=sys.stderr)
             
             # Navigate to academic planner
             planner_url = "https://academia.srmist.edu.in/#Page:Academic_Planner_2025_26_ODD"
-            print(f"[STEP 1] Navigating to: {planner_url}")
+            print(f"[STEP 1] Navigating to: {planner_url}", file=sys.stderr)
             
             self.driver.get(planner_url)
             time.sleep(10)  # Wait for page to load completely
             
-            print(f"[OK] Calendar page loaded: {self.driver.title}")
+            print(f"[OK] Calendar page loaded: {self.driver.title}", file=sys.stderr)
             
             # Check if we got redirected to login page
             if "Login" in self.driver.title or "signinFrame" in self.driver.page_source:
-                print("[WARNING] Redirected to login page - session may have expired")
-                print("[INFO] This is normal if session was created a while ago")
+                print("[WARNING] Redirected to login page - session may have expired", file=sys.stderr)
+                print("[INFO] This is normal if session was created a while ago", file=sys.stderr)
                 return None
             
             # Get page source
             page_source = self.driver.page_source
             
             if not page_source:
-                print("[ERROR] No page source received")
+                print("[ERROR] No page source received", file=sys.stderr)
                 return None
             
-            print(f"[OK] Page source received ({len(page_source)} characters)")
+            print(f"[OK] Page source received ({len(page_source)} characters)", file=sys.stderr)
             
             # Check if we got the right content
             if "Jul '25" in page_source and "Aug '25" in page_source:
-                print("[OK] Calendar content detected in page source")
+                print("[OK] Calendar content detected in page source", file=sys.stderr)
                 return page_source
             else:
-                print("[WARNING] Calendar content not detected in page source")
-                print(f"[DEBUG] Page source contains 'Jul': {'Jul' in page_source}")
-                print(f"[DEBUG] Page source contains 'table': {'table' in page_source.lower()}")
+                print("[WARNING] Calendar content not detected in page source", file=sys.stderr)
+                print(f"[DEBUG] Page source contains 'Jul': {'Jul' in page_source}", file=sys.stderr)
+                print(f"[DEBUG] Page source contains 'table': {'table' in page_source.lower()}", file=sys.stderr)
                 return page_source  # Return anyway, let the parser handle it
             
         except Exception as e:
-            print(f"[ERROR] Failed to get calendar data: {e}")
+            print(f"[ERROR] Failed to get calendar data: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             return None
@@ -272,9 +273,9 @@ class SRMAcademiaScraperSelenium:
         try:
             if hasattr(self, 'driver'):
                 self.driver.quit()
-                print("[OK] Browser closed")
+                print("[OK] Browser closed", file=sys.stderr)
         except Exception as e:
-            print(f"[ERROR] Error closing browser: {e}")
+            print(f"[ERROR] Error closing browser: {e}", file=sys.stderr)
 
 def main():
     """Test function"""
@@ -287,11 +288,11 @@ def main():
         if scraper.login(email, password):
             html_content = scraper.get_calendar_data()
             if html_content:
-                print(f"Got calendar HTML content: {len(html_content)} characters")
+                print(f"Got calendar HTML content: {len(html_content)} characters", file=sys.stderr)
             else:
-                print("Failed to get calendar data")
+                print("Failed to get calendar data", file=sys.stderr)
         else:
-            print("Login failed")
+            print("Login failed", file=sys.stderr)
     
     finally:
         scraper.close()
