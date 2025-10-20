@@ -149,7 +149,7 @@ def api_get_calendar_data(email, password, force_refresh=False):
                 "count": 0,
                 "cached": False
             }
-
+        
     except Exception as e:
         print(f"[API] Error getting calendar data: {e}", file=sys.stderr)
         import traceback
@@ -169,7 +169,7 @@ def api_get_calendar_data(email, password, force_refresh=False):
                     "fallback": True
                 }
         return {"success": False, "error": f"API Error: {str(e)}"}
-
+    
     finally:
         if scraper:
             try:
@@ -200,19 +200,15 @@ if __name__ == "__main__":
         if action == 'get_calendar_data':
             result = api_get_calendar_data(email, password, force_refresh)
         elif action == 'get_timetable_data':
-            result = api_get_timetable_data(email, password, force_refresh)
+            result = api_get_timetable_data(email, password)
         else:
             result = {"success": False, "error": "Unknown action"}
-
+        
         # Output result as JSON (only once)
         print(json.dumps(result))
         sys.exit(0)
-
+        
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
         sys.exit(1)
 
-else:
-    # Handle command line arguments for standalone usage
-    print("API Wrapper - Use without arguments for Next.js integration")
-    print("Available actions: get_calendar_data, get_timetable_data")

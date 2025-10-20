@@ -27,7 +27,7 @@ def extract_calendar_data_from_html(html_content):
         tables = soup.find_all('table')
         
         if not tables:
-            print("No tables found in HTML content")
+            print("No tables found in HTML content", file=sys.stderr)
             return calendar_data
         
         # Find the table with calendar data (should contain month headers)
@@ -39,13 +39,13 @@ def extract_calendar_data_from_html(html_content):
                 break
         
         if not calendar_table:
-            print("Calendar table not found")
+            print("Calendar table not found", file=sys.stderr)
             return calendar_data
         
         rows = calendar_table.find_all('tr')
         
         if not rows:
-            print("No rows found in calendar table")
+            print("No rows found in calendar table", file=sys.stderr)
             return calendar_data
         
         # Find the header row to identify month positions
@@ -63,7 +63,7 @@ def extract_calendar_data_from_html(html_content):
                 break
         
         if not header_row:
-            print("Header row with month names not found")
+            print("Header row with month names not found", file=sys.stderr)
             return calendar_data
         
         # Parse header row to find month positions
@@ -88,8 +88,8 @@ def extract_calendar_data_from_html(html_content):
                         'year': year
                     }
         
-        print(f"Found months: {list(month_positions.keys())}")
-        print(f"Month positions: {month_positions}")
+        print(f"Found months: {list(month_positions.keys())}", file=sys.stderr)
+        print(f"Month positions: {month_positions}", file=sys.stderr)
         
         # Process data rows (skip the header row)
         for row_idx, row in enumerate(rows[1:], 1):  # Skip header row
@@ -146,10 +146,10 @@ def extract_calendar_data_from_html(html_content):
                         
                         calendar_data.append(calendar_entry)
         
-        print(f"Extracted {len(calendar_data)} calendar entries")
+        print(f"Extracted {len(calendar_data)} calendar entries", file=sys.stderr)
     
     except Exception as e:
-        print(f"Error extracting calendar data: {e}")
+        print(f"Error extracting calendar data: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
     
@@ -215,8 +215,8 @@ def save_calendar_data(calendar_data, filename="calendar_data.json"):
 
 if __name__ == "__main__":
     # Test the calendar extraction
-    print("Testing Calendar Data Extraction...")
+    print("Testing Calendar Data Extraction...", file=sys.stderr)
     
     # This would normally be called with real HTML content
     # For testing, we'll just show the function structure
-    print("Calendar extraction functions ready!")
+    print("Calendar extraction functions ready!", file=sys.stderr)

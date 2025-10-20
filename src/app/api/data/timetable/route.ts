@@ -53,8 +53,7 @@ export async function GET(request: NextRequest) {
     const inputData = {
       action: 'get_timetable_data',
       email: email,
-      password: password,
-      force_refresh: forceRefresh
+      password: password
     };
 
     console.log('[TIMETABLE API] Sending input to Python:', inputData);

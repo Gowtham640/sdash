@@ -101,6 +101,8 @@ export default function TimetablePage() {
       "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
     ];
     
+    console.log('[FRONTEND] Converting timetable data:', data);
+    
     // Create time slot entries
     timeSlotKeys.forEach(timeSlot => {
       const timeSlotEntry: TimeSlot = {
@@ -115,19 +117,23 @@ export default function TimetablePage() {
       // Map each DO to the time slot
       ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach((doName, index) => {
         const doData = data.timetable[doName];
-        if (doData && doData.time_slots[timeSlot]) {
+        if (doData && doData.time_slots && doData.time_slots[timeSlot]) {
           const slotInfo = doData.time_slots[timeSlot];
           const courseTitle = slotInfo.course_title || slotInfo.slot_code || "";
           
           // Map to the correct DO property
           const doKey = `do${index + 1}` as keyof TimeSlot;
-          timeSlotEntry[doKey] = courseTitle;
+          // Show "Free" if no course title, otherwise show course title
+          timeSlotEntry[doKey] = courseTitle ? courseTitle : "Free";
+          
+          console.log(`[FRONTEND] Mapped ${timeSlot} for ${doName}: ${courseTitle || ' '}`);
         }
       });
       
       timeSlots.push(timeSlotEntry);
     });
     
+    console.log('[FRONTEND] Final timeSlots:', timeSlots);
     return timeSlots;
   };
 
@@ -146,7 +152,7 @@ export default function TimetablePage() {
   }
 
   if (error) {
-    return (
+  return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
         <div className="w-[90vw] h-[90vh] bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-10 justify-center items-center">
           <div className="text-white text-4xl font-sora font-bold">Timetable</div>
@@ -158,13 +164,13 @@ export default function TimetablePage() {
             Retry
           </button>
         </div>
-      </div>
-    );
-  }
+    </div>
+  );
+}
 
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10">
-      <div className="text-white text-4xl font-sora font-bold mb-6">Weekly Timetable</div>
+      <div className="text-white text-6xl font-sora font-bold mb-6">Timetable</div>
       
       
       

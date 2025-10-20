@@ -43,15 +43,79 @@ def get_timetable_page_html(scraper):
         print(f"[FAIL] Error getting timetable page: {e}", file=sys.stderr)
         return None
 
+def extract_batch_number_from_html(html_content):
+    """Extract batch number from the table above the course table"""
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Find all tables
+        tables = soup.find_all('table')
+        print(f"[BATCH] Found {len(tables)} tables on the page", file=sys.stderr)
+        
+        batch_number = None
+        
+        # Look for batch number in tables before the course table
+        for i, table in enumerate(tables):
+            table_text = table.get_text().lower()
+            
+            # Look for batch-related keywords
+            if any(keyword in table_text for keyword in ['batch', 'group', 'section']):
+                print(f"[BATCH] Found potential batch table {i}", file=sys.stderr)
+                
+                # Look for batch number patterns
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    for cell in cells:
+                        cell_text = cell.get_text(strip=True)
+                        
+                        # Look for batch number patterns like "Batch 1", "Group A", etc.
+                        batch_patterns = [
+                            r'batch\s*(\d+)',
+                            r'group\s*([a-z0-9]+)',
+                            r'section\s*([a-z0-9]+)',
+                            r'batch\s*([a-z0-9]+)',
+                        ]
+                        
+                        for pattern in batch_patterns:
+                            match = re.search(pattern, cell_text.lower())
+                            if match:
+                                batch_number = match.group(1)
+                                print(f"[BATCH] Found batch number: {batch_number}", file=sys.stderr)
+                                return batch_number
+                
+                # If no pattern match, look for any number that might be batch
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    for cell in cells:
+                        cell_text = cell.get_text(strip=True)
+                        # Look for single numbers that might be batch numbers
+                        if cell_text.isdigit() and 1 <= int(cell_text) <= 10:
+                            batch_number = cell_text
+                            print(f"[BATCH] Found potential batch number: {batch_number}", file=sys.stderr)
+                            return batch_number
+        
+        if not batch_number:
+            print("[BATCH] No batch number found in tables", file=sys.stderr)
+            return None
+            
+    except Exception as e:
+        print(f"[BATCH] Error extracting batch number: {e}", file=sys.stderr)
+        return None
+
 def extract_timetable_data_from_html(html_content):
     """
     Extract timetable data from HTML content using BeautifulSoup.
     Based on the HTML structure: course_tbl table with course titles and slots.
     """
     courses = []
+    batch_number = None
     
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # First, try to extract batch number
+        batch_number = extract_batch_number_from_html(html_content)
         
         # Find the main course table
         course_table = soup.find('table', class_='course_tbl')
@@ -75,13 +139,18 @@ def extract_timetable_data_from_html(html_content):
             courses = extract_from_table(course_table)
         
         print(f"Extracted {len(courses)} course entries", file=sys.stderr)
+        
+        # Add batch number to each course entry
+        if batch_number:
+            for course in courses:
+                course['batch_number'] = batch_number
     
     except Exception as e:
         print(f"Error extracting timetable data: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
     
-    return courses
+    return courses, batch_number
 
 def extract_from_table(table_soup):
     """Extract course data from a BeautifulSoup table element"""
@@ -164,10 +233,10 @@ def expand_slot_mapping(slot_mapping):
     
     return expanded_mapping
 
-def create_do_timetable_json(slot_mapping):
+def create_do_timetable_json(slot_mapping, batch_number=None):
     """Create JSON structure for Day Order (DO) timetable format"""
     
-    # Time slots matching the frontend UI
+    # Time slots matching the frontend UI (10 slots only)
     time_slots = [
         "08:00-08:50",
         "08:50-09:40", 
@@ -181,57 +250,45 @@ def create_do_timetable_json(slot_mapping):
         "04:00-04:50"
     ]
     
-    # Day Order periods mapping (DO 1-5)
-    # This maps each DO to the slot codes for each time period based on actual SRM timetable structure
-    # Updated to use actual scraped slots
-    do_periods = {
-        "DO 1": ['A', 'P11', 'C', 'P31', 'E', 'P1', 'B', 'P21', 'D', 'P41'],
-        "DO 2": ['A/X', 'P12/X', 'C/X', 'P32/X', 'E/X', 'P2/X', 'B/X', 'P22/X', 'D/X', 'P42/X'],
-        "DO 3": ['F/X', 'P13/X', 'A/X', 'P33/X', 'C/X', 'P3/X', 'G/X', 'P23/X', 'B/X', 'P43/X'],
-        "DO 4": ['F', 'P14', 'D', 'P34', 'F', 'P4', 'A', 'P24', 'E', 'P44'],
-        "DO 5": ['G', 'P15', 'B', 'P35', 'D', 'P5', 'G', 'P25', 'C', 'P45']
-    }
+    # Batch 1 periods
+    batch_1_periods = [
+        ['A', 'A/X', 'F/X', 'F', 'G', 'P6', 'P7', 'P8', 'P9', 'P10'],
+        ['P11', 'P12/X', 'P13/X', 'P14', 'P15', 'B', 'B', 'G', 'G', 'A'],
+        ['C', 'C/X', 'A/X', 'D', 'B', 'P26', 'P27', 'P28', 'P29', 'P30'],
+        ['P31', 'P32/X', 'P33/X', 'P34', 'P35', 'D', 'D', 'B', 'E', 'C'],
+        ['E', 'E/X', 'C/X', 'F', 'D', 'P46', 'P47', 'P48', 'P49', 'P50']
+    ]
     
-    # Create a more intelligent mapping based on actual scraped slots
-    def create_smart_mapping(slot_mapping):
-        """Create a mapping that uses actual scraped slots"""
-        # Get all available slots from scraped data
-        available_slots = list(slot_mapping.keys())
-        print(f"[MAPPING] Available slots from scraped data: {available_slots}", file=sys.stderr)
-        
-        # Create a smart mapping for each DO
-        smart_do_periods = {}
-        
-        for do_name in ["DO 1", "DO 2", "DO 3", "DO 4", "DO 5"]:
-            smart_do_periods[do_name] = []
-            
-            # For each time slot, try to find the best matching slot
-            for time_idx in range(len(time_slots)):
-                # Try to find a slot that matches the expected pattern
-                expected_slot = do_periods[do_name][time_idx] if time_idx < len(do_periods[do_name]) else ""
-                
-                # Check if the expected slot exists in scraped data
-                if expected_slot in slot_mapping:
-                    smart_do_periods[do_name].append(expected_slot)
-                elif expected_slot.replace('/X', '') in slot_mapping:
-                    # Try without /X suffix
-                    smart_do_periods[do_name].append(expected_slot.replace('/X', ''))
-                else:
-                    # Find the best available slot for this time slot
-                    # Priority: Theory slots (A-G) first, then Lab slots (P), then others
-                    theory_slots = [s for s in available_slots if s in ['A', 'B', 'C', 'D', 'E', 'F', 'G']]
-                    lab_slots = [s for s in available_slots if s.startswith('P')]
-                    
-                    if theory_slots:
-                        smart_do_periods[do_name].append(theory_slots[time_idx % len(theory_slots)])
-                    elif lab_slots:
-                        smart_do_periods[do_name].append(lab_slots[time_idx % len(lab_slots)])
-                    else:
-                        smart_do_periods[do_name].append(available_slots[time_idx % len(available_slots)] if available_slots else "")
-            
-            print(f"[MAPPING] {do_name} mapped to: {smart_do_periods[do_name]}", file=sys.stderr)
-        
-        return smart_do_periods
+    # Batch 2 periods
+    batch_2_periods = [
+        ['P1', 'P2/X', 'P3/X', 'P4', 'P5', 'A', 'A', 'F', 'F', 'G'],
+        ['B', 'B/X', 'G/X', 'G', 'A', 'P16', 'P17', 'P18', 'P19', 'P20'],
+        ['P21', 'P22/X', 'P23/X', 'P24', 'P25', 'C', 'C', 'A', 'D', 'B'],
+        ['D', 'D/X', 'B/X', 'E', 'C', 'P36', 'P37', 'P38', 'P39', 'P40'],
+        ['P41', 'P42/X', 'P43/X', 'P44', 'P45', 'E', 'E', 'C', 'F', 'D']
+    ]
+    
+    # Select the correct batch periods based on detected batch number
+    if batch_number == "1" or batch_number == 1:
+        selected_periods = batch_1_periods
+        batch_name = "Batch 1"
+        print(f"[MAPPING] Using Batch 1 periods", file=sys.stderr)
+    elif batch_number == "2" or batch_number == 2:
+        selected_periods = batch_2_periods
+        batch_name = "Batch 2"
+        print(f"[MAPPING] Using Batch 2 periods", file=sys.stderr)
+    else:
+        # Default to Batch 2 if batch number not detected
+        selected_periods = batch_2_periods
+        batch_name = "Batch 2 (Default)"
+        print(f"[MAPPING] Batch number '{batch_number}' not recognized, defaulting to Batch 2", file=sys.stderr)
+    
+    # Convert periods to DO format
+    do_periods = {}
+    for i, periods in enumerate(selected_periods):
+        do_name = f"DO {i + 1}"
+        do_periods[do_name] = periods
+        print(f"[MAPPING] {do_name}: {periods}", file=sys.stderr)
     
     def get_slot_type(slot_code):
         """Determine the type of slot"""
@@ -272,19 +329,19 @@ def create_do_timetable_json(slot_mapping):
             "generated_at": datetime.now().isoformat(),
             "source": "SRM Academia Portal",
             "academic_year": "2025-26 ODD",
-            "format": "Day Order (DO) Timetable"
+            "format": "Day Order (DO) Timetable",
+            "batch_number": batch_number,
+            "batch_name": batch_name
         },
         "time_slots": time_slots,
         "slot_mapping": slot_mapping,
         "timetable": {}
     }
     
-    # Create timetable data for each DO using smart mapping
-    smart_do_periods = create_smart_mapping(slot_mapping)
-    
-    for do_name, periods in smart_do_periods.items():
+    # Create timetable data for each DO using predefined periods
+    for do_idx, (do_name, periods) in enumerate(do_periods.items()):
         do_data = {
-            "do_name": do_name,
+            "day_number": do_idx + 1,
             "time_slots": {}
         }
         
@@ -304,7 +361,7 @@ def create_do_timetable_json(slot_mapping):
     
     return do_timetable
 
-def api_get_timetable_data(email, password, force_refresh=False):
+def api_get_timetable_data(email, password):
     """API function to get timetable data"""
     scraper = None
     try:
@@ -334,8 +391,8 @@ def api_get_timetable_data(email, password, force_refresh=False):
         
         print(f"[API] Got HTML content ({len(html_content)} characters)", file=sys.stderr)
         
-        # Extract course data
-        courses = extract_timetable_data_from_html(html_content)
+        # Extract course data and batch number
+        courses, batch_number = extract_timetable_data_from_html(html_content)
         
         if not courses:
             print("[API] No timetable data extracted", file=sys.stderr)
@@ -347,14 +404,20 @@ def api_get_timetable_data(email, password, force_refresh=False):
                 "cached": False
             }
         
+        # Display batch number if found
+        if batch_number:
+            print(f"[API] Extracted batch number: {batch_number}", file=sys.stderr)
+        else:
+            print("[API] No batch number found", file=sys.stderr)
+        
         # Create slot mapping
         slot_mapping = create_slot_mapping(courses)
         
         # Expand P-slot ranges
         expanded_slot_mapping = expand_slot_mapping(slot_mapping)
         
-        # Create DO timetable JSON
-        do_timetable = create_do_timetable_json(expanded_slot_mapping)
+        # Create DO timetable JSON with batch number
+        do_timetable = create_do_timetable_json(expanded_slot_mapping, batch_number)
         
         print(f"[API] Successfully created DO timetable with {len(expanded_slot_mapping)} slot mappings", file=sys.stderr)
         
