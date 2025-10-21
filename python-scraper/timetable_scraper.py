@@ -314,14 +314,14 @@ def create_do_timetable_json(slot_mapping, batch_number=None):
             if base_slot in slot_mapping:
                 return slot_mapping[base_slot]
             else:
-                return slot_code
+                return ""
         
         # Direct mapping
         if slot_code in slot_mapping:
             return slot_mapping[slot_code]
         
-        # If not found, return the original slot code
-        return slot_code
+        # If not found, return empty string (no course assigned)
+        return ""
     
     # Create the DO timetable structure
     do_timetable = {

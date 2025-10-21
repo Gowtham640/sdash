@@ -119,12 +119,12 @@ export default function TimetablePage() {
         const doData = data.timetable[doName];
         if (doData && doData.time_slots && doData.time_slots[timeSlot]) {
           const slotInfo = doData.time_slots[timeSlot];
-          const courseTitle = slotInfo.course_title || slotInfo.slot_code || "";
+          const courseTitle = slotInfo.course_title || "";
           
           // Map to the correct DO property
           const doKey = `do${index + 1}` as keyof TimeSlot;
-          // Show "Free" if no course title, otherwise show course title
-          timeSlotEntry[doKey] = courseTitle ? courseTitle : "Free";
+          // Show course title if available, otherwise show nothing
+          timeSlotEntry[doKey] = courseTitle || "";
           
           console.log(`[FRONTEND] Mapped ${timeSlot} for ${doName}: ${courseTitle || ' '}`);
         }
