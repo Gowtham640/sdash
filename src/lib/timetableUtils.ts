@@ -27,10 +27,42 @@ export const getCurrentDateString = () => {
   return `${day}/${month}/${year}`;
 };
 
-// Parse date from DD/MM/YYYY format
-export const parseDate = (dateStr: string) => {
-  const [day, month, year] = dateStr.split('/').map(Number);
-  return new Date(year, month - 1, day);
+// Parse date from DD/MM/YYYY format with validation
+export const parseDate = (dateStr: string): Date => {
+  // Basic format validation
+  if (!dateStr || typeof dateStr !== 'string') {
+    throw new Error(`Invalid date format: ${dateStr}`);
+  }
+  
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) {
+    throw new Error(`Invalid date format: ${dateStr}`);
+  }
+  
+  const [dayStr, monthStr, yearStr] = parts;
+  const day = parseInt(dayStr, 10);
+  const month = parseInt(monthStr, 10);
+  const year = parseInt(yearStr, 10);
+  
+  // Validate parsed values
+  if (isNaN(day) || isNaN(month) || isNaN(year)) {
+    throw new Error(`Invalid date format: ${dateStr}`);
+  }
+  
+  // Basic range validation
+  if (day < 1 || day > 31 || month < 1 || month > 12 || year < 2024 || year > 2026) {
+    throw new Error(`Date out of valid range: ${dateStr}`);
+  }
+  
+  // Create date object
+  const date = new Date(year, month - 1, day);
+  
+  // Validate the created date (handles leap years, invalid dates, etc.)
+  if (date.getDate() !== day || date.getMonth() !== month - 1 || date.getFullYear() !== year) {
+    throw new Error(`Invalid date (e.g., leap year issue): ${dateStr}`);
+  }
+  
+  return date;
 };
 
 // Calculate day order statistics from calendar data
@@ -215,30 +247,80 @@ export const calculateAllSubjectRemainingHours = (
   }));
 };
 
+// Global data cache
+interface GlobalDataCache {
+  calendarData: any[];
+  timetableData: any;
+  dayOrderStats: DayOrderStats;
+  slotOccurrences: SlotOccurrence[];
+  subjectRemainingHours: any[];
+  lastUpdated: number;
+}
+
+let globalCache: GlobalDataCache | null = null;
+let cachePromise: Promise<GlobalDataCache> | null = null;
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+// Get global cached data
+export const getGlobalData = async (email: string, password: string): Promise<GlobalDataCache> => {
+  // Return cached data if valid
+  if (globalCache && Date.now() - globalCache.lastUpdated < CACHE_DURATION) {
+    console.log('[CACHE] Using global cached data');
+    return globalCache;
+  }
+  
+  // If there's already a fetch in progress, wait for it
+  if (cachePromise) {
+    console.log('[CACHE] Waiting for ongoing fetch');
+    return cachePromise;
+  }
+  
+  console.log('[CACHE] Cache miss or expired - fetching fresh data');
+  
+  // Create a new fetch promise
+  cachePromise = (async () => {
+    try {
+      // Fetch and cache all data
+      const [calendarData, timetableData] = await Promise.all([
+        fetchCalendarData(email, password),
+        fetchTimetableData(email, password)
+      ]);
+      
+      const dayOrderStats = getDayOrderStats(calendarData);
+      const slotOccurrences = getSlotOccurrences(timetableData);
+      const subjectRemainingHours = calculateAllSubjectRemainingHours(timetableData, dayOrderStats);
+      
+      globalCache = {
+        calendarData,
+        timetableData,
+        dayOrderStats,
+        slotOccurrences,
+        subjectRemainingHours,
+        lastUpdated: Date.now()
+      };
+      
+      console.log('[CACHE] Global data cached successfully');
+      return globalCache;
+    } finally {
+      // Clear the promise so future calls can create a new one
+      cachePromise = null;
+    }
+  })();
+  
+  return cachePromise;
+};
+
 // Get comprehensive timetable data in a clean format for use across pages
 export const getTimetableSummary = async (email: string, password: string) => {
   try {
-    // Fetch both calendar and timetable data
-    const [calendarData, timetableData] = await Promise.all([
-      fetchCalendarData(email, password),
-      fetchTimetableData(email, password)
-    ]);
-
-    // Calculate day order statistics
-    const dayOrderStats = getDayOrderStats(calendarData);
+    const globalData = await getGlobalData(email, password);
     
-    // Get slot occurrences with hours per day order
-    const slotOccurrences = getSlotOccurrences(timetableData);
-    
-    // Calculate remaining hours for all subjects
-    const subjectRemainingHours = calculateAllSubjectRemainingHours(timetableData, dayOrderStats);
-
     return {
-      dayOrderStats,
-      slotOccurrences,
-      subjectRemainingHours,
-      timetableData,
-      calendarData
+      dayOrderStats: globalData.dayOrderStats,
+      slotOccurrences: globalData.slotOccurrences,
+      subjectRemainingHours: globalData.subjectRemainingHours,
+      timetableData: globalData.timetableData,
+      calendarData: globalData.calendarData
     };
   } catch (error) {
     console.error('Error getting timetable summary:', error);

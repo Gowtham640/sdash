@@ -173,10 +173,10 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
                 weekday: "text-white/70 font-sora",
                 week: "bg-transparent",
                 day: "text-white hover:bg-white/20 hover:text-white",
-                day_selected: "bg-orange-500 text-white hover:bg-orange-600",
-                day_range_start: "bg-orange-500 text-white hover:bg-orange-600",
-                day_range_end: "bg-orange-500 text-white hover:bg-orange-600",
-                day_range_middle: "bg-orange-500/50 text-white hover:bg-orange-500/70",
+                day_selected: "bg-green-500 text-white hover:bg-green-600",
+                day_range_start: "bg-green-500 text-white hover:bg-green-600",
+                day_range_end: "bg-green-500 text-white hover:bg-green-600",
+                day_range_middle: "bg-green-500/50 text-white hover:bg-green-500/70",
                 day_today: "bg-white/20 text-black font-bold hover:bg-white/30",
                 day_outside: "text-white/50 hover:text-white/70",
                 day_disabled: "text-white/30 hover:text-white/30",
@@ -191,7 +191,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
               </div>
               <Button 
                 onClick={addODMLPeriod}
-                className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-4 py-2 rounded-xl"
+                className="bg-green-600 hover:bg-green-700 text-white font-sora px-4 py-2 rounded-xl"
               >
                 Add OD/ML
               </Button>
@@ -209,9 +209,9 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
               {odmlPeriods.map((period, index) => (
                 <div key={period.id} className="bg-white/10 border border-white/20 rounded-2xl p-4 flex items-center justify-between">
                   <div className="text-white font-sora">
-                    <span className="text-orange-400">OD/ML {index + 1}:</span> {formatDateRange(period.from, period.to)}
+                    <span className="text-green-400">OD/ML {index + 1}:</span> {formatDateRange(period.from, period.to)}
                     {period.from.getTime() === period.to.getTime() && (
-                      <span className="text-orange-400 ml-2"></span>
+                      <span className="text-green-400 ml-2"></span>
                     )}
                   </div>
                   <Button 
@@ -231,7 +231,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
           <Button 
             onClick={handleCalculate}
             disabled={odmlPeriods.length === 0 || isCalculating}
-            className="bg-orange-600 hover:bg-orange-700 text-white font-sora"
+            className="bg-green-600 hover:bg-green-700 text-white font-sora"
           >
             {isCalculating ? 'Calculating...' : 'Apply OD/ML'}
           </Button>

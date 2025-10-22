@@ -63,30 +63,182 @@ export const getDayOrderStatsForDateRange = (
   endDate: Date
 ): DayOrderStats => {
   const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  
+  // Normalize dates to start of day to avoid time issues
+  const normalizedStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const normalizedEnd = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
 
-  // For same-day ranges, we need to include that specific day
-  const isSameDay = startDate.getTime() === endDate.getTime();
-
+  console.log(`[DEBUG] Calculating day order stats for range: ${normalizedStart.toLocaleDateString()} to ${normalizedEnd.toLocaleDateString()}`);
+  
   calendarData.forEach((event: any) => {
     if (event.date && event.day_order && event.day_order.startsWith('DO ')) {
-      const eventDate = parseDate(event.date);
-      
-      // For same-day ranges, only include events on that exact day
-      // For multi-day ranges, include events within the range (inclusive)
-      const isInRange = isSameDay ? 
-        eventDate.toDateString() === startDate.toDateString() :
-        eventDate >= startDate && eventDate <= endDate;
-      
-      if (isInRange) {
-        const doNumber = parseInt(event.day_order.split(' ')[1]);
-        if (doNumber >= 1 && doNumber <= 5) {
-          stats[doNumber]++;
+      try {
+        const eventDate = parseDate(event.date);
+        const normalizedEventDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+        
+        // Use proper date comparison (inclusive range)
+        // Check if event date is within the range (inclusive)
+        if (normalizedEventDate.getTime() >= normalizedStart.getTime() && 
+            normalizedEventDate.getTime() <= normalizedEnd.getTime()) {
+          
+          const doNumber = parseInt(event.day_order.split(' ')[1]);
+          if (!isNaN(doNumber) && doNumber >= 1 && doNumber <= 5) {
+            stats[doNumber]++;
+            console.log(`[DEBUG] Found ${event.day_order} on ${event.date}`);
+          }
         }
+      } catch (error) {
+        console.warn(`Failed to parse date: ${event.date}`, error);
       }
     }
   });
+  
+  console.log(`[DEBUG] Day order stats result:`, stats);
 
   return stats;
+};
+
+// Normalize category for consistent matching - using same logic as timetable page
+const normalizeCategory = (cat: string): string => {
+  const normalized = cat.toLowerCase().trim();
+  
+  // Map attendance data categories to match timetable data categories
+  // Attendance data uses "Lab" -> map to "Practical" to match timetable data
+  if (normalized.includes('lab')) return 'practical';
+  if (normalized.includes('practical')) return 'practical';
+  if (normalized.includes('theory')) return 'theory';
+  
+  // Default fallback
+  return normalized;
+};
+
+// Debug function to log all data structures
+export const debugDataStructures = (attendanceData: AttendanceData, slotOccurrences: SlotOccurrence[]) => {
+  console.log(`[DEBUG] === ATTENDANCE DATA ===`);
+  attendanceData.all_subjects.forEach((subject, index) => {
+    console.log(`[DEBUG] Attendance ${index}: "${subject.course_title}" (${subject.category}) -> normalized: "${normalizeCategory(subject.category)}"`);
+  });
+  
+  console.log(`[DEBUG] === TIMETABLE SLOT OCCURRENCES ===`);
+  slotOccurrences.forEach((occurrence, index) => {
+    console.log(`[DEBUG] Timetable ${index}: "${occurrence.courseTitle}" (${occurrence.category}) -> normalized: "${normalizeCategory(occurrence.category)}"`);
+  });
+  
+  console.log(`[DEBUG] === CATEGORY MAPPING TEST ===`);
+  const testCategories = ['Theory', 'Lab', 'Practical', 'theory', 'lab', 'practical'];
+  testCategories.forEach(cat => {
+    console.log(`[DEBUG] "${cat}" -> "${normalizeCategory(cat)}"`);
+  });
+  
+  console.log(`[DEBUG] === MATCHING ANALYSIS ===`);
+  attendanceData.all_subjects.forEach(subject => {
+    const subjectTitle = subject.course_title.toLowerCase().trim();
+    const subjectCategory = normalizeCategory(subject.category);
+    
+    const exactMatches = slotOccurrences.filter(occ => 
+      occ.courseTitle.toLowerCase().trim() === subjectTitle &&
+      normalizeCategory(occ.category) === subjectCategory
+    );
+    
+    const fuzzyMatches = slotOccurrences.filter(occ => {
+      if (normalizeCategory(occ.category) !== subjectCategory) return false;
+      const occurrenceTitle = occ.courseTitle.toLowerCase().trim();
+      const maxLength = Math.max(subjectTitle.length, occurrenceTitle.length);
+      let matchingChars = 0;
+      for (let i = 0; i < Math.min(subjectTitle.length, occurrenceTitle.length); i++) {
+        if (subjectTitle[i] === occurrenceTitle[i]) matchingChars++;
+      }
+      const overlapPercentage = (matchingChars / maxLength) * 100;
+      return overlapPercentage >= 90;
+    });
+    
+    console.log(`[DEBUG] "${subject.course_title}" (${subject.category}):`);
+    console.log(`[DEBUG]   Exact matches: ${exactMatches.length}`, exactMatches.map(m => `"${m.courseTitle}" (${m.category})`));
+    console.log(`[DEBUG]   Fuzzy matches: ${fuzzyMatches.length}`, fuzzyMatches.map(m => `"${m.courseTitle}" (${m.category})`));
+  });
+};
+
+// Find slot data for a subject with improved matching logic
+const findSlotData = (subject: AttendanceSubject, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
+  console.log(`[DEBUG] Finding slot data for: "${subject.course_title}" (${subject.category})`);
+  console.log(`[DEBUG] Available slot occurrences:`, slotOccurrences.map(s => `"${s.courseTitle}" (${s.category})`));
+  
+  // Try exact match first
+  let slotData = slotOccurrences.find(occurrence => 
+    occurrence.courseTitle.toLowerCase().trim() === subject.course_title.toLowerCase().trim() &&
+    normalizeCategory(occurrence.category) === normalizeCategory(subject.category)
+  );
+  
+  if (slotData) {
+    console.log(`[DEBUG] Exact match found: "${slotData.courseTitle}" (${slotData.category})`);
+    return slotData;
+  }
+  
+  // For subjects that might have both Theory and Lab versions, be EXTRA strict
+  const subjectTitle = subject.course_title.toLowerCase().trim();
+  const subjectCategory = normalizeCategory(subject.category);
+  
+  // Check if this subject has both Theory and Lab versions
+  const hasBothVersions = slotOccurrences.some(occ => 
+    occ.courseTitle.toLowerCase().trim() === subjectTitle && 
+    normalizeCategory(occ.category) !== subjectCategory
+  );
+  
+  if (hasBothVersions) {
+    console.log(`[DEBUG] Subject "${subject.course_title}" has both Theory and Lab versions - requiring EXACT match`);
+    // For subjects with both versions, require EXACT title match
+    slotData = slotOccurrences.find(occurrence => 
+      occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
+      normalizeCategory(occurrence.category) === subjectCategory
+    );
+    
+    if (slotData) {
+      console.log(`[DEBUG] Exact match for dual-version subject: "${slotData.courseTitle}" (${slotData.category})`);
+      return slotData;
+    }
+    
+    // If no exact match found for dual-version subject, return null to prevent wrong matches
+    console.warn(`[DEBUG] No exact match found for dual-version subject "${subject.course_title}" (${subject.category}) - returning null`);
+    return null;
+  }
+  
+  // Try fuzzy matching with EXTREMELY strict criteria (only if no exact match and no dual versions)
+  slotData = slotOccurrences.find(occurrence => {
+    // Require exact category match for fuzzy matching
+    if (normalizeCategory(occurrence.category) !== subjectCategory) {
+      return false;
+    }
+    
+    // EXTREMELY strict title matching - require at least 90% character overlap
+    const occurrenceTitle = occurrence.courseTitle.toLowerCase().trim();
+    
+    // Calculate character overlap percentage
+    const longerTitle = subjectTitle.length > occurrenceTitle.length ? subjectTitle : occurrenceTitle;
+    const shorterTitle = subjectTitle.length > occurrenceTitle.length ? occurrenceTitle : subjectTitle;
+    
+    let overlapCount = 0;
+    for (let i = 0; i < shorterTitle.length; i++) {
+      if (longerTitle.includes(shorterTitle[i])) {
+        overlapCount++;
+      }
+    }
+    
+    const overlapPercentage = (overlapCount / longerTitle.length) * 100;
+    const courseTitleMatch = overlapPercentage >= 90 && Math.abs(subjectTitle.length - occurrenceTitle.length) <= 1;
+    
+    if (courseTitleMatch) {
+      console.log(`[DEBUG] Fuzzy match found: "${occurrence.courseTitle}" (${occurrence.category}) - ${overlapPercentage.toFixed(1)}% overlap`);
+    }
+    
+    return courseTitleMatch;
+  });
+  
+  if (!slotData) {
+    console.warn(`[DEBUG] No slot data found for: "${subject.course_title}" (${subject.category})`);
+    console.warn(`[DEBUG] Searched ${slotOccurrences.length} occurrences`);
+  }
+  
+  return slotData || null;
 };
 
 // Calculate hours for a specific subject during a date range
@@ -96,21 +248,7 @@ export const calculateSubjectHoursInDateRange = (
   dayOrderStats: DayOrderStats
 ): number => {
   // Find the matching slot occurrence for this subject
-  const slotData = slotOccurrences.find(occurrence => {
-    const courseTitleMatch = occurrence.courseTitle.toLowerCase().includes(subject.course_title.toLowerCase()) ||
-                           subject.course_title.toLowerCase().includes(occurrence.courseTitle.toLowerCase());
-    
-    // Handle different category formats
-    const normalizeCategory = (cat: string) => {
-      const normalized = cat.toLowerCase().trim();
-      if (normalized.includes('practical') || normalized.includes('lab')) return 'practical';
-      if (normalized.includes('theory')) return 'theory';
-      return normalized;
-    };
-    
-    const categoryMatch = normalizeCategory(occurrence.category) === normalizeCategory(subject.category);
-    return courseTitleMatch && categoryMatch;
-  });
+  const slotData = findSlotData(subject, slotOccurrences);
 
   if (!slotData) {
     console.warn(`No slot data found for subject: ${subject.course_title} (${subject.category})`);
@@ -156,10 +294,11 @@ export const calculateODMLAdjustedAttendance = (
     });
 
     // Apply OD/ML adjustments: reduce absent hours, add to present hours
+    // Total hours remain unchanged - only adjust absent/present distribution
     const adjustedAbsent = Math.max(0, currentAbsent - totalOdmlReductionHours);
     const adjustedPresent = currentPresent + totalOdmlReductionHours;
     
-    // Total hours remain the same
+    // Total hours remain exactly the same
     const adjustedConducted = currentConducted;
     const adjustedAttendance = adjustedConducted > 0 ? (adjustedPresent / adjustedConducted) * 100 : 0;
 
@@ -167,9 +306,9 @@ export const calculateODMLAdjustedAttendance = (
       subject,
       currentAttendance,
       predictedAttendance: adjustedAttendance,
-      totalHoursTillEndDate: adjustedConducted, // Same as original
-      presentHoursTillStartDate: adjustedPresent,
-      absentHoursDuringLeave: adjustedAbsent,
+      totalHoursTillEndDate: 0, // No future hours for OD/ML - only current adjustment
+      presentHoursTillStartDate: adjustedPresent, // OD/ML adjusted present hours
+      absentHoursDuringLeave: adjustedAbsent, // OD/ML adjusted absent hours
       leavePeriods: [],
       leavePeriod: 'OD/ML Adjusted',
       odmlPeriods,
@@ -190,6 +329,32 @@ export const calculatePredictedAttendance = (
 ): PredictionResult[] => {
   const currentDate = parseDate(getCurrentDateString());
   const results: PredictionResult[] = [];
+  
+  // Debug data structures
+  debugDataStructures(attendanceData, slotOccurrences);
+  
+  // Specific debug for problematic subjects
+  const problematicSubjects = ['Operating Systems', 'Data Structures and Algorithms'];
+  problematicSubjects.forEach(problemSubject => {
+    const attendanceSubjects = attendanceData.all_subjects.filter(s => 
+      s.course_title.toLowerCase().includes(problemSubject.toLowerCase())
+    );
+    const timetableSubjects = slotOccurrences.filter(s => 
+      s.courseTitle.toLowerCase().includes(problemSubject.toLowerCase())
+    );
+    
+    console.log(`[DEBUG] === ${problemSubject.toUpperCase()} ANALYSIS ===`);
+    console.log(`[DEBUG] Attendance subjects:`, attendanceSubjects.map(s => `"${s.course_title}" (${s.category}) -> "${normalizeCategory(s.category)}"`));
+    console.log(`[DEBUG] Timetable subjects:`, timetableSubjects.map(s => `"${s.courseTitle}" (${s.category}) -> "${normalizeCategory(s.category)}"`));
+    
+    // Test matching for each attendance subject
+    attendanceSubjects.forEach(attSubject => {
+      const matches = timetableSubjects.filter(timetableSubject => 
+        normalizeCategory(attSubject.category) === normalizeCategory(timetableSubject.category)
+      );
+      console.log(`[DEBUG] "${attSubject.course_title}" (${attSubject.category}) matches:`, matches.map(m => `"${m.courseTitle}" (${m.category})`));
+    });
+  });
 
   // Sort leave periods by start date
   const sortedLeavePeriods = [...leavePeriods].sort((a, b) => a.from.getTime() - b.from.getTime());
@@ -228,10 +393,18 @@ export const calculatePredictedAttendance = (
       );
       totalAbsentHours += absentHoursInPeriod;
 
-      // For same-day leaves, move to the next day to avoid double-counting
-      lastEndDate = leavePeriod.from.getTime() === leavePeriod.to.getTime() ? 
-        new Date(leavePeriod.to.getTime() + 24 * 60 * 60 * 1000) : 
-        leavePeriod.to;
+      // For both same-day and multi-day leaves, move to the next day to avoid double-counting
+      if (leavePeriod.from.getTime() === leavePeriod.to.getTime()) {
+        // Same day leave - move to next day
+        lastEndDate = new Date(leavePeriod.to.getFullYear(), leavePeriod.to.getMonth(), leavePeriod.to.getDate() + 1);
+      } else {
+        // Multi-day leave - move to the day after the leave period ends
+        lastEndDate = new Date(leavePeriod.to.getFullYear(), leavePeriod.to.getMonth(), leavePeriod.to.getDate() + 1);
+      }
+      
+      console.log(`[DEBUG] Leave period ${leavePeriod.from.toLocaleDateString()} - ${leavePeriod.to.toLocaleDateString()}:`);
+      console.log(`  Absent hours in period: ${absentHoursInPeriod}`);
+      console.log(`  Next lastEndDate: ${lastEndDate.toLocaleDateString()}`);
     });
 
     // Calculate present hours from last leave period end to final end date
@@ -271,18 +444,31 @@ export const calculatePredictedAttendance = (
     const odmlAdjustedPresent = currentPresent + odmlReductionHours;
     const odmlAdjustedAbsent = Math.max(0, currentAbsent - odmlReductionHours);
 
-    // Predicted attendance: (OD/ML adjusted present + total present hours) / (current conducted + total hours till end)
-    const predictedPresent = odmlAdjustedPresent + totalPresentHours;
+    // CORRECTED PREDICTION LOGIC WITH OD/ML ADJUSTMENTS:
+    // Total predicted hours = current conducted + all future hours
     const predictedConducted = currentConducted + totalHoursTillEndDate;
+    
+    // Absent predicted hours = OD/ML adjusted absent + future absent hours
+    const predictedAbsent = odmlAdjustedAbsent + totalAbsentHours;
+    
+    // Present predicted hours = total predicted - absent predicted
+    const predictedPresent = predictedConducted - predictedAbsent;
+    
+    // Predicted attendance percentage
     const predictedAttendance = predictedConducted > 0 ? (predictedPresent / predictedConducted) * 100 : 0;
+
+    console.log(`[DEBUG] ${subject.course_title} (${subject.category}):`);
+    console.log(`  Current: Conducted=${currentConducted}, Absent=${currentAbsent}, Present=${currentPresent}`);
+    console.log(`  Future: Total=${totalHoursTillEndDate}, Present=${totalPresentHours}, Absent=${totalAbsentHours}`);
+    console.log(`  Predicted: Conducted=${predictedConducted}, Absent=${predictedAbsent}, Present=${predictedPresent}`);
 
     results.push({
       subject,
       currentAttendance,
       predictedAttendance,
       totalHoursTillEndDate,
-      presentHoursTillStartDate: totalPresentHours,
-      absentHoursDuringLeave: totalAbsentHours,
+      presentHoursTillStartDate: totalPresentHours, // Future present hours only
+      absentHoursDuringLeave: totalAbsentHours,     // Future absent hours only
       leavePeriods: sortedLeavePeriods,
       leavePeriod: sortedLeavePeriods.map(p => `${p.from.toLocaleDateString()} - ${p.to.toLocaleDateString()}`).join(', '),
       odmlPeriods,

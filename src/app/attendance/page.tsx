@@ -349,7 +349,7 @@ export default function AttendancePage() {
 
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-      <div className="text-white font-sora text-6xl font-bold">Attendance</div>
+      <div className="text-white font-sora text-8xl font-bold">Attendance</div>
       
       {/* Prediction Controls */}
       <div className="flex gap-4 items-center">
@@ -381,11 +381,16 @@ export default function AttendancePage() {
         ) : (
           <div className="flex gap-4 items-center">
             <div className="text-white font-sora px-4 py-2 bg-green-500/20 border border-green-500/50 rounded-2xl">
-              {isPredictionMode ? 'Prediction Mode Active' : 'OD/ML Mode Active'}
+              <ShinyText
+                text={isPredictionMode ? 'Prediction Mode Active' : 'OD/ML Mode Active'}
+                disabled={false}
+                speed={3}
+                className="text-white"
+              />
             </div>
             <button 
               onClick={handleCancelPrediction}
-              className="bg-red-600 hover:bg-red-700 text-white font-sora px-6 py-3 rounded-2xl transition-colors duration-200 flex items-center gap-2"
+              className="bg-red-600 hover:bg-red-700 text-white font-sora px-6 py-2 rounded-2xl transition-colors duration-200 flex items-center gap-2"
             >
               Cancel
             </button>
@@ -397,7 +402,10 @@ export default function AttendancePage() {
       <div className="flex flex-col gap-6 w-[80vw] items-center">
         {attendanceData.all_subjects.map((subject, index) => {
           // Get prediction data if in prediction mode or OD/ML mode
-          const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p => p.subject.subject_code === subject.subject_code) : null;
+          const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p => 
+            p.subject.subject_code === subject.subject_code && 
+            p.subject.category === subject.category
+          ) : null;
           
           const pieChartData = createPieChartData(subject);
           const attendancePercentage = prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance);
@@ -407,6 +415,17 @@ export default function AttendancePage() {
 
           // Debug: Log attendance subject data
           console.log(`[Attendance] Subject: ${subject.course_title} (${subject.category})`);
+          
+          // Debug: Log prediction matching
+          if (prediction) {
+            console.log(`[DEBUG] Found prediction for ${subject.course_title} (${subject.category}):`, {
+              predictedAttendance: prediction.predictedAttendance,
+              totalHoursTillEndDate: prediction.totalHoursTillEndDate,
+              absentHoursDuringLeave: prediction.absentHoursDuringLeave
+            });
+          } else if (isPredictionMode || isOdmlMode) {
+            console.warn(`[DEBUG] No prediction found for ${subject.course_title} (${subject.category})`);
+          }
           
   return (
             <div key={`${subject.subject_code}-${index}`} className="w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-lg font-sora overflow-hidden flex flex-col">
@@ -432,36 +451,60 @@ export default function AttendancePage() {
                     <div className="bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-sm font-sora p-2">
               <span className="text-blue-400 text-sm font-sora">Total: </span>
                       {prediction ? 
-                        `${parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate} hours` :
+                        (isOdmlMode ? 
+                          `${subject.hours_conducted} hours` : // OD/ML: total stays same
+                          `${parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate} hours` // Prediction: add future hours
+                        ) :
                         `${subject.hours_conducted} hours`
                       }
-                      {prediction && (
+                      {prediction && !isOdmlMode && (
                         <div className="text-xs text-gray-400 mt-1">
                           Current: {subject.hours_conducted} + {prediction.totalHoursTillEndDate}
+                        </div>
+                      )}
+                      {prediction && isOdmlMode && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          Current: {subject.hours_conducted} (unchanged)
                         </div>
                       )}
             </div>
                     <div className="bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-sm font-sora p-2">
               <span className="text-red-400 text-sm font-sora">Absent: </span>
                       {prediction ? 
-                        `${parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave} hours` :
+                        (isOdmlMode ? 
+                          `${prediction.absentHoursDuringLeave} hours` : // OD/ML: show adjusted absent
+                          `${parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave} hours` // Prediction: add future absent
+                        ) :
                         `${subject.hours_absent} hours`
                       }
-                      {prediction && (
+                      {prediction && !isOdmlMode && (
                         <div className="text-xs text-gray-400 mt-1">
                           Current: {subject.hours_absent} + {prediction.absentHoursDuringLeave}
+                        </div>
+                      )}
+                      {prediction && isOdmlMode && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          Current: {subject.hours_absent} - {prediction.odmlReductionHours}
                         </div>
                       )}
             </div>
                     <div className="bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-sm font-sora p-2">
               <span className="text-green-400 text-sm font-sora">Present: </span>
                       {prediction ? 
-                        `${calculatePresentHours(subject.hours_conducted, subject.hours_absent) + prediction.presentHoursTillStartDate} hours` :
+                        (isOdmlMode ? 
+                          `${prediction.presentHoursTillStartDate} hours` : // OD/ML: show adjusted present
+                          `${(parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate) - (parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave)} hours` // Prediction: calculate total present
+                        ) :
                         `${calculatePresentHours(subject.hours_conducted, subject.hours_absent)} hours`
                       }
-                      {prediction && (
+                      {prediction && !isOdmlMode && (
                         <div className="text-xs text-gray-400 mt-1">
                           Current: {calculatePresentHours(subject.hours_conducted, subject.hours_absent)} + {prediction.presentHoursTillStartDate}
+                        </div>
+                      )}
+                      {prediction && isOdmlMode && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          Current: {calculatePresentHours(subject.hours_conducted, subject.hours_absent)} + {prediction.odmlReductionHours}
                         </div>
                       )}
                     </div>
@@ -482,8 +525,14 @@ export default function AttendancePage() {
                       </span>
                       {prediction ? 
                         (prediction.predictedAttendance >= 75 ? 
-                          `${Math.floor((prediction.predictedAttendance - 75) / 100 * (parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate))} hours` :
-                          `${Math.ceil((75 - prediction.predictedAttendance) / 100 * (parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate))} hours`
+                          (isOdmlMode ? 
+                            `${Math.floor((prediction.predictedAttendance - 75) / 100 * parseInt(subject.hours_conducted))} hours` : // OD/ML: use original total
+                            `${Math.floor((prediction.predictedAttendance - 75) / 100 * (parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate))} hours` // Prediction: use future total
+                          ) :
+                          (isOdmlMode ? 
+                            `${Math.ceil((75 - prediction.predictedAttendance) / 100 * parseInt(subject.hours_conducted))} hours` : // OD/ML: use original total
+                            `${Math.ceil((75 - prediction.predictedAttendance) / 100 * (parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate))} hours` // Prediction: use future total
+                          )
                         ) :
                         requiredMargin.text
                       }
@@ -558,7 +607,7 @@ export default function AttendancePage() {
                       <div className="text-white font-sora text-lg font-bold mb-3">Hours Remaining</div>
                       <div className="text-blue-400 font-sora text-2xl font-bold">
                         {prediction && dayOrderStats ? 
-                          `${Math.max(0, calculateSubjectHoursInDateRange(subject, slotOccurrences, dayOrderStats) - prediction.absentHoursDuringLeave)} hours` :
+                          `${calculateSubjectHoursInDateRange(subject, slotOccurrences, dayOrderStats)} hours` :
                           <RemainingHoursDisplay 
                             courseTitle={subject.course_title} 
                             category={subject.category}
@@ -567,16 +616,7 @@ export default function AttendancePage() {
                           />
                         }
                       </div>
-                      {prediction && (
-                        <div className="text-xs text-gray-400 mt-2">
-                          Current: <RemainingHoursDisplay 
-                            courseTitle={subject.course_title} 
-                            category={subject.category}
-                            dayOrderStats={dayOrderStats}
-                            slotOccurrences={slotOccurrences}
-                          />
-                        </div>
-                      )}
+                      
                     </div>
 
                     {/* Absent Days */}
