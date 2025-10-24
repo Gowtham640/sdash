@@ -22,16 +22,12 @@ def get_timetable_page_html(scraper):
         print(f"[STEP 1] Navigating to: {timetable_url}", file=sys.stderr)
         
         scraper.driver.get(timetable_url)
-        time.sleep(5)
+        time.sleep(0.5)  # Reduced from 2s to 0.5s - just wait for basic page structure
         
         print(f"[OK] Current URL: {scraper.driver.current_url}", file=sys.stderr)
         print(f"[OK] Page title: {scraper.driver.title}", file=sys.stderr)
         
-        # Wait for page to load completely
-        scraper.wait.until(
-            lambda driver: driver.execute_script("return document.readyState") == "complete"
-        )
-        
+        # Skip document.readyState wait - we disabled images, so basic structure loads quickly
         print("[OK] Timetable page loaded successfully", file=sys.stderr)
         
         # Get page source

@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timedelta
 from scraper_selenium_session import SRMAcademiaScraperSelenium
 from calendar_scraper_fixed import extract_calendar_data_from_html
-from timetable_scraper import api_get_timetable_data
+from timetable_scraper import api_get_timetable_data, get_timetable_page_html, extract_timetable_data_from_html, create_do_timetable_json
 import re
 from bs4 import BeautifulSoup
 
@@ -191,16 +191,12 @@ def get_attendance_page_html(scraper):
         print(f"[STEP 1] Navigating to: {attendance_url}", file=sys.stderr)
         
         scraper.driver.get(attendance_url)
-        time.sleep(5)
+        time.sleep(0.5)  # Reduced from 2s to 0.5s - just wait for basic page structure
         
         print(f"[OK] Current URL: {scraper.driver.current_url}", file=sys.stderr)
         print(f"[OK] Page title: {scraper.driver.title}", file=sys.stderr)
         
-        # Wait for page to load completely
-        scraper.wait.until(
-            lambda driver: driver.execute_script("return document.readyState") == "complete"
-        )
-        
+        # Skip document.readyState wait - we disabled images, so basic structure loads quickly
         print("[OK] Attendance page loaded successfully", file=sys.stderr)
         
         # Get page source
@@ -485,16 +481,12 @@ def get_marks_page_html(scraper):
         
         print(f"[STEP 1] Navigating to: {marks_url}", file=sys.stderr)
         scraper.driver.get(marks_url)
-        time.sleep(5)
+        time.sleep(0.5)  # Reduced from 2s to 0.5s - just wait for basic page structure
         
         print(f"[OK] Current URL: {scraper.driver.current_url}", file=sys.stderr)
         print(f"[OK] Page title: {scraper.driver.title}", file=sys.stderr)
         
-        # Wait for page to load completely
-        scraper.wait.until(
-            lambda driver: driver.execute_script("return document.readyState") == "complete"
-        )
-        
+        # Skip document.readyState wait - we disabled images, so basic structure loads quickly
         print("[OK] Attendance/Marks page loaded successfully", file=sys.stderr)
         
         # Get page source
@@ -1039,6 +1031,501 @@ def api_get_marks_data(email, password):
                 print(f"[API] Error closing scraper: {e}", file=sys.stderr)
 
 
+def get_calendar_data_with_scraper(scraper, email, password, force_refresh=False):
+    """Get calendar data using existing scraper instance"""
+    try:
+        print(f"[UNIFIED API] Getting calendar data for: {email}", file=sys.stderr)
+
+        # Check cache first (unless force refresh)
+        if not force_refresh and is_cache_valid():
+            cached_data = get_cached_calendar_data()
+            if cached_data:
+                print(f"[UNIFIED API] Using cached calendar data ({len(cached_data)} entries)", file=sys.stderr)
+                return {
+                    "success": True,
+                    "data": cached_data,
+                    "type": "calendar",
+                    "count": len(cached_data),
+                    "cached": True,
+                    "cache_timestamp": datetime.now().isoformat()
+                }
+
+        print("[UNIFIED API] Cache expired or empty - fetching fresh calendar data", file=sys.stderr)
+
+        html_content = None
+        # Try to get data with existing session first
+        if scraper.is_session_valid():
+            print("[UNIFIED API] Valid session found - trying to get calendar data without login", file=sys.stderr)
+            html_content = scraper.get_calendar_data()
+
+        # If session was invalid or data fetch failed, attempt login
+        if html_content is None:
+            print("[UNIFIED API] Session invalid or expired - attempting login for calendar", file=sys.stderr)
+            if not scraper.login(email, password):
+                print("[UNIFIED API] Login failed for calendar!", file=sys.stderr)
+                return {"success": False, "error": "Login failed"}
+            print("[UNIFIED API] Login successful for calendar!", file=sys.stderr)
+            html_content = scraper.get_calendar_data()
+
+        if not html_content:
+            print("[UNIFIED API] Failed to get calendar HTML content after all attempts", file=sys.stderr)
+            return {"success": False, "error": "Failed to get calendar data"}
+
+        print(f"[UNIFIED API] Got calendar HTML content ({len(html_content)} characters)", file=sys.stderr)
+        calendar_data = extract_calendar_data_from_html(html_content)
+
+        if calendar_data:
+            print(f"[UNIFIED API] Successfully extracted {len(calendar_data)} calendar entries", file=sys.stderr)
+            save_calendar_cache(calendar_data)
+            return {
+                "success": True,
+                "data": calendar_data,
+                "type": "calendar",
+                "count": len(calendar_data),
+                "cached": False,
+                "fresh_data": True
+            }
+        else:
+            print("[UNIFIED API] No calendar data extracted", file=sys.stderr)
+            return {
+                "success": True,
+                "data": [],
+                "type": "calendar",
+                "count": 0,
+                "cached": False
+            }
+        
+    except Exception as e:
+        print(f"[UNIFIED API] Error getting calendar data: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+
+        if not force_refresh:
+            cached_data = get_cached_calendar_data()
+            if cached_data:
+                print("[UNIFIED API] Scraping failed, using stale cache as fallback", file=sys.stderr)
+                return {
+                    "success": True,
+                    "data": cached_data,
+                    "type": "calendar",
+                    "count": len(cached_data),
+                    "cached": True,
+                    "stale": True,
+                    "fallback": True
+                }
+        return {"success": False, "error": f"API Error: {str(e)}"}
+
+
+def get_attendance_and_marks_data_with_scraper(scraper, email, password):
+    """Get both attendance and marks data using the same page HTML (optimized)"""
+    try:
+        print(f"[UNIFIED API] Getting attendance and marks data for: {email} (single page fetch)", file=sys.stderr)
+        
+        html_content = None
+        # Try to get data with existing session first
+        if scraper.is_session_valid():
+            print("[UNIFIED API] Valid session found - trying to get attendance/marks data without login", file=sys.stderr)
+            html_content = get_attendance_page_html(scraper)
+        
+        # If session was invalid or data fetch failed, attempt login
+        if html_content is None:
+            print("[UNIFIED API] Session invalid or expired - attempting login for attendance/marks", file=sys.stderr)
+            if not scraper.login(email, password):
+                print("[UNIFIED API] Login failed for attendance/marks!", file=sys.stderr)
+                return {"attendance": {"success": False, "error": "Login failed"}, 
+                       "marks": {"success": False, "error": "Login failed"}}
+            print("[UNIFIED API] Login successful for attendance/marks!", file=sys.stderr)
+            html_content = get_attendance_page_html(scraper)
+
+        if not html_content:
+            print("[UNIFIED API] Failed to get attendance/marks HTML content after all attempts", file=sys.stderr)
+            return {"attendance": {"success": False, "error": "Failed to get data"}, 
+                   "marks": {"success": False, "error": "Failed to get data"}}
+        
+        print(f"[UNIFIED API] Got attendance/marks HTML content ({len(html_content)} characters)", file=sys.stderr)
+        
+        # Extract both attendance and marks from the same HTML
+        print("[UNIFIED API] Extracting attendance data...", file=sys.stderr)
+        attendance_data = extract_attendance_data_from_html(html_content)
+        
+        print("[UNIFIED API] Extracting course titles...", file=sys.stderr)
+        course_titles = extract_course_titles_from_html(html_content)
+        
+        print("[UNIFIED API] Extracting marks data...", file=sys.stderr)
+        marks_data = extract_marks_data_from_html(html_content, course_titles)
+        
+        # Process attendance results
+        if attendance_data:
+            print(f"[UNIFIED API] Successfully extracted {len(attendance_data)} attendance entries", file=sys.stderr)
+            attendance_json = create_attendance_json(attendance_data)
+            attendance_result = {
+                "success": True,
+                "data": attendance_json,
+                "type": "attendance",
+                "count": len(attendance_data),
+                "cached": False
+            }
+        else:
+            print("[UNIFIED API] No attendance data extracted", file=sys.stderr)
+            attendance_result = {
+                "success": True,
+                "data": {"all_subjects": [], "summary": {"total_subjects": 0}},
+                "type": "attendance",
+                "count": 0,
+                "cached": False
+            }
+        
+        # Process marks results
+        if marks_data:
+            print(f"[UNIFIED API] Successfully extracted {len(marks_data)} marks entries", file=sys.stderr)
+            marks_json = create_marks_json(marks_data)
+            marks_result = {
+                "success": True,
+                "data": marks_json,
+                "type": "marks",
+                "count": len(marks_data),
+                "cached": False
+            }
+        else:
+            print("[UNIFIED API] No marks data extracted", file=sys.stderr)
+            empty_marks_json = {
+                "metadata": {
+                    "generated_at": datetime.now().isoformat(),
+                    "source": "SRM Academia Portal - Internal Marks",
+                    "academic_year": "2025-26 ODD",
+                    "institution": "SRM Institute of Science and Technology",
+                    "college": "College of Engineering and Technology",
+                    "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                },
+                "summary": {
+                    "total_courses": 0,
+                    "theory_courses": 0,
+                    "lab_courses": 0,
+                    "other_courses": 0,
+                    "total_assessments": 0
+                },
+                "courses": {
+                    "theory": [],
+                    "lab": [],
+                    "other": []
+                },
+                "all_courses": []
+            }
+            marks_result = {
+                "success": True,
+                "data": empty_marks_json,
+                "type": "marks",
+                "count": 0,
+                "cached": False
+            }
+        
+        return {"attendance": attendance_result, "marks": marks_result}
+        
+    except Exception as e:
+        print(f"[UNIFIED API] Error getting attendance/marks data: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {"attendance": {"success": False, "error": f"API Error: {str(e)}"}, 
+               "marks": {"success": False, "error": f"API Error: {str(e)}"}}
+
+
+def get_timetable_data_with_scraper(scraper, email, password):
+    """Get timetable data using existing scraper instance"""
+    try:
+        print(f"[UNIFIED API] Getting timetable data for: {email}", file=sys.stderr)
+        
+        html_content = None
+        # Try to get data with existing session first
+        if scraper.is_session_valid():
+            print("[UNIFIED API] Valid session found - trying to get timetable data without login", file=sys.stderr)
+            html_content = get_timetable_page_html(scraper)
+        
+        # If session was invalid or data fetch failed, attempt login
+        if html_content is None:
+            print("[UNIFIED API] Session invalid or expired - attempting login for timetable", file=sys.stderr)
+            if not scraper.login(email, password):
+                print("[UNIFIED API] Login failed for timetable!", file=sys.stderr)
+                return {"success": False, "error": "Login failed"}
+            print("[UNIFIED API] Login successful for timetable!", file=sys.stderr)
+            html_content = get_timetable_page_html(scraper)
+
+        if not html_content:
+            print("[UNIFIED API] Failed to get timetable HTML content after all attempts", file=sys.stderr)
+            return {"success": False, "error": "Failed to get timetable data"}
+        
+        print(f"[UNIFIED API] Got timetable HTML content ({len(html_content)} characters)", file=sys.stderr)
+        
+        # Extract course data and batch number
+        courses, batch_number = extract_timetable_data_from_html(html_content)
+        
+        if not courses:
+            print("[UNIFIED API] No timetable data extracted", file=sys.stderr)
+            return {
+                "success": True,
+                "data": [],
+                "type": "timetable",
+                "count": 0,
+                "cached": False
+            }
+        
+        # Display batch number if found
+        if batch_number:
+            print(f"[UNIFIED API] Batch number detected: {batch_number}", file=sys.stderr)
+        
+        # Create timetable JSON
+        timetable_json = create_do_timetable_json(courses, batch_number)
+        
+        print(f"[UNIFIED API] Successfully extracted {len(courses)} timetable entries", file=sys.stderr)
+        return {
+            "success": True,
+            "data": timetable_json,
+            "type": "timetable",
+            "count": len(courses),
+            "cached": False
+        }
+        
+    except Exception as e:
+        print(f"[UNIFIED API] Error getting timetable data: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {"success": False, "error": f"API Error: {str(e)}"}
+
+
+def api_get_all_data(email, password=None, force_refresh=False):
+    """
+    API function to get all data types in a unified response using single browser session.
+    
+    Args:
+        email: User email (required)
+        password: User password (optional - will use existing session if not provided)
+        force_refresh: Force refresh cached data
+    
+    Returns:
+        Dict with success status and data for all types (calendar, attendance, marks, timetable)
+    """
+    print(f"[UNIFIED API] Getting all data for: {email} (single browser session)", file=sys.stderr)
+    print(f"[UNIFIED API] Password provided: {password is not None}", file=sys.stderr)
+    
+    scraper = None
+    try:
+        # Initialize single scraper instance with per-user session
+        scraper = SRMAcademiaScraperSelenium(headless=True, use_session=True, user_email=email)
+        
+        # Track results for each data type
+        results = {}
+        successful_data_types = 0
+        total_data_types = 4  # calendar, attendance, marks, timetable
+        
+        # Check if session is valid
+        session_valid = scraper.is_session_valid()
+        print(f"[UNIFIED API] Session valid: {session_valid}", file=sys.stderr)
+        
+        # Login logic: only if session invalid or password provided
+        if not session_valid:
+            if password:
+                print("[UNIFIED API] Session invalid - performing login with provided password", file=sys.stderr)
+                if not scraper.login(email, password):
+                    print("[UNIFIED API] Login failed!", file=sys.stderr)
+                    return {"success": False, "error": "login_failed", "message": "Invalid credentials"}
+                print("[UNIFIED API] Login successful!", file=sys.stderr)
+            else:
+                # No valid session and no password provided
+                print("[UNIFIED API] Session invalid and no password provided", file=sys.stderr)
+                return {
+                    "success": False,
+                    "error": "session_expired",
+                    "message": "Session expired. Please re-authenticate with your password."
+                }
+        else:
+            print("[UNIFIED API] Valid session found - skipping login", file=sys.stderr)
+        
+        # Fetch calendar data first
+        print(f"[UNIFIED API] Fetching calendar data...", file=sys.stderr)
+        try:
+            calendar_result = get_calendar_data_with_scraper(scraper, email, password, force_refresh)
+            results['calendar'] = calendar_result
+            
+            if calendar_result.get('success', False):
+                successful_data_types += 1
+                print(f"[UNIFIED API] ✓ calendar data fetched successfully", file=sys.stderr)
+            else:
+                print(f"[UNIFIED API] ✗ calendar data failed: {calendar_result.get('error', 'Unknown error')}", file=sys.stderr)
+                
+        except Exception as e:
+            print(f"[UNIFIED API] ✗ calendar data error: {e}", file=sys.stderr)
+            results['calendar'] = {
+                "success": False,
+                "error": f"Exception: {str(e)}",
+                "type": "calendar",
+                "count": 0
+            }
+        
+        # Fetch attendance and marks data together (optimized - single page fetch)
+        print(f"[UNIFIED API] Fetching attendance and marks data together...", file=sys.stderr)
+        try:
+            combined_result = get_attendance_and_marks_data_with_scraper(scraper, email, password)
+            results['attendance'] = combined_result['attendance']
+            results['marks'] = combined_result['marks']
+            
+            # Count successful data types
+            if combined_result['attendance'].get('success', False):
+                successful_data_types += 1
+                print(f"[UNIFIED API] ✓ attendance data fetched successfully", file=sys.stderr)
+            else:
+                print(f"[UNIFIED API] ✗ attendance data failed: {combined_result['attendance'].get('error', 'Unknown error')}", file=sys.stderr)
+                
+            if combined_result['marks'].get('success', False):
+                successful_data_types += 1
+                print(f"[UNIFIED API] ✓ marks data fetched successfully", file=sys.stderr)
+            else:
+                print(f"[UNIFIED API] ✗ marks data failed: {combined_result['marks'].get('error', 'Unknown error')}", file=sys.stderr)
+                
+        except Exception as e:
+            print(f"[UNIFIED API] ✗ attendance/marks data error: {e}", file=sys.stderr)
+            results['attendance'] = {
+                "success": False,
+                "error": f"Exception: {str(e)}",
+                "type": "attendance",
+                "count": 0
+            }
+            results['marks'] = {
+                "success": False,
+                "error": f"Exception: {str(e)}",
+                "type": "marks",
+                "count": 0
+            }
+        
+        # Fetch timetable data
+        print(f"[UNIFIED API] Fetching timetable data...", file=sys.stderr)
+        try:
+            timetable_result = get_timetable_data_with_scraper(scraper, email, password)
+            results['timetable'] = timetable_result
+            
+            if timetable_result.get('success', False):
+                successful_data_types += 1
+                print(f"[UNIFIED API] ✓ timetable data fetched successfully", file=sys.stderr)
+            else:
+                print(f"[UNIFIED API] ✗ timetable data failed: {timetable_result.get('error', 'Unknown error')}", file=sys.stderr)
+                
+        except Exception as e:
+            print(f"[UNIFIED API] ✗ timetable data error: {e}", file=sys.stderr)
+            results['timetable'] = {
+                "success": False,
+                "error": f"Exception: {str(e)}",
+                "type": "timetable",
+                "count": 0
+            }
+        
+        # Calculate success rate
+        success_rate = f"{(successful_data_types / total_data_types) * 100:.1f}%"
+        
+        # Determine overall success
+        overall_success = successful_data_types > 0  # Success if at least one data type worked
+        
+        # Create unified response
+        unified_response = {
+            "success": overall_success,
+            "data": {
+                "calendar": results.get('calendar', {"success": False, "error": "Not attempted"}),
+                "attendance": results.get('attendance', {"success": False, "error": "Not attempted"}),
+                "marks": results.get('marks', {"success": False, "error": "Not attempted"}),
+                "timetable": results.get('timetable', {"success": False, "error": "Not attempted"})
+            },
+            "metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "source": "SRM Academia Portal - Unified Data (Phase 1+ Optimized)",
+                "email": email,
+                "total_data_types": total_data_types,
+                "successful_data_types": successful_data_types,
+                "success_rate": success_rate,
+                "cached": False,
+                "force_refresh": force_refresh,
+                "single_browser_session": True,
+                "optimizations": [
+                    "reduced_sleep_times",
+                    "combined_attendance_marks_fetch",
+                    "performance_chrome_options",
+                    "single_page_reuse",
+                    "removed_document_ready_waits",
+                    "reduced_login_wait",
+                    "optimized_wait_conditions",
+                    "aggressive_chrome_performance"
+                ]
+            }
+        }
+        
+        # Add error field if overall success is False
+        if not overall_success:
+            unified_response["error"] = f"All data types failed. Success rate: {success_rate}"
+        
+        print(f"[UNIFIED API] Completed: {successful_data_types}/{total_data_types} data types successful ({success_rate})", file=sys.stderr)
+        
+        return unified_response
+        
+    except Exception as e:
+        print(f"[UNIFIED API] Error in unified data fetch: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {"success": False, "error": f"Unified API Error: {str(e)}"}
+    
+    finally:
+        if scraper:
+            try:
+                scraper.close()
+                print("[UNIFIED API] Single browser session closed", file=sys.stderr)
+            except Exception as e:
+                print(f"[UNIFIED API] Error closing scraper: {e}", file=sys.stderr)
+
+
+def api_validate_credentials(email, password):
+    """
+    API function to validate user credentials via portal login.
+    Creates a session for the user if validation is successful.
+    """
+    scraper = None
+    try:
+        print(f"[API] Validating credentials for: {email}", file=sys.stderr)
+        
+        # Initialize scraper WITH session persistence so user doesn't need to log in again
+        scraper = SRMAcademiaScraperSelenium(headless=True, use_session=True, user_email=email)
+        
+        # Attempt login (this will create/save the session)
+        login_success = scraper.login(email, password)
+        
+        if login_success:
+            print(f"[API] Credential validation successful for: {email}", file=sys.stderr)
+            print(f"[API] Session created - future requests won't need password", file=sys.stderr)
+            return {
+                "success": True,
+                "message": "Credentials validated successfully",
+                "email": email,
+                "session_created": True
+            }
+        else:
+            print(f"[API] Credential validation failed for: {email}", file=sys.stderr)
+            return {
+                "success": False,
+                "error": "Invalid credentials"
+            }
+        
+    except Exception as e:
+        print(f"[API] Error validating credentials: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {
+            "success": False,
+            "error": f"Validation error: {str(e)}"
+        }
+    
+    finally:
+        if scraper:
+            try:
+                scraper.close()
+                print("[API] Scraper closed", file=sys.stderr)
+            except Exception as e:
+                print(f"[API] Error closing scraper: {e}", file=sys.stderr)
+
+
 # ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
@@ -1065,6 +1552,10 @@ if __name__ == "__main__":
             result = api_get_attendance_data(email, password)
         elif action == 'get_marks_data':
             result = api_get_marks_data(email, password)
+        elif action == 'get_all_data':
+            result = api_get_all_data(email, password, force_refresh)
+        elif action == 'validate_credentials':
+            result = api_validate_credentials(email, password)
         else:
             result = {"success": False, "error": "Unknown action"}
         
