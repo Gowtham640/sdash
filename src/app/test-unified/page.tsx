@@ -163,31 +163,34 @@ export default function TestUnifiedPage() {
               <div>
                 <h3 className="text-xl font-semibold mb-3">Individual Endpoints Performance:</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {Object.entries(testResults.results).map(([endpoint, result]: [string, unknown]) => (
+                  {testResults.results && typeof testResults.results === 'object' ? Object.entries(testResults.results as Record<string, unknown>).map(([endpoint, result]) => {
+                    const typedResult = result as { success?: boolean; duration?: number; dataSize?: number; error?: string };
+                    return (
                     <div key={endpoint} className="bg-gray-800 p-4 rounded">
                       <h4 className="font-semibold capitalize">{endpoint}</h4>
                       <p className="text-sm">
-                        <span className={result.success ? 'text-green-400' : 'text-red-400'}>
-                          {result.success ? '✓ Success' : '✗ Failed'}
+                        <span className={typedResult.success ? 'text-green-400' : 'text-red-400'}>
+                          {typedResult.success ? '✓ Success' : '✗ Failed'}
                         </span>
                       </p>
-                      {result.duration && (
+                      {typedResult.duration && (
                         <p className="text-sm text-gray-400">
-                          Duration: {result.duration}s
+                          Duration: {typedResult.duration}s
                         </p>
                       )}
-                      {result.dataSize && (
+                      {typedResult.dataSize && (
                         <p className="text-sm text-gray-400">
-                          Size: {result.dataSize} bytes
+                          Size: {typedResult.dataSize} bytes
                         </p>
                       )}
-                      {result.error && (
+                      {typedResult.error && (
                         <p className="text-sm text-red-400">
-                          Error: {result.error}
+                          Error: {typedResult.error}
                         </p>
                       )}
                     </div>
-                  ))}
+                  );
+                  }) : null}
                 </div>
               </div>
             ) : (
@@ -245,26 +248,29 @@ export default function TestUnifiedPage() {
             <div className="mb-4">
               <h3 className="text-lg font-semibold mb-2">Data Summary:</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {data.data && Object.entries(data.data).map(([type, typeData]: [string, unknown]) => (
+                {data.data && typeof data.data === 'object' ? Object.entries(data.data as Record<string, unknown>).map(([type, typeData]) => {
+                  const typedTypeData = typeData as { success?: boolean; count?: number; error?: string };
+                  return (
                   <div key={type} className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold capitalize mb-2">{type}</h4>
                     <p className="text-sm">
-                      <span className={typeData.success ? 'text-green-400' : 'text-red-400'}>
-                        {typeData.success ? '✓ Available' : '✗ Failed'}
+                      <span className={typedTypeData.success ? 'text-green-400' : 'text-red-400'}>
+                        {typedTypeData.success ? '✓ Available' : '✗ Failed'}
                       </span>
                     </p>
-                    {typeData.count && (
+                    {typedTypeData.count && (
                       <p className="text-sm text-gray-400">
-                        Count: {typeData.count}
+                        Count: {typedTypeData.count}
                       </p>
                     )}
-                    {typeData.error && (
+                    {typedTypeData.error && (
                       <p className="text-sm text-red-400">
-                        Error: {typeData.error}
+                        Error: {typedTypeData.error}
                       </p>
                     )}
                   </div>
-                ))}
+                );
+                }) : null}
               </div>
             </div>
 
