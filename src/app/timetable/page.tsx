@@ -315,38 +315,18 @@ export default function TimetablePage() {
         </svg>
       </Link>
       
-      {/* Refresh Button */}
-      <button
-        onClick={() => fetchUnifiedData(true)}
-        disabled={isRefreshing}
-        className="absolute top-4 right-4 text-white hover:text-white/80 transition-colors z-50 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
-        title="Refresh data (bypasses cache)"
-      >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
-          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.25 18.002h5.916m-5.916 0a5.902 5.902 0 017.792-2.974m0 0a5.902 5.902 0 01-3.193 1.551m-7.599-5.224v5.224m11.62 0v-5.224m0-5.224a5.902 5.902 0 00-7.793 2.974M12.25 2.998h-7.599a5.902 5.902 0 00-5.25 9.348v5.224m0 0h7.599a5.902 5.902 0 007.793-2.974M12.25 2.998v5.224" />
-        </svg>
-        {isRefreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-      
-      <div className="text-white text-6xl font-sora font-bold mb-6">Timetable</div>
+      <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">Timetable</div>
 
-      <div className="w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-lg font-sora overflow-hidden">
+      <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
         <div className="h-full overflow-auto">
           <table className="w-full h-full border-collapse">
             <thead className="sticky top-0 bg-black/50 backdrop-blur-sm z-10">
               <tr>
-                <th className="border border-white/30 bg-white/20 p-3 text-center font-bold min-w-[100px]">
+                <th className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[80px] sm:min-w-[90px] md:min-w-[95px] lg:min-w-[100px] text-[10px] sm:text-xs md:text-sm lg:text-base">
                   Time
                 </th>
                 {days.map((day) => (
-                  <th key={day} className="border border-white/30 bg-white/20 p-3 text-center font-bold min-w-[150px]">
+                  <th key={day} className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] text-[10px] sm:text-xs md:text-sm lg:text-base">
                     {day}
                   </th>
                 ))}
@@ -356,12 +336,12 @@ export default function TimetablePage() {
             <tbody>
               {timetableData.map((slot) => (
                 <tr key={slot.time}>
-                  <td className="border border-white/30 bg-white/10 p-3 text-center font-bold">
+                  <td className="border border-white/30 bg-white/10 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base">
                     {slot.time}
                   </td>
 
                   {dayKeys.map((dayKey) => (
-                    <td key={dayKey} className="border border-white/30 p-3 text-center">
+                    <td key={dayKey} className="border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base">
     
                       {slot[dayKey] || ""}
                     </td>
@@ -374,24 +354,24 @@ export default function TimetablePage() {
       </div>
 
       {/* Quick Stats Section */}
-      <div className="w-[95vw] bg-white/10 border border-white/20 rounded-3xl text-white text-lg font-sora overflow-hidden">
-        <div className="p-6">
-          <div className="text-white text-2xl font-sora font-bold mb-6 text-center">Quick Stats</div>
+      <div className="w-[95vw] bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
+        <div className="p-4 sm:p-5 md:p-5.5 lg:p-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 sm:mb-5 md:mb-5.5 lg:mb-6 text-center">Quick Stats</div>
 
           {/* Day Order Statistics */}
           {dayOrderStats && (
-            <div className="mb-8">
-              <div className="text-white text-lg font-sora font-bold mb-4">Day Order Remaining (Until Nov 21, 2025)</div>
-              <div className="grid grid-cols-5 gap-4">
+            <div className="mb-6 sm:mb-7 md:mb-8 lg:mb-8">
+              <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-3 sm:mb-4">Day Order Remaining (Until Nov 21, 2025)</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-3 sm:gap-4">
                 {[1, 2, 3, 4, 5].map(doNumber => (
-                  <div key={doNumber} className="bg-white/20 rounded-2xl p-3 text-center">
-                    <div className="text-white text-sm font-sora font-bold mb-1">
+                  <div key={doNumber} className="bg-white/20 rounded-2xl p-2.5 sm:p-2.5 md:p-3 lg:p-3 text-center">
+                    <div className="text-white text-xs sm:text-sm font-sora font-bold mb-1">
                       DO {doNumber}
                     </div>
-                    <div className="text-blue-400 text-xl font-sora font-bold">
+                    <div className="text-blue-400 text-lg sm:text-xl md:text-xl lg:text-xl font-sora font-bold">
                       {dayOrderStats[doNumber]}
                     </div>
-                    <div className="text-white/70 text-xs font-sora">
+                    <div className="text-white/70 text-[10px] sm:text-xs font-sora">
                       days left
                     </div>
                   </div>
@@ -402,32 +382,32 @@ export default function TimetablePage() {
 
           {/* Subject Occurrences */}
           <div>
-            <div className="text-white text-lg font-sora font-bold mb-4">Subject Schedule Overview</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-3 sm:mb-4">Subject Schedule Overview</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
               {slotOccurrences.map((occurrence, index) => (
-                <div key={index} className="bg-white/10 border border-white/20 rounded-2xl p-4">
+                <div key={index} className="bg-white/10 border border-white/20 rounded-2xl p-3 sm:p-3.5 md:p-4 lg:p-4">
                   <div className="flex flex-col gap-2">
-                    <div className="text-white text-sm font-sora font-bold">
+                    <div className="text-white text-xs sm:text-sm font-sora font-bold">
                       {occurrence.courseTitle}
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className={`text-xs font-sora px-2 py-1 rounded ${
+                      <div className={`text-[10px] sm:text-xs font-sora px-1.5 sm:px-2 py-0.5 sm:py-1 rounded ${
                         occurrence.category === 'Theory' 
                           ? 'bg-blue-500/20 text-blue-400' 
                           : 'bg-green-500/20 text-green-400'
                       }`}>
                         {occurrence.category}
                       </div>
-                      <div className="text-white/70 text-xs font-sora">
+                      <div className="text-white/70 text-[10px] sm:text-xs font-sora">
                         Slots: {occurrence.slot}
                       </div>
                     </div>
-                    <div className="text-white/80 text-xs font-sora">
+                    <div className="text-white/80 text-[10px] sm:text-xs font-sora">
                       Day Orders: {occurrence.dayOrders.sort().map((doNum: number) => 
                         `DO${doNum}(${occurrence.dayOrderHours[doNum]})`
                       ).join(', ')}
                     </div>
-                    <div className="text-white/80 text-xs font-sora">
+                    <div className="text-white/80 text-[10px] sm:text-xs font-sora">
                       Total Sessions: {occurrence.totalOccurrences}
                     </div>
                   </div>

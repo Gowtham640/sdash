@@ -362,8 +362,8 @@ export default function Dashboard() {
 
   if (loading) {
   return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-8 justify-center overflow-hidden">
-      <div className="text-white text-4xl font-sora font-bold">
+    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
+      <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">
           Loading your Dashboard...
         </div>
       </div>
@@ -371,20 +371,20 @@ export default function Dashboard() {
   }
 
   if (error) {
-    return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-8 justify-center overflow-hidden">
-        <div className="text-red-400 text-2xl font-sora text-center px-4">{error}</div>
-        <div className="flex gap-4">
+  return (
+    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
+        <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
+        <div className="flex gap-3 sm:gap-4">
           <button 
             onClick={() => fetchUnifiedData()}
-            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm sm:text-base"
           >
             Retry
           </button>
           {error.includes('session') && (
             <button 
               onClick={handleReAuthenticate}
-              className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
             >
               Sign In Again
             </button>
@@ -399,7 +399,7 @@ export default function Dashboard() {
   const currentDayOrder = getCurrentDayOrder();
 
   return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-8 justify-center overflow-hidden py-10">
+    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
       <PillNav
         logo=""
         logoAlt=""
@@ -417,15 +417,15 @@ export default function Dashboard() {
         hoveredPillTextColor="#000000"
         pillTextColor="#ffffff"
       />
-      <div className="mt-16 mb-8">
-        <div className="text-white text-4xl font-sora font-bold text-center">
+      <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8">
+        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
         </div>
       </div>
 
       {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
-      <div className="relative p-7 z-10 w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-center items-center">
-        <div className="text-white text-2xl font-sora font-bold mb-2">
+      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Upcoming Calendar
         </div>
         <div className="flex flex-col gap-3 w-full">
@@ -448,20 +448,20 @@ export default function Dashboard() {
             return (
               <div 
                 key={dayInfo.dateStr}
-                className={`relative p-3 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-lg font-sora flex flex-row gap-8 justify-between items-center`}
+                className={`relative p-2.5 sm:p-2.5 md:p-3 lg:p-3 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-between items-center`}
               >
-                <div className="flex gap-4 items-center">
-                  <p className={`${textColor} text-lg font-sora font-bold min-w-[100px]`}>
+                <div className="flex gap-2 sm:gap-3 md:gap-4 lg:gap-4 items-center">
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[70px] sm:min-w-[80px] md:min-w-[90px] lg:min-w-[100px]`}>
                     {dayInfo.dayName}
                   </p>
-                  <p className={`${textColor} text-lg font-sora`}>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora`}>
                     {dayInfo.dateStr}
                   </p>
                 </div>
-                <p className={`${textColor} text-lg font-sora flex-1 text-center`}>
+                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex-1 text-center`}>
                   {event?.content || 'No events'}
                 </p>
-                <p className={`${textColor} text-lg font-sora font-bold min-w-[80px] text-right`}>
+                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[75px] lg:min-w-[80px] text-right`}>
                   {event?.day_order || '-'}
                 </p>
               </div>
@@ -471,8 +471,8 @@ export default function Dashboard() {
       </div>
 
       {/* Today's Timetable Section */}
-      <div className="relative p-7 z-10 w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-center items-center">
-        <div className="text-white text-2xl font-sora font-bold mb-2">
+      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Today's Timetable {currentDayOrder && `- ${currentDayOrder}`}
         </div>
         {todaysTimetable.length > 0 ? (
@@ -480,16 +480,16 @@ export default function Dashboard() {
             {todaysTimetable.map((slot, index) => (
               <div 
                 key={index}
-                className="relative p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-lg font-sora flex gap-8 justify-start items-center"
+                className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
               >
-                <div className="text-white text-lg font-sora font-light min-w-[150px]">
+                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px]">
                   {slot.time}
                 </div>
-                <div className="text-white text-lg font-sora font-bold flex-1">
+                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold flex-1">
                   {slot.course_title || 'No class'}
                 </div>
                 {slot.category && (
-                  <div className="text-white/70 text-sm font-sora">
+                  <div className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
                     {slot.category}
                   </div>
                 )}
@@ -504,8 +504,8 @@ export default function Dashboard() {
       </div>
 
       {/* Attendance Section */}
-      <div className="relative p-7 z-10 w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-center items-center">
-        <div className="text-white text-2xl font-sora font-bold mb-2">
+      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Attendance Overview
         </div>
         {attendanceData?.all_subjects && attendanceData.all_subjects.length > 0 ? (
@@ -516,18 +516,18 @@ export default function Dashboard() {
               return (
                 <div 
                   key={index}
-                  className="relative p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-lg font-sora flex flex-row gap-6 justify-between items-center"
+                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
                 >
                   <div className="flex-1">
-                    <p className="text-white text-lg font-sora font-bold">
+                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
                       {subject.course_title}
                     </p>
-                    <p className="text-white/70 text-sm font-sora">
+                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
                       {subject.category}
                     </p>
                   </div>
                   <div className="text-center">
-                    <p className={`text-2xl font-bold ${attendancePercent >= 75 ? 'text-green-400' : 'text-red-400'}`}>
+                    <p className={`text-lg sm:text-xl md:text-2xl lg:text-2xl font-bold ${attendancePercent >= 75 ? 'text-green-400' : 'text-red-400'}`}>
                       {subject.attendance_percentage}
                     </p>
                   </div>
@@ -543,8 +543,8 @@ export default function Dashboard() {
       </div>
 
       {/* Marks Section */}
-      <div className="relative p-7 z-10 w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-center items-center">
-        <div className="text-white text-2xl font-sora font-bold mb-2">
+      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Marks Overview
         </div>
         {marksData?.all_courses && marksData.all_courses.length > 0 ? (
@@ -573,24 +573,24 @@ export default function Dashboard() {
               return (
                 <div 
                   key={`${course.course_code}-${course.subject_type}-${index}`}
-                  className="relative p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-lg font-sora flex flex-row gap-6 justify-between items-center"
+                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
                 >
                   <div className="flex-1">
-                    <p className="text-white text-lg font-sora font-bold">
+                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
                       {getCourseTitle(course)}
                     </p>
-                    <p className="text-white/70 text-sm font-sora">
+                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
                       {course.course_code} • {course.subject_type}
                     </p>
                   </div>
-                  <div className="flex gap-6 items-center">
+                  <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
                     <div className="text-center">
-                      <p className="text-white/70 text-sm font-sora">Obtained</p>
-                      <p className="text-green-400 text-xl font-bold">{obtained.toFixed(1)}</p>
+                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
+                      <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-white/70 text-sm font-sora">Total</p>
-                      <p className="text-white text-xl font-bold">{total.toFixed(1)}</p>
+                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
+                      <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
                     </div>
                   </div>
                 </div>

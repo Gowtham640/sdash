@@ -117,8 +117,8 @@ export default function AuthPage() {
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
       <div className="absolute inset-0 z-0">{liquidEtherComponent}</div>
 
-      <div className="relative p-7 z-10 w-[20vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-10 justify-center items-center">
-        <div className="text-white text-4xl font-sora font-bold">Sign In</div>
+      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[80vw] md:w-[60vw] lg:w-[40vw] xl:w-[20vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-lg sm:text-xl md:text-2xl lg:text-3xl font-sora flex flex-col gap-6 sm:gap-8 md:gap-10 lg:gap-10 justify-center items-center">
+        <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-sora font-bold">Sign In</div>
 
         <form
           onSubmit={handleSignIn}
@@ -131,7 +131,7 @@ export default function AuthPage() {
             onChange={(e) => setEmail(e.target.value)}
             disabled={isLoading}
             required
-            className="active:outline-none focus:outline-none w-full h-[4vh] bg-gray-950/0 rounded-2xl p-5 border border-gray-700 justify-center items-center flex font-sans font-medium text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans font-medium text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
           />
 
           <div className="relative w-full">
@@ -142,7 +142,7 @@ export default function AuthPage() {
               onChange={(e) => setPassword(e.target.value)}
               disabled={isLoading}
               required
-              className="active:outline-none focus:outline-none w-full h-[4vh] bg-gray-950/0 rounded-2xl p-5 pr-12 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 pr-10 sm:pr-12 lg:pr-12 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <button
               type="button"
@@ -173,7 +173,7 @@ export default function AuthPage() {
           <button
             type="submit"
             disabled={isLoading || isSuccess}
-            className="w-full h-[4vh] bg-white rounded-2xl p-5 border border-gray-700 justify-center items-center flex font-sans text-sm text-gray-800 font-semibold hover:bg-gray-100 active:bg-gray-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white cursor-pointer"
+            className="w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-white rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm text-gray-800 font-semibold hover:bg-gray-100 active:bg-gray-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white cursor-pointer"
           >
             {isLoading ? (
               <div className="flex items-center gap-2">

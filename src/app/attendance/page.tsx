@@ -715,29 +715,29 @@ export default function AttendancePage() {
 
   if (loading) {
     return (
-      <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-9">
-        <div className="text-white font-sora text-6xl font-bold justify-center items-center">Attendance</div>
-        <div className="text-white font-sora text-xl">Loading attendance data...</div>
+      <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
+        <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
+        <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl">Loading attendance data...</div>
       </div>
     );
   }
 
   if (error || !attendanceData) {
     return (
-      <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-9">
-        <div className="text-white font-sora text-6xl font-bold justify-center items-center">Attendance</div>
-        <div className="text-red-400 font-sora text-xl text-center px-4">{error}</div>
-        <div className="flex gap-4">
+      <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
+        <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
+        <div className="text-red-400 font-sora text-base sm:text-lg md:text-xl lg:text-xl text-center px-4">{error}</div>
+        <div className="flex gap-3 sm:gap-4">
         <button 
             onClick={() => fetchUnifiedData()}
-            className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-6 py-3 rounded-lg transition-colors"
+            className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
         >
           Retry
         </button>
           {error && error.includes('session') && (
             <button 
               onClick={handleReAuthenticate}
-              className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-6 py-3 rounded-lg transition-colors"
+              className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
             >
               Sign In Again
             </button>
@@ -769,64 +769,44 @@ export default function AttendancePage() {
           viewBox="0 0 24 24" 
           strokeWidth={2} 
           stroke="currentColor" 
-          className="w-8 h-8"
+          className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
         </svg>
       </Link>
       
-      {/* Refresh Button */}
-      <button
-        onClick={() => fetchUnifiedData(true)}
-        disabled={isRefreshing}
-        className="absolute top-4 right-4 text-white hover:text-white/80 transition-colors z-50 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
-        title="Refresh data (bypasses cache)"
-      >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
-          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.25 18.002h5.916m-5.916 0a5.902 5.902 0 017.792-2.974m0 0a5.902 5.902 0 01-3.193 1.551m-7.599-5.224v5.224m11.62 0v-5.224m0-5.224a5.902 5.902 0 00-7.793 2.974M12.25 2.998h-7.599a5.902 5.902 0 00-5.25 9.348v5.224m0 0h7.599a5.902 5.902 0 007.793-2.974M12.25 2.998v5.224" />
-        </svg>
-        {isRefreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-      
-      <div className="text-white font-sora text-8xl font-bold">Attendance</div>
+      <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
       
       {/* Prediction Controls */}
       <div className="flex gap-4 items-center">
         {!isPredictionMode && !isOdmlMode ? (
           <div className="flex gap-4 items-center">
-            <button
-                onClick={() => setShowPredictionModal(true)}
-                className="bg-white/10 border border-gray-400 text-white font-sora px-6 py-3 rounded-2xl transition-colors duration-200 flex items-center gap-2"
-                >
-                <ShinyText 
-                    text="Predict Attendance" 
-                    disabled={false} 
-                    speed={3} 
-                    className="text-white"
-                />
-            </button>
-            <button
-                onClick={() => setShowODMLModal(true)}
-                className="bg-white/10 border border-gray-400 text-white font-sora px-6 py-3 rounded-2xl transition-colors duration-200 flex items-center gap-2"
-                >
-                <ShinyText 
-                    text="Add OD/ML" 
-                    disabled={false} 
-                    speed={3} 
-                    className="text-white"
-                />
-            </button>
+              <button
+                  onClick={() => setShowPredictionModal(true)}
+                  className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
+                  >
+                  <ShinyText 
+                      text="Predict Attendance" 
+                      disabled={false} 
+                      speed={3} 
+                      className="text-white"
+                  />
+              </button>
+              <button
+                  onClick={() => setShowODMLModal(true)}
+                  className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
+                  >
+                  <ShinyText 
+                      text="Add OD/ML" 
+                      disabled={false} 
+                      speed={3} 
+                      className="text-white"
+                  />
+              </button>
           </div>
         ) : (
           <div className="flex gap-4 items-center">
-            <div className="text-white font-sora px-4 py-2 bg-green-500/20 border border-green-500/50 rounded-2xl">
+            <div className="text-white font-sora px-3 py-1.5 sm:px-4 sm:py-2 md:px-4 md:py-2 lg:px-4 lg:py-2 bg-green-500/20 border border-green-500/50 rounded-2xl text-xs sm:text-sm md:text-base lg:text-base">
               <ShinyText
                 text={isPredictionMode ? 'Prediction Mode Active' : 'OD/ML Mode Active'}
                 disabled={false}
@@ -836,7 +816,7 @@ export default function AttendancePage() {
             </div>
             <button 
               onClick={handleCancelPrediction}
-              className="bg-red-600 hover:bg-red-700 text-white font-sora px-6 py-2 rounded-2xl transition-colors duration-200 flex items-center gap-2"
+              className="bg-red-600 hover:bg-red-700 text-white font-sora px-4 py-1.5 sm:px-5 sm:py-2 md:px-6 md:py-2 lg:px-6 lg:py-2 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
             >
               Cancel
             </button>
@@ -845,7 +825,7 @@ export default function AttendancePage() {
       </div>
 
       {/* Individual Subject Cards */}
-      <div className="flex flex-col gap-6 w-[80vw] items-center">
+      <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
         {attendanceData.all_subjects.map((subject, index) => {
           // Get prediction data if in prediction mode or OD/ML mode
           const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p => 
@@ -874,28 +854,28 @@ export default function AttendancePage() {
           }
           
   return (
-            <div key={`${subject.subject_code}-${index}`} className="w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-lg font-sora overflow-hidden flex flex-col">
+            <div key={`${subject.subject_code}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
               {/* Main Card Content */}
-              <div className="flex justify-between items-center p-6 gap-6 min-h-[300px]">
+              <div className="flex flex-col sm:flex-row items-center justify-between p-3 sm:p-4 md:p-5 lg:p-6 gap-4 sm:gap-4 md:gap-6 lg:gap-6 min-h-[300px]">
                 {/* Left Side - Subject Info */}
-                <div className="flex flex-col justify-start items-start gap-4 flex-1">
+                <div className="flex flex-col justify-start items-start gap-4 flex-1 w-full sm:w-auto">
           <div>
-                    <div className="text-2xl font-sora font-bold max-w-[400px] leading-tight">
+                    <div className="text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold max-w-[400px] leading-tight">
                       {subject.course_title}
                     </div>
-                    <div className="text-gray-400 text-sm font-sora mt-1">
+                    <div className="text-gray-400 text-xs sm:text-sm font-sora mt-1">
                       {subject.subject_code}
                     </div>
-                    <div className="text-gray-500 text-sm font-sora">
+                    <div className="text-gray-500 text-xs sm:text-sm font-sora">
                       {subject.faculty_name}
                     </div>
-                    <div className="text-gray-600 text-xs font-sora mt-1">
+                    <div className="text-gray-600 text-[10px] sm:text-xs font-sora mt-1">
                       {subject.category} • Slot: {subject.slot} • Room: {subject.room}
                     </div>
           </div>
                   <div className="flex flex-col justify-center items-start gap-3">
-                    <div className="bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-sm font-sora p-2">
-              <span className="text-blue-400 text-sm font-sora">Total: </span>
+                    <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
+              <span className="text-blue-400 text-xs sm:text-sm font-sora">Total: </span>
                       {prediction ? 
                         (isOdmlMode ? 
                           `${subject.hours_conducted} hours` : // OD/ML: total stays same
@@ -904,18 +884,18 @@ export default function AttendancePage() {
                         `${subject.hours_conducted} hours`
                       }
                       {prediction && !isOdmlMode && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {subject.hours_conducted} + {prediction.totalHoursTillEndDate}
                         </div>
                       )}
                       {prediction && isOdmlMode && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {subject.hours_conducted} (unchanged)
                         </div>
                       )}
             </div>
-                    <div className="bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-sm font-sora p-2">
-              <span className="text-red-400 text-sm font-sora">Absent: </span>
+                    <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
+              <span className="text-red-400 text-xs sm:text-sm font-sora">Absent: </span>
                       {prediction ? 
                         (isOdmlMode ? 
                           `${prediction.absentHoursDuringLeave} hours` : // OD/ML: show adjusted absent
@@ -924,18 +904,18 @@ export default function AttendancePage() {
                         `${subject.hours_absent} hours`
                       }
                       {prediction && !isOdmlMode && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {subject.hours_absent} + {prediction.absentHoursDuringLeave}
                         </div>
                       )}
                       {prediction && isOdmlMode && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {subject.hours_absent} - {prediction.odmlReductionHours}
                         </div>
                       )}
             </div>
-                    <div className="bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-sm font-sora p-2">
-              <span className="text-green-400 text-sm font-sora">Present: </span>
+                    <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
+              <span className="text-green-400 text-xs sm:text-sm font-sora">Present: </span>
                       {prediction ? 
                         (isOdmlMode ? 
                           `${prediction.presentHoursTillStartDate} hours` : // OD/ML: show adjusted present
@@ -944,22 +924,22 @@ export default function AttendancePage() {
                         `${calculatePresentHours(subject.hours_conducted, subject.hours_absent)} hours`
                       }
                       {prediction && !isOdmlMode && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {calculatePresentHours(subject.hours_conducted, subject.hours_absent)} + {prediction.presentHoursTillStartDate}
                         </div>
                       )}
                       {prediction && isOdmlMode && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {calculatePresentHours(subject.hours_conducted, subject.hours_absent)} + {prediction.odmlReductionHours}
                         </div>
                       )}
                     </div>
-                    <div className={`bg-white/10 border w-[200px] border-white/20 rounded-3xl text-white text-lg font-sora p-2 ${
+                    <div className={`bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora p-2 sm:p-3 ${
                       prediction ? 
                         (prediction.predictedAttendance >= 75 ? 'border-green-400/50 bg-green-500/10' : 'border-red-400/50 bg-red-500/10') :
                         (requiredMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10')
                     }`}>
-                      <span className={`text-lg font-semibold font-sora ${
+                      <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${
                         prediction ?
                           (prediction.predictedAttendance >= 75 ? 'text-green-400' : 'text-red-400') :
                           (requiredMargin.type === 'required' ? 'text-red-400' : 'text-green-400')
@@ -983,7 +963,7 @@ export default function AttendancePage() {
                         requiredMargin.text
                       }
                       {prediction && (
-                        <div className="text-xs text-gray-400 mt-1">
+                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                           Current: {requiredMargin.text}
                         </div>
                       )}
@@ -992,17 +972,17 @@ export default function AttendancePage() {
                 </div>
 
                 {/* Right Side - Pie Chart */}
-                <div className="flex flex-col items-center justify-center w-80 h-80">
+                <div className="flex flex-col items-center justify-center  w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
                   {pieChartData.length > 0 ? (
-                    <div className="relative w-80 h-80">
-                      <ResponsiveContainer width={320} height={320}>
+                    <div className="relative w-full h-full">
+                      <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
                             data={pieChartData}
                             cx="50%"
                             cy="50%"
-                            innerRadius={80}
-                            outerRadius={140}
+                            innerRadius="55%"
+                            outerRadius="85%"
                             paddingAngle={5}
                             dataKey="value"
                           >
@@ -1014,14 +994,14 @@ export default function AttendancePage() {
                       </ResponsiveContainer>
                       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                         <div className="text-center">
-                          <div className="text-white font-sora text-3xl font-bold">
+                          <div className="text-white font-sora text-xl sm:text-2xl md:text-3xl lg:text-3xl font-bold">
                             {attendancePercentage.toFixed(1)}%
                           </div>
-                          <div className="text-gray-400 font-sora text-sm">
+                          <div className="text-gray-400 font-sora text-xs sm:text-sm">
                             {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
                           </div>
                           {prediction && (
-                            <div className="text-gray-500 font-sora text-xs mt-1">
+                            <div className="text-gray-500 font-sora text-[10px] sm:text-xs mt-1">
                               Current: {currentAttendance.toFixed(1)}%
                             </div>
                           )}
@@ -1046,12 +1026,12 @@ export default function AttendancePage() {
 
               {/* Expanded Content */}
               {isExpanded && (
-                <div className="px-6 pb-6 border-t border-white/20 pt-4">
-                  <div className="grid grid-cols-2 gap-6">
+                <div className="px-4 sm:px-5 md:px-6 lg:px-6 pb-4 sm:pb-5 md:pb-6 lg:pb-6 border-t border-white/20 pt-3 sm:pt-4 md:pt-4 lg:pt-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 md:gap-6 lg:gap-6">
                     {/* Hours Remaining */}
-                    <div className="bg-white/10 border border-white/20 rounded-3xl p-4">
-                      <div className="text-white font-sora text-lg font-bold mb-3">Hours Remaining</div>
-                      <div className="text-blue-400 font-sora text-2xl font-bold">
+                    <div className="bg-white/10 border border-white/20 rounded-3xl p-3 sm:p-4">
+                      <div className="text-white font-sora text-base sm:text-lg font-bold mb-2 sm:mb-3">Hours Remaining</div>
+                      <div className="text-blue-400 font-sora text-xl sm:text-2xl font-bold">
                         {prediction ? 
                           (() => {
                             // SIMPLE CALCULATION: Calculate actual remaining hours after prediction
@@ -1133,9 +1113,9 @@ export default function AttendancePage() {
                     </div>
 
                     {/* Absent Days */}
-                    <div className="bg-white/10 border border-white/20 rounded-3xl p-4">
-                      <div className="text-white font-sora text-lg font-bold mb-3">Absent Days</div>
-                      <div className="text-gray-400 font-sora text-sm">
+                    <div className="bg-white/10 border border-white/20 rounded-3xl p-3 sm:p-4">
+                      <div className="text-white font-sora text-base sm:text-lg font-bold mb-2 sm:mb-3">Absent Days</div>
+                      <div className="text-gray-400 font-sora text-xs sm:text-sm">
                         Absent days list will be displayed here
                       </div>
                     </div>
@@ -1146,17 +1126,17 @@ export default function AttendancePage() {
           );
         })}
         {/* Summary Stats */}
-        <div className="w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-6">
-            <div className="text-white font-sora text-xl mb-4">
+        <div className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6">
+            <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl mb-3 sm:mb-4">
               {isPredictionMode ? 'Predicted Summary' : 'Overall Summary'}
             </div>
-            <div className="flex gap-4 text-white font-sora items-center justify-center">
-            <div className="bg-white/10 border border-white/20 rounded-lg p-3">
-                <div className="text-blue-400 text-sm">Total Subjects</div>
-                <div className="text-lg font-bold">{attendanceData.summary.total_subjects}</div>
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 text-white font-sora items-center justify-center">
+            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
+                <div className="text-blue-400 text-xs sm:text-sm">Total Subjects</div>
+                <div className="text-base sm:text-lg font-bold">{attendanceData.summary.total_subjects}</div>
             </div>
-            <div className="bg-white/10 border border-white/20 rounded-lg p-3">
-                <div className="text-green-400 text-sm">
+            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
+                <div className="text-green-400 text-xs sm:text-sm">
                   {isPredictionMode ? 'Predicted Attendance' : 'Overall Attendance'}
                 </div>
                 <div className="text-lg font-bold">
@@ -1166,7 +1146,7 @@ export default function AttendancePage() {
                   }
                 </div>
                 {isPredictionMode && predictionResults.length > 0 && (
-                  <div className="text-xs text-gray-400 mt-1">
+                  <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
                     Current: {attendanceData.summary.overall_attendance_percentage}
                   </div>
                 )}

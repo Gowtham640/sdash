@@ -355,29 +355,29 @@ export default function CalendarPage() {
 
   if (loading) {
     return (
-      <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-16">
-        <div className="text-white text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
-        <div className="text-white text-2xl font-sora">Loading calendar data...</div>
+      <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-8 sm:pt-9 md:pt-9 lg:pt-10 gap-10 sm:gap-12 md:gap-14 lg:gap-16">
+        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
+        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora">Loading calendar data...</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-16">
-        <div className="text-white text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
-        <div className="text-red-400 text-2xl font-sora text-center px-4">{error}</div>
-        <div className="flex gap-4">
+      <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-8 sm:pt-9 md:pt-9 lg:pt-10 gap-10 sm:gap-12 md:gap-14 lg:gap-16">
+        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
+        <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
+        <div className="flex gap-3 sm:gap-4">
           <button 
             onClick={() => fetchUnifiedData()}
-            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm sm:text-base"
           >
             Retry
           </button>
           {error.includes('session') && (
             <button 
               onClick={handleReAuthenticate}
-              className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
             >
               Sign In Again
             </button>
@@ -401,41 +401,21 @@ export default function CalendarPage() {
           viewBox="0 0 24 24" 
           strokeWidth={2} 
           stroke="currentColor" 
-          className="w-8 h-8"
+          className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
         </svg>
       </Link>
       
-      {/* Refresh Button */}
-      <button
-        onClick={() => fetchUnifiedData(true)}
-        disabled={isRefreshing}
-        className="absolute top-4 right-4 text-white hover:text-white/80 transition-colors z-50 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
-        title="Refresh data (bypasses cache)"
-      >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
-          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.25 18.002h5.916m-5.916 0a5.902 5.902 0 017.792-2.974m0 0a5.902 5.902 0 01-3.193 1.551m-7.599-5.224v5.224m11.62 0v-5.224m0-5.224a5.902 5.902 0 00-7.793 2.974M12.25 2.998h-7.599a5.902 5.902 0 00-5.25 9.348v5.224m0 0h7.599a5.902 5.902 0 007.793-2.974M12.25 2.998v5.224" />
-        </svg>
-        {isRefreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-      
-      <div className="text-white text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
-        <div className="text-white text-lg font-sora">
+      <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
+        <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
           Today's Date: {getCurrentDateString()} 
         </div>
 
-        <div className="relative p-5 z-10 w-[90vw] h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-center items-center overflow-y-auto">
+        <div className="relative p-3 sm:p-4 md:p-4.5 lg:p-5 z-10 w-[95vw] sm:w-[92vw] md:w-[90vw] lg:w-[90vw] h-[65vh] sm:h-[68vh] md:h-[69vh] lg:h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center overflow-y-auto">
           <div 
             ref={setScrollContainerRef}
-            className="relative overflow-y-auto p-4 z-10 w-[80vw] h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-3 justify-start items-center"
+            className="relative overflow-y-auto p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-[90vw] sm:w-[85vw] md:w-[83vw] lg:w-[80vw] h-[55vh] sm:h-[58vh] md:h-[59vh] lg:h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-2 sm:gap-2.5 md:gap-3 lg:gap-3 justify-start items-center"
           >
             {sortedEvents.map((event, index) => {
               // Check if it's a holiday based on DO value being "-" or "DO -"
@@ -469,13 +449,13 @@ export default function CalendarPage() {
                 <div 
                   key={index}
                   data-date={event.date}
-                  className={`relative p-3 z-10 w-[76vw] h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-lg font-sora flex flex-row gap-8 justify-between items-center hover:${hoverColor} transition-colors`}
+                  className={`relative p-2.5 sm:p-2.5 md:p-3 lg:p-3 z-10 w-[85vw] sm:w-[80vw] md:w-[78vw] lg:w-[76vw] h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-between items-center hover:${hoverColor} transition-colors`}
                 >
-                  <p className={`${textColor} text-lg font-sora font-bold min-w-[120px]`}>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[90px] sm:min-w-[100px] md:min-w-[110px] lg:min-w-[120px]`}>
                     {event.date} {isCurrentDate ? '' : ''}
                   </p>
-                  <p className={`${textColor} text-lg font-sora flex-1 text-center`}>{event.content || ''}</p>
-                  <p className={`${textColor} text-lg font-sora font-bold min-w-[80px] text-right`}>{doText}</p>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex-1 text-center`}>{event.content || ''}</p>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[75px] lg:min-w-[80px] text-right`}>{doText}</p>
                 </div>
               );
             })}
@@ -483,29 +463,29 @@ export default function CalendarPage() {
             </div>
         
         {/* Day Order Statistics */}
-        <div className="w-[90vw] bg-white/10 border border-white/20 rounded-3xl p-6 items-center justify-center gap-5">
-          <div className="text-white text-2xl font-sora font-bold mb-2 text-center">
+        <div className="w-[95vw] sm:w-[92vw] md:w-[91vw] lg:w-[90vw] bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-5.5 lg:p-6 items-center justify-center gap-3 sm:gap-4 md:gap-4.5 lg:gap-5">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2 text-center">
             Day Order Statistics
             </div>
-          <div className="text-white/70 text-sm font-sora text-center mb-4">
+          <div className="text-white/70 text-xs sm:text-sm font-sora text-center mb-3 sm:mb-4">
             From {getCurrentDateString()} to 21/11/2025
             </div>
-          <div className="grid grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-3 sm:gap-4">
             {[1, 2, 3, 4, 5].map(doNumber => (
-              <div key={doNumber} className="bg-white/20 rounded-2xl p-4 text-center">
-                <div className="text-white text-lg font-sora font-bold mb-2">
+              <div key={doNumber} className="bg-white/20 rounded-2xl p-3 sm:p-3.5 md:p-4 lg:p-4 text-center">
+                <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-1.5 sm:mb-2">
                   DO {doNumber}
             </div>
-                <div className="text-green-500 text-3xl font-sora font-bold">
+                <div className="text-green-500 text-xl sm:text-2xl md:text-2xl lg:text-3xl font-sora font-bold">
                   {dayOrderStats[doNumber]}
             </div>
-                <div className="text-white/70 text-sm font-sora">
+                <div className="text-white/70 text-xs sm:text-sm font-sora">
                   days left
             </div>
           </div> 
             ))}
           </div>
-          <div className="text-gray-300 font-sora font-light text-sm"> Note: This is for all students. For specific course, please refer to the course calendar.</div>
+          <div className="text-gray-300 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm"> Note: This is for all students. For specific course, please refer to the course calendar.</div>
         </div>
 
 
