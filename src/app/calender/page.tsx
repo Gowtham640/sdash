@@ -409,7 +409,7 @@ export default function CalendarPage() {
       
       <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
         <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
-          Today's Date: {getCurrentDateString()} 
+          Today&apos;s Date: {getCurrentDateString()} 
         </div>
 
         <div className="relative p-3 sm:p-4 md:p-4.5 lg:p-5 z-10 w-[95vw] sm:w-[92vw] md:w-[90vw] lg:w-[90vw] h-[65vh] sm:h-[68vh] md:h-[69vh] lg:h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center overflow-y-auto">

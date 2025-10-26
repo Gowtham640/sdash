@@ -484,7 +484,7 @@ export default function Dashboard() {
       {/* Today's Timetable Section */}
       <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Today's Timetable {currentDayOrder && `- ${currentDayOrder}`}
+          Today&apos;s Timetable {currentDayOrder && `- ${currentDayOrder}`}
         </div>
         {todaysTimetable.length > 0 ? (
           <div className="flex flex-col gap-3 w-full">

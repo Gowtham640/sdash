@@ -1,15 +1,14 @@
 'use client'
 
 import { useState } from 'react';
-import { useUser } from '@/contexts/UserContext';
 
 interface UnifiedDataResponse {
   success: boolean;
   data?: {
-    attendance?: any;
-    marks?: any;
-    timetable?: any;
-    calendar?: any;
+    attendance?: Record<string, unknown>;
+    marks?: Record<string, unknown>;
+    timetable?: Record<string, unknown>;
+    calendar?: Record<string, unknown>;
   };
   metadata?: {
     generated_at: string;
@@ -28,8 +27,11 @@ export default function TestUnifiedPage() {
   const [data, setData] = useState<UnifiedDataResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<any>(null);
-  const { email, password, isAuthenticated } = useUser();
+  const [testResults, setTestResults] = useState<Record<string, unknown> | null>(null);
+  // Get email and password from localStorage since UserContext is not available
+  const email = typeof window !== 'undefined' ? localStorage.getItem('user_email') || '' : '';
+  const password = typeof window !== 'undefined' ? localStorage.getItem('user_password') || '' : '';
+  const isAuthenticated = typeof window !== 'undefined' ? !!localStorage.getItem('user_email') : false;
 
   const testUnifiedEndpoint = async () => {
     if (!email || !password) {
@@ -82,7 +84,7 @@ export default function TestUnifiedPage() {
 
     try {
       const endpoints = ['attendance', 'marks', 'timetable', 'calender'];
-      const results: any = {};
+      const results: Record<string, unknown> = {};
       
       for (const endpoint of endpoints) {
         const startTime = Date.now();
@@ -161,7 +163,7 @@ export default function TestUnifiedPage() {
               <div>
                 <h3 className="text-xl font-semibold mb-3">Individual Endpoints Performance:</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {Object.entries(testResults.results).map(([endpoint, result]: [string, any]) => (
+                  {Object.entries(testResults.results).map(([endpoint, result]: [string, unknown]) => (
                     <div key={endpoint} className="bg-gray-800 p-4 rounded">
                       <h4 className="font-semibold capitalize">{endpoint}</h4>
                       <p className="text-sm">
@@ -243,7 +245,7 @@ export default function TestUnifiedPage() {
             <div className="mb-4">
               <h3 className="text-lg font-semibold mb-2">Data Summary:</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {data.data && Object.entries(data.data).map(([type, typeData]: [string, any]) => (
+                {data.data && Object.entries(data.data).map(([type, typeData]: [string, unknown]) => (
                   <div key={type} className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold capitalize mb-2">{type}</h4>
                     <p className="text-sm">

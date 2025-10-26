@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Wrap imports in try-catch to handle potential import errors
-let handleUserSignIn: any;
-let AuthErrorCode: any;
+let handleUserSignIn: ((email: string, password: string) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
+let AuthErrorCode: Record<string, string> | undefined;
 
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const authModule = require("@/lib/auth");
   handleUserSignIn = authModule.handleUserSignIn;
   AuthErrorCode = authModule.AuthErrorCode;

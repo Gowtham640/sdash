@@ -7,7 +7,7 @@ import path from 'path';
 // ============================================================================
 
 interface CacheEntry {
-  data: any;
+  data: Record<string, unknown>;
   timestamp: number;
   expires: number;
 }
@@ -15,7 +15,7 @@ interface CacheEntry {
 const memoryCache = new Map<string, CacheEntry>();
 const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
-function getCachedResponse(email: string): any | null {
+function getCachedResponse(email: string): Record<string, unknown> | null {
   const cacheKey = `calendar_${email}`;
   const cached = memoryCache.get(cacheKey);
   
@@ -32,7 +32,7 @@ function getCachedResponse(email: string): any | null {
   return null;
 }
 
-function setCachedResponse(email: string, data: any): void {
+function setCachedResponse(email: string, data: Record<string, unknown>): void {
   const cacheKey = `calendar_${email}`;
   memoryCache.set(cacheKey, {
     data,

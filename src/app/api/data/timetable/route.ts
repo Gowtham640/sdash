@@ -7,7 +7,7 @@ const timetableCache = new Map();
 const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 interface TimetableCacheEntry {
-  data: any;
+  data: Record<string, unknown>;
   timestamp: number;
 }
 
