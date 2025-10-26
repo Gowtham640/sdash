@@ -184,6 +184,7 @@ export async function handleUserSignIn(
         id: userId,
         email,
         role: "public", // Default role as per schema
+        semester: 1, // Default semester (will be updated on first data fetch)
       });
 
     if (profileError) {

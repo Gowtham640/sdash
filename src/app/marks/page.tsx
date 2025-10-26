@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import ShinyText from '../../components/ShinyText';
 
@@ -51,44 +53,136 @@ interface MarksApiResponse {
 }
 
 export default function MarksPage() {
+  const router = useRouter();
   const [marksData, setMarksData] = useState<MarksData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    fetchMarksData();
+    fetchUnifiedData();
   }, []);
 
-  const fetchMarksData = async () => {
+  const handleReAuthenticate = () => {
+    setShowPasswordModal(false);
+    router.push('/auth');
+  };
+
+  const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
-      const email = "gr8790@srmist.edu.in"; // You can make this dynamic
-      const password = "h!Grizi34"; // You can make this dynamic
-      
-      // Fetch marks data
-      const response = await fetch(`/api/data/marks?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`);
-      const result: MarksApiResponse = await response.json();
-
-      console.log('Marks API Response:', result);
-      console.log('Response status:', response.status);
-      console.log('Response ok:', response.ok);
-      console.log('Result success:', result.success);
-      console.log('Result data exists:', !!result.data);
-
-      if (result.success && result.data) {
-        console.log('Marks data structure:', result.data);
-        console.log('All courses length:', result.data.all_courses?.length);
-        setMarksData(result.data);
-      } else {
-        console.error('Marks API Error:', result.error);
-        console.error('Full result:', result);
-        setError(result.error || 'Failed to fetch marks data');
+      if (forceRefresh) {
+        setIsRefreshing(true);
       }
+      setError(null);
+
+      const access_token = localStorage.getItem('access_token');
+      
+      if (!access_token) {
+        console.error('[Marks] No access token found');
+        setError('Please sign in to view marks');
+        setLoading(false);
+        return;
+      }
+
+      // ✅ STEP 1: Check browser cache first (unless force refresh)
+      const cacheKey = 'unified_data_cache';
+      const cachedTimestampKey = 'unified_data_cache_timestamp';
+      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
+      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      
+      if (!forceRefresh) {
+        const cachedData = localStorage.getItem(cacheKey);
+        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        
+        if (cachedData && cachedTimestamp) {
+          const age = Date.now() - parseInt(cachedTimestamp);
+          
+          if (age < cacheMaxAge) {
+            console.log('[Marks] ✅ Using browser cache');
+            const result = JSON.parse(cachedData);
+            
+              // Process the cached data
+            if (result.success) {
+              setCacheInfo({
+                cached: true,
+                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
+              });
+
+              // Process marks data
+              if (result.data.marks?.success && result.data.marks.data) {
+                setMarksData(result.data.marks.data);
+                console.log('[Marks] Loaded marks with', result.data.marks.data.all_courses?.length, 'courses');
+              } else {
+                throw new Error('Marks data unavailable');
+              }
+              
+              setLoading(false);
+              return;
+            }
+          } else {
+            console.log('[Marks] Browser cache expired');
+          }
+        }
+      }
+
+      // ✅ STEP 2: Fetch from API (will use server cache if available)
+      console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+
+      const response = await fetch('/api/data/all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          access_token,
+          force_refresh: forceRefresh
+        })
+      });
+
+      const result = await response.json();
+      console.log('[Marks] Unified API response:', result);
+
+      // ✅ STEP 3: Store in browser cache for next time
+      if (result.success) {
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        console.log('[Marks] ✅ Stored in browser cache');
+      }
+
+      // Handle session expiry
+      if (!response.ok || (result.error === 'session_expired')) {
+        console.error('[Marks] Session expired or invalid');
+        setError('Your session has expired. Please re-enter your password.');
+        setShowPasswordModal(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch data');
+      }
+
+      // Extract cache info
+      setCacheInfo({
+        cached: result.metadata?.cached || false,
+        age: result.metadata?.cache_age_seconds || 0
+      });
+
+      // Process marks data
+      if (result.data.marks?.success && result.data.marks.data) {
+        setMarksData(result.data.marks.data);
+        console.log('[Marks] Loaded marks with', result.data.marks.data.all_courses?.length, 'courses');
+      } else {
+        throw new Error('Marks data unavailable');
+      }
+
     } catch (err) {
-      setError(`Failed to fetch marks data: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      console.error('Error fetching marks data:', err);
+      console.error('[Marks] Error fetching data:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -121,19 +215,67 @@ export default function MarksPage() {
     return (
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-9">
         <div className="text-white font-sora text-6xl font-bold justify-center items-center">Marks</div>
-        <div className="text-red-400 font-sora text-xl">Error: {error}</div>
-        <button 
-          onClick={fetchMarksData}
-          className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-6 py-3 rounded-lg"
-        >
-          Retry
-        </button>
+        <div className="text-red-400 font-sora text-xl text-center px-4">{error}</div>
+        <div className="flex gap-4">
+          <button 
+            onClick={() => fetchUnifiedData()}
+            className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-6 py-3 rounded-lg transition-colors"
+          >
+            Retry
+          </button>
+          {error && error.includes('session') && (
+            <button 
+              onClick={handleReAuthenticate}
+              className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-6 py-3 rounded-lg transition-colors"
+            >
+              Sign In Again
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
+      {/* Home Icon */}
+      <Link 
+        href="/dashboard"
+        className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
+        aria-label="Go to Dashboard"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          strokeWidth={2} 
+          stroke="currentColor" 
+          className="w-8 h-8"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+        </svg>
+      </Link>
+      
+      {/* Refresh Button */}
+      <button
+        onClick={() => fetchUnifiedData(true)}
+        disabled={isRefreshing}
+        className="absolute top-4 right-4 text-white hover:text-white/80 transition-colors z-50 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
+        title="Refresh data (bypasses cache)"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          strokeWidth={2} 
+          stroke="currentColor" 
+          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.25 18.002h5.916m-5.916 0a5.902 5.902 0 017.792-2.974m0 0a5.902 5.902 0 01-3.193 1.551m-7.599-5.224v5.224m11.62 0v-5.224m0-5.224a5.902 5.902 0 00-7.793 2.974M12.25 2.998h-7.599a5.902 5.902 0 00-5.25 9.348v5.224m0 0h7.599a5.902 5.902 0 007.793-2.974M12.25 2.998v5.224" />
+        </svg>
+        {isRefreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+      
       <div className="text-white font-sora text-8xl font-bold">Marks</div>
       
       {/* Individual Course Cards */}
@@ -151,7 +293,7 @@ export default function MarksPage() {
             <div key={`${course.course_code}-${index}`} className="w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-lg font-sora overflow-hidden flex flex-col">
               {/* Main Card Content */}
               <div className="flex flex-col justify-start items-start p-6 gap-6 min-h-[400px]">
-                {/* Course Details */}
+                {/* Course Details - UPDATED to show course title from mapping */}
           <div className="flex flex-col justify-start items-start gap-2">
                   <div className="text-2xl font-sora font-bold max-w-[400px] leading-tight">
                     {courseTitle}
@@ -234,7 +376,12 @@ export default function MarksPage() {
 
                 {/* Assessment Cards */}
                 <div className="flex flex-wrap justify-start items-start gap-2">
-                  {course.assessments.map((assessment, assessmentIndex) => (
+                  {[...course.assessments]
+                    .sort((a, b) => {
+                      // Sort assessments by name (latest first)
+                      return b.assessment_name.localeCompare(a.assessment_name);
+                    })
+                    .map((assessment, assessmentIndex) => (
                     <div key={assessmentIndex} className="bg-white/10 w-[120px] h-auto p-4 border gap-2 border-white/20 rounded-2xl text-white text-sm font-sora flex flex-col justify-start items-center">
                       <div className="text-green-400 text-sm font-sora font-bold">{assessment.assessment_name}</div>
                       <div className="text-gray-200 text-sm font-sora font-bold">{assessment.marks_obtained}/{assessment.total_marks}</div>
@@ -247,6 +394,98 @@ export default function MarksPage() {
           );
         })}
       </div>
+
+      {/* Marks Summary - Latest Courses First */}
+      <div className="w-[80vw] bg-white/10 border border-white/20 rounded-3xl p-6 mb-8">
+        <div className="text-white text-2xl font-sora font-bold mb-6 text-center">
+          Marks Summary
+        </div>
+        <div className="grid grid-cols-auto-fit gap-4">
+          {[...marksData.all_courses]
+            .filter(course => course.assessments && course.assessments.length > 0)
+            .map(course => {
+              // Sort assessments within each course by assessment name (latest first)
+              const sortedAssessments = [...course.assessments].sort((a, b) => {
+                // Extract assessment type and number for comparison
+                const getAssessmentOrder = (name: string) => {
+                  if (name.includes('FT-')) return 1; // FT assessments first
+                  if (name.includes('FP-')) return 2; // FP assessments second  
+                  if (name.includes('LLJ-')) return 3; // LLJ assessments third
+                  return 4; // Other assessments last
+                };
+                
+                const orderA = getAssessmentOrder(a.assessment_name);
+                const orderB = getAssessmentOrder(b.assessment_name);
+                
+                if (orderA !== orderB) return orderA - orderB;
+                
+                // If same type, sort by name alphabetically (reverse for latest first)
+                return b.assessment_name.localeCompare(a.assessment_name);
+              });
+              
+              return { ...course, assessments: sortedAssessments };
+            })
+            .sort((a, b) => {
+              // Sort courses by their latest assessment
+              const latestAssessmentA = a.assessments[0]?.assessment_name || '';
+              const latestAssessmentB = b.assessments[0]?.assessment_name || '';
+              return latestAssessmentB.localeCompare(latestAssessmentA);
+            })
+            .map((course, index) => {
+              const avgPercentage = course.assessments.length > 0
+                ? (course.assessments.reduce((sum, a) => sum + parseFloat(a.percentage.replace('%', '') || '0'), 0) / course.assessments.length)
+                : 0;
+              
+              return (
+                <div 
+                  key={`summary-${index}`} 
+                  className="bg-white/5 border border-white/10 rounded-2xl p-4 hover:bg-white/10 transition-colors"
+                >
+                  <div className="text-white/80 text-xs font-sora font-bold mb-2 truncate" title={getCourseTitle(course)}>
+                    {getCourseTitle(course)}
+                  </div>
+                  <div className="text-gray-400 text-xs font-sora mb-3">
+                    {course.course_code}
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white/60 text-xs">Avg:</span>
+                    <span className={`text-lg font-bold ${avgPercentage >= 75 ? 'text-green-400' : avgPercentage >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {avgPercentage.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className={`h-full ${avgPercentage >= 75 ? 'bg-green-500' : avgPercentage >= 60 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                      style={{ width: `${Math.min(avgPercentage, 100)}%` }}
+                    />
+                  </div>
+                  <div className="text-white/50 text-xs font-sora mt-2">
+                    {course.assessments.length} assessment{course.assessments.length > 1 ? 's' : ''}
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      </div>
+
+
+      {/* Re-auth Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
+            <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
+            <p className="text-gray-300 mb-6">
+              Your portal session has expired. Please sign in again to continue.
+            </p>
+            <button
+              onClick={handleReAuthenticate}
+              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
+            >
+              Sign In
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -22,21 +22,59 @@ def get_timetable_page_html(scraper):
         print(f"[STEP 1] Navigating to: {timetable_url}", file=sys.stderr)
         
         scraper.driver.get(timetable_url)
-        time.sleep(0.5)  # Reduced from 2s to 0.5s - just wait for basic page structure
+        
+        # ✅ CRITICAL: Wait for dynamic content to load!
+        print("[STEP 2] Waiting for dynamic content to load...", file=sys.stderr)
+        
+        # Wait for the page to be fully loaded (including JS execution)
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        
+        # Wait up to 15 seconds for timetable table to appear
+        # Try multiple selectors to catch different table structures
+        table_found = False
+        selectors = [
+            (By.CLASS_NAME, 'course_tbl'),
+            (By.TAG_NAME, 'table'),
+            (By.CSS_SELECTOR, 'table[class*="course"]'),
+            (By.CSS_SELECTOR, 'table[class*="timetable"]'),
+        ]
+        
+        for by, selector in selectors:
+            try:
+                print(f"[DEBUG] Waiting for table with selector: {selector}", file=sys.stderr)
+                WebDriverWait(scraper.driver, 5).until(
+                    EC.presence_of_element_located((by, selector))
+                )
+                print(f"[OK] Table found with selector: {selector}", file=sys.stderr)
+                table_found = True
+                break
+            except:
+                print(f"[DEBUG] No table found with selector: {selector}", file=sys.stderr)
+                continue
+        
+        if not table_found:
+            print("[WARN] No table found with any selector, continuing anyway...", file=sys.stderr)
+        
+        # Extra wait for JavaScript rendering
+        time.sleep(2)  # Give it 2 seconds for full rendering
+        print("[OK] Waited for JS rendering", file=sys.stderr)
         
         print(f"[OK] Current URL: {scraper.driver.current_url}", file=sys.stderr)
         print(f"[OK] Page title: {scraper.driver.title}", file=sys.stderr)
-        
-        # Skip document.readyState wait - we disabled images, so basic structure loads quickly
         print("[OK] Timetable page loaded successfully", file=sys.stderr)
         
-        # Get page source
+        # Get page source AFTER dynamic content loads
         page_source = scraper.driver.page_source
+        print(f"[OK] Page source length: {len(page_source)} characters", file=sys.stderr)
         
         return page_source
         
     except Exception as e:
         print(f"[FAIL] Error getting timetable page: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         return None
 
 def extract_batch_number_from_html(html_content):
@@ -102,7 +140,7 @@ def extract_batch_number_from_html(html_content):
 def extract_timetable_data_from_html(html_content):
     """
     Extract timetable data from HTML content using BeautifulSoup.
-    Based on the HTML structure: course_tbl table with course titles and slots.
+    Uses flexible table finding logic like the old working code.
     """
     courses = []
     batch_number = None
@@ -113,28 +151,76 @@ def extract_timetable_data_from_html(html_content):
         # First, try to extract batch number
         batch_number = extract_batch_number_from_html(html_content)
         
-        # Find the main course table
-        course_table = soup.find('table', class_='course_tbl')
+        # Find ALL tables and debug what we have
+        tables = soup.find_all('table')
+        print(f"[TIMETABLE] Found {len(tables)} tables on the page", file=sys.stderr)
         
-        if not course_table:
-            print("Course table with class 'course_tbl' not found", file=sys.stderr)
-            # Look for any tables as fallback
-            tables = soup.find_all('table')
-            print(f"Found {len(tables)} tables on the page", file=sys.stderr)
+        # Debug each table to see what we're working with
+        for i, table in enumerate(tables):
+            classes = table.get('class', [])
+            rows = table.find_all('tr')
+            print(f"[TIMETABLE] Table {i}: classes={classes}, rows={len(rows)}", file=sys.stderr)
             
+            # Show first few rows for debugging
+            if len(rows) > 0:
+                first_row_cells = rows[0].find_all(['td', 'th'])
+                first_row_text = [cell.get_text(strip=True)[:50] for cell in first_row_cells]
+                print(f"[TIMETABLE] Table {i} first row: {first_row_text}", file=sys.stderr)
+        
+        # Try multiple approaches to find the course table (like old working code)
+        course_table = None
+        
+        # Approach 1: Look for course_tbl class (original approach)
+        course_table = soup.find('table', class_='course_tbl')
+        if course_table:
+            print("[TIMETABLE] Found table with class 'course_tbl'", file=sys.stderr)
+        else:
+            print("[TIMETABLE] No table with class 'course_tbl' found", file=sys.stderr)
+        
+        # Approach 2: Look for any table with course-like content (flexible approach)
+        if not course_table:
             for i, table in enumerate(tables):
                 rows = table.find_all('tr')
                 if len(rows) > 1:  # More than just header
-                    print(f"Analyzing table {i} with {len(rows)} rows...", file=sys.stderr)
+                    # Check if this table has course-like content
+                    table_text = table.get_text().lower()
+                    if any(keyword in table_text for keyword in ['course', 'subject', 'slot', 'theory', 'practical']):
+                        print(f"[TIMETABLE] Found potential course table {i} with course-like content", file=sys.stderr)
+                        course_table = table
+                        break
+        
+        # Approach 3: Look for any table with enough columns (fallback)
+        if not course_table:
+            for i, table in enumerate(tables):
+                rows = table.find_all('tr')
+                if len(rows) > 1:  # More than just header
+                    # Check if any row has enough cells (course tables usually have many columns)
+                    for row in rows:
+                        cells = row.find_all(['td', 'th'])
+                        if len(cells) >= 6:  # Course tables typically have many columns
+                            print(f"[TIMETABLE] Found table {i} with sufficient columns ({len(cells)})", file=sys.stderr)
+                            course_table = table
+                            break
+                    if course_table:
+                        break
+        
+        # Extract courses from the found table
+        if course_table:
+            print("[TIMETABLE] Extracting courses from found table", file=sys.stderr)
+            courses = extract_from_table(course_table)
+        else:
+            print("[TIMETABLE] No suitable course table found", file=sys.stderr)
+            # Try extracting from ALL tables as last resort
+            for i, table in enumerate(tables):
+                rows = table.find_all('tr')
+                if len(rows) > 1:  # More than just header
+                    print(f"[TIMETABLE] Trying to extract from table {i} as last resort...", file=sys.stderr)
                     courses = extract_from_table(table)
                     if courses:
-                        print(f"Found {len(courses)} courses in table {i}", file=sys.stderr)
+                        print(f"[TIMETABLE] Successfully extracted {len(courses)} courses from table {i}", file=sys.stderr)
                         break
-        else:
-            print("Found course table with class 'course_tbl'", file=sys.stderr)
-            courses = extract_from_table(course_table)
         
-        print(f"Extracted {len(courses)} course entries", file=sys.stderr)
+        print(f"[TIMETABLE] Final result: {len(courses)} course entries extracted", file=sys.stderr)
         
         # Add batch number to each course entry
         if batch_number:
@@ -142,56 +228,111 @@ def extract_timetable_data_from_html(html_content):
                 course['batch_number'] = batch_number
     
     except Exception as e:
-        print(f"Error extracting timetable data: {e}", file=sys.stderr)
+        print(f"[TIMETABLE] Error extracting timetable data: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
     
     return courses, batch_number
 
 def extract_from_table(table_soup):
-    """Extract course data from a BeautifulSoup table element"""
+    """Extract course data from a BeautifulSoup table element using flexible approach"""
     courses = []
     
     try:
         rows = table_soup.find_all('tr')
+        print(f"[EXTRACT] Processing table with {len(rows)} rows", file=sys.stderr)
         
         for i, row in enumerate(rows):
-            cells = row.find_all('td')
-            if len(cells) >= 9:  # Ensure we have enough cells
+            cells = row.find_all(['td', 'th'])
+            print(f"[EXTRACT] Row {i}: {len(cells)} cells", file=sys.stderr)
+            
+            if len(cells) >= 3:  # Need at least 3 cells for course data
                 try:
-                    # Course title is in 3rd cell (index 2)
-                    course_title = cells[2].get_text(strip=True)
-                    # Slot is in 9th cell (index 8)
-                    slot = cells[8].get_text(strip=True)
+                    # Try different cell positions for course title and slot
+                    course_title = None
+                    slot = None
                     
-                    if course_title and slot:
+                    # Method 1: Try original positions (3rd cell for title, 9th for slot)
+                    if len(cells) >= 9:
+                        course_title = cells[2].get_text(strip=True)
+                        slot = cells[8].get_text(strip=True)
+                        print(f"[EXTRACT] Row {i} Method 1: title='{course_title}', slot='{slot}'", file=sys.stderr)
+                    
+                    # Method 2: Look for course-like content in any cell
+                    if not course_title or not slot:
+                        for j, cell in enumerate(cells):
+                            cell_text = cell.get_text(strip=True)
+                            # Look for course titles (longer text, not just codes)
+                            if len(cell_text) > 10 and not cell_text.isdigit() and not re.match(r'^[A-Z0-9]+$', cell_text):
+                                if not course_title:
+                                    course_title = cell_text
+                                    print(f"[EXTRACT] Row {i} Method 2: Found title '{course_title}' in cell {j}", file=sys.stderr)
+                            # Look for slot codes (short alphanumeric codes)
+                            elif re.match(r'^[A-Z0-9]+$', cell_text) and len(cell_text) <= 5:
+                                if not slot:
+                                    slot = cell_text
+                                    print(f"[EXTRACT] Row {i} Method 2: Found slot '{slot}' in cell {j}", file=sys.stderr)
+                    
+                    # Method 3: Look for specific patterns
+                    if not course_title or not slot:
+                        all_text = ' '.join([cell.get_text(strip=True) for cell in cells])
+                        print(f"[EXTRACT] Row {i} Method 3: All text: '{all_text[:100]}...'", file=sys.stderr)
+                        
+                        # Look for course title patterns
+                        if not course_title:
+                            # Look for text that looks like course names
+                            for cell in cells:
+                                cell_text = cell.get_text(strip=True)
+                                if len(cell_text) > 15 and ' ' in cell_text and not cell_text.isdigit():
+                                    course_title = cell_text
+                                    print(f"[EXTRACT] Row {i} Method 3: Found title '{course_title}'", file=sys.stderr)
+                                    break
+                        
+                        # Look for slot patterns
+                        if not slot:
+                            # Look for slot codes in the text
+                            slot_match = re.search(r'\b([A-Z]\d*[A-Z]?\d*)\b', all_text)
+                            if slot_match:
+                                slot = slot_match.group(1)
+                                print(f"[EXTRACT] Row {i} Method 3: Found slot '{slot}'", file=sys.stderr)
+                    
+                    # Only add if we found both course title and slot
+                    if course_title and slot and len(course_title) > 3 and len(slot) > 0:
                         courses.append({
                             'row_number': i,
                             'course_title': course_title,
                             'slot': slot,
                             'all_cells': [cell.get_text(strip=True) for cell in cells]
                         })
-                        print(f"[DATA] Row {i}: {course_title} -> Slot {slot}", file=sys.stderr)
+                        print(f"[EXTRACT] ✅ Row {i}: {course_title} -> Slot {slot}", file=sys.stderr)
+                    else:
+                        print(f"[EXTRACT] ❌ Row {i}: Skipped - title='{course_title}', slot='{slot}'", file=sys.stderr)
+                        
                 except Exception as e:
-                    print(f"[WARN] Error processing row {i}: {e}", file=sys.stderr)
+                    print(f"[EXTRACT] ⚠️ Error processing row {i}: {e}", file=sys.stderr)
+            else:
+                print(f"[EXTRACT] Row {i}: Skipped - insufficient cells ({len(cells)})", file=sys.stderr)
     
     except Exception as e:
-        print(f"[FAIL] Error extracting data from table: {e}", file=sys.stderr)
+        print(f"[EXTRACT] ❌ Error extracting data from table: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
     
+    print(f"[EXTRACT] Final result: {len(courses)} courses extracted", file=sys.stderr)
     return courses
 
 def create_slot_mapping(courses):
     """Create a mapping from slot codes to course titles"""
-    slot_mapping = {}
+    slot_mapping = []
     
     for course in courses:
         slot = course['slot']
         course_title = course['course_title']
         
-        if slot not in slot_mapping:
-            slot_mapping[slot] = course_title
-        else:
-            print(f"[WARN] Slot {slot} already mapped to {slot_mapping[slot]}, new course: {course_title}", file=sys.stderr)
+        slot_mapping.append({
+            'slot': slot,
+            'course_title': course_title
+        })
     
     return slot_mapping
 
@@ -199,7 +340,10 @@ def expand_slot_mapping(slot_mapping):
     """Expand P-slot ranges and create comprehensive mapping"""
     expanded_mapping = {}
     
-    for slot, course in slot_mapping.items():
+    for entry in slot_mapping:
+        slot = entry['slot']
+        course_title = entry['course_title']
+        
         if slot.startswith('P') and '-' in slot:
             # Handle P-slot ranges like "P3-P4-" or "P39-P40-"
             if slot.endswith('-'):
@@ -218,14 +362,14 @@ def expand_slot_mapping(slot_mapping):
                     
                     # Create individual slot mappings
                     for num in range(start_num, end_num + 1):
-                        expanded_mapping[f'P{num}'] = course
-                        print(f"[MAPPING] P{num} -> {course}", file=sys.stderr)
+                        expanded_mapping[f'P{num}'] = course_title
+                        print(f"[MAPPING] P{num} -> {course_title}", file=sys.stderr)
                 else:
-                    expanded_mapping[slot] = course
+                    expanded_mapping[slot] = course_title
             else:
-                expanded_mapping[slot] = course
+                expanded_mapping[slot] = course_title
         else:
-            expanded_mapping[slot] = course
+            expanded_mapping[slot] = course_title
     
     return expanded_mapping
 
@@ -245,6 +389,33 @@ def create_do_timetable_json(slot_mapping, batch_number=None):
         "03:10-04:00",
         "04:00-04:50"
     ]
+    
+    # ============================================================================
+    # CRITICAL FIX: Convert slot_mapping array to dictionary
+    # ============================================================================
+    # slot_mapping comes as an array of objects with 'slot' and 'course_title'
+    # We need to convert it to a dict for lookup: {slot_code: course_title}
+    # ============================================================================
+    
+    slot_mapping_dict = {}
+    if isinstance(slot_mapping, list):
+        print(f"[MAPPING] Converting array slot_mapping to dictionary", file=sys.stderr)
+        for entry in slot_mapping:
+            if isinstance(entry, dict) and 'slot' in entry and 'course_title' in entry:
+                slot_code = entry['slot'].strip()
+                course_title = entry['course_title'].strip()
+                slot_mapping_dict[slot_code] = course_title
+                if course_title:  # Only log non-empty courses
+                    print(f"[MAPPING] Mapped {slot_code} -> {course_title}", file=sys.stderr)
+    elif isinstance(slot_mapping, dict):
+        # Already a dictionary, use as-is
+        slot_mapping_dict = slot_mapping
+        print(f"[MAPPING] slot_mapping is already a dictionary", file=sys.stderr)
+    else:
+        print(f"[MAPPING] Warning: slot_mapping has unexpected type: {type(slot_mapping)}", file=sys.stderr)
+        slot_mapping_dict = {}
+    
+    print(f"[MAPPING] Converted {len(slot_mapping_dict)} slot mappings", file=sys.stderr)
     
     # Batch 1 periods
     batch_1_periods = [
@@ -297,8 +468,8 @@ def create_do_timetable_json(slot_mapping, batch_number=None):
         else:
             return "Other"
     
-    def map_slot_to_course(slot_code, slot_mapping):
-        """Map a slot code to its course title"""
+    def map_slot_to_course(slot_code, slot_dict):
+        """Map a slot code to its course title using the dictionary"""
         if not slot_code or slot_code.strip() == "":
             return ""
         
@@ -307,14 +478,14 @@ def create_do_timetable_json(slot_mapping, batch_number=None):
         # Handle slots with /X (like P2/X, A/X)
         if '/X' in slot_code:
             base_slot = slot_code.replace('/X', '').strip()
-            if base_slot in slot_mapping:
-                return slot_mapping[base_slot]
+            if base_slot in slot_dict:
+                return slot_dict[base_slot]
             else:
                 return ""
         
         # Direct mapping
-        if slot_code in slot_mapping:
-            return slot_mapping[slot_code]
+        if slot_code in slot_dict:
+            return slot_dict[slot_code]
         
         # If not found, return empty string (no course assigned)
         return ""
@@ -344,7 +515,7 @@ def create_do_timetable_json(slot_mapping, batch_number=None):
         for slot_idx, period in enumerate(periods):
             if slot_idx < len(time_slots):
                 time_slot = time_slots[slot_idx]
-                course_title = map_slot_to_course(period, slot_mapping)
+                course_title = map_slot_to_course(period, slot_mapping_dict)
                 
                 do_data["time_slots"][time_slot] = {
                     "slot_code": period,

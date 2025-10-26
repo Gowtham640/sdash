@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabaseClient";
 import { dataCache } from "@/lib/dataCache";
 import { spawn } from "child_process";
 
@@ -14,6 +13,26 @@ import { spawn } from "child_process";
  * 
  * Returns: { success: true, message: "Prefetch started/already cached" }
  */
+
+/**
+ * Decode JWT token without verification (extract claims)
+ */
+function decodeJWT(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+
+    // Decode the payload (second part)
+    const payload = parts[1];
+    const decoded = Buffer.from(payload, 'base64').toString('utf-8');
+    return JSON.parse(decoded);
+  } catch (error) {
+    console.error("[Prefetch] JWT decode error:", error);
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   console.log("[Prefetch] POST request received");
@@ -31,26 +50,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify session with Supabase
-    console.log("[Prefetch] Verifying session...");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(access_token);
+    // Verify and decode JWT token
+    console.log("[Prefetch] Verifying access token...");
+    let user_email: string;
 
-    if (authError || !user) {
-      console.error("[Prefetch] Invalid session:", authError?.message);
+    try {
+      const decoded = decodeJWT(access_token);
+      
+      if (!decoded) {
+        throw new Error("Invalid token format");
+      }
+
+      user_email = decoded.email || decoded.sub;
+
+      if (!user_email) {
+        throw new Error("Missing user email in token");
+      }
+
+    } catch (tokenError) {
+      console.error("[Prefetch] Token verification failed:", tokenError);
       return NextResponse.json(
         { success: false, error: "Invalid session" },
         { status: 401 }
       );
     }
 
-    console.log(`[Prefetch] Session valid for user: ${user.email}`);
+    console.log(`[Prefetch] Session valid for user: ${user_email}`);
 
     // Check if data already cached
-    const cacheKey = `data:${user.email}`;
+    const cacheKey = `data:${user_email}`;
     const cached = dataCache.get(cacheKey);
 
     if (cached) {
-      console.log(`[Prefetch] ✅ Data already cached for ${user.email}`);
+      console.log(`[Prefetch] ✅ Data already cached for ${user_email}`);
       return NextResponse.json({
         success: true,
         message: "Data already cached",
@@ -59,11 +91,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Data not cached - trigger background fetch (DON'T WAIT)
-    console.log(`[Prefetch] 🔄 Starting background fetch for ${user.email}`);
+    console.log(`[Prefetch] 🔄 Starting background fetch for ${user_email}`);
     
     // Trigger async fetch but return immediately
-    triggerBackgroundFetch(user.email, cacheKey).catch(err => {
-      console.error(`[Prefetch] Background fetch error for ${user.email}:`, err);
+    triggerBackgroundFetch(user_email, cacheKey).catch(err => {
+      console.error(`[Prefetch] Background fetch error for ${user_email}:`, err);
     });
 
     return NextResponse.json({

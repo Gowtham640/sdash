@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
-import { getTimetableSummary, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
+import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
 import { AttendancePredictionModal } from '@/components/AttendancePredictionModal';
 import { ODMLModal } from '@/components/ODMLModal';
 import { calculatePredictedAttendance, calculateODMLAdjustedAttendance, calculateSubjectHoursInDateRange, type PredictionResult, type LeavePeriod } from '@/lib/attendancePrediction';
+import { markSaturdaysAsHolidays } from '@/lib/calendarHolidays';
 import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
@@ -59,62 +62,153 @@ interface AttendanceApiResponse {
 }
 
 
-// Component for displaying remaining hours (using bulletproof pre-calculated data)
+// Component for displaying remaining hours (using proven utility functions)
 const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccurrences }: { 
   courseTitle: string; 
   category: string;
   dayOrderStats: DayOrderStats | null;
   slotOccurrences: SlotOccurrence[];
 }) => {
-  // Find the matching subject in slot occurrences with BOTH course title AND category matching
-  const slotData = slotOccurrences.find(occurrence => {
-    const courseTitleMatch = occurrence.courseTitle.toLowerCase().includes(courseTitle.toLowerCase()) ||
-                           courseTitle.toLowerCase().includes(occurrence.courseTitle.toLowerCase());
+  console.log(`[RemainingHoursDisplay] Calculating for: "${courseTitle}" (${category})`);
+  console.log(`[RemainingHoursDisplay] Available slot occurrences:`, slotOccurrences.map(s => `"${s.courseTitle}" (${s.category}) - Slots: ${s.slot} - DO: ${s.dayOrders.join(',')} - Hours: ${JSON.stringify(s.dayOrderHours)}`));
+  
+  // Use the EXACT SAME matching logic as the working prediction code
+  const findSlotData = (courseTitle: string, category: string, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
+    console.log(`[RemainingHoursDisplay] Finding slot data for: "${courseTitle}" (${category})`);
+    console.log(`[RemainingHoursDisplay] Available slot occurrences:`, slotOccurrences.map(s => `"${s.courseTitle}" (${s.category})`));
     
-    // Handle different category formats (Practical vs Lab, Theory vs Theoretical, etc.)
-    const normalizeCategory = (cat: string) => {
+    // Normalize category function (same as working code)
+    const normalizeCategory = (cat: string): string => {
       const normalized = cat.toLowerCase().trim();
-      if (normalized.includes('practical') || normalized.includes('lab')) return 'practical';
+      if (normalized.includes('lab')) return 'practical';
+      if (normalized.includes('practical')) return 'practical';
       if (normalized.includes('theory')) return 'theory';
       return normalized;
     };
     
-    const categoryMatch = normalizeCategory(occurrence.category) === normalizeCategory(category);
+    // Try exact match first
+    let slotData = slotOccurrences.find(occurrence => 
+      occurrence.courseTitle.toLowerCase().trim() === courseTitle.toLowerCase().trim() &&
+      normalizeCategory(occurrence.category) === normalizeCategory(category)
+    );
     
-    console.log(`[Matching] Checking: "${occurrence.courseTitle}" (${occurrence.category}) vs "${courseTitle}" (${category})`);
-    console.log(`[Matching] Title match: ${courseTitleMatch}, Category match: ${categoryMatch}`);
+    if (slotData) {
+      console.log(`[RemainingHoursDisplay] Exact match found: "${slotData.courseTitle}" (${slotData.category})`);
+      return slotData;
+    }
     
-    return courseTitleMatch && categoryMatch;
-  });
+    // For subjects that might have both Theory and Lab versions, be EXTRA strict
+    const subjectTitle = courseTitle.toLowerCase().trim();
+    const subjectCategory = normalizeCategory(category);
+    
+    // Check if this subject has both Theory and Lab versions
+    const hasBothVersions = slotOccurrences.some(occ => 
+      occ.courseTitle.toLowerCase().trim() === subjectTitle && 
+      normalizeCategory(occ.category) !== subjectCategory
+    );
+    
+    if (hasBothVersions) {
+      console.log(`[RemainingHoursDisplay] Subject "${courseTitle}" has both Theory and Lab versions - requiring EXACT match`);
+      // For subjects with both versions, require EXACT title match
+      slotData = slotOccurrences.find(occurrence => 
+        occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
+        normalizeCategory(occurrence.category) === subjectCategory
+      );
+      
+      if (slotData) {
+        console.log(`[RemainingHoursDisplay] Exact match for dual-version subject: "${slotData.courseTitle}" (${slotData.category})`);
+        return slotData;
+      }
+      
+      // If no exact match found for dual-version subject, return null to prevent wrong matches
+      console.warn(`[RemainingHoursDisplay] No exact match found for dual-version subject "${courseTitle}" (${category}) - returning null`);
+      return null;
+    }
+    
+    // Try fuzzy matching with EXTREMELY strict criteria (only if no exact match and no dual versions)
+    slotData = slotOccurrences.find(occurrence => {
+      // Require exact category match for fuzzy matching
+      if (normalizeCategory(occurrence.category) !== subjectCategory) {
+        return false;
+      }
+      
+      // EXTREMELY strict title matching - require at least 90% character overlap
+      const occurrenceTitle = occurrence.courseTitle.toLowerCase().trim();
+      
+      // Calculate character overlap percentage
+      const longerTitle = subjectTitle.length > occurrenceTitle.length ? subjectTitle : occurrenceTitle;
+      const shorterTitle = subjectTitle.length > occurrenceTitle.length ? occurrenceTitle : subjectTitle;
+      
+      let overlapCount = 0;
+      for (let i = 0; i < shorterTitle.length; i++) {
+        if (longerTitle.includes(shorterTitle[i])) {
+          overlapCount++;
+        }
+      }
+      
+      const overlapPercentage = (overlapCount / longerTitle.length) * 100;
+      const courseTitleMatch = overlapPercentage >= 90 && Math.abs(subjectTitle.length - occurrenceTitle.length) <= 1;
+      
+      if (courseTitleMatch) {
+        console.log(`[RemainingHoursDisplay] Fuzzy match found: "${occurrence.courseTitle}" (${occurrence.category}) - ${overlapPercentage.toFixed(1)}% overlap`);
+      }
+    
+    return courseTitleMatch;
+    });
+    
+    if (!slotData) {
+      console.warn(`[RemainingHoursDisplay] No slot data found for: "${courseTitle}" (${category})`);
+      console.warn(`[RemainingHoursDisplay] Searched ${slotOccurrences.length} occurrences`);
+    }
+    
+    return slotData || null;
+  };
+
+  const slotData = findSlotData(courseTitle, category, slotOccurrences);
 
   if (!slotData || !dayOrderStats) {
     console.log(`[RemainingHoursDisplay] No match found for: ${courseTitle} (${category})`);
-    return <span>0 hours</span>;
+    console.log(`[RemainingHoursDisplay] slotData: ${!!slotData}, dayOrderStats: ${!!dayOrderStats}`);
+    return <span className="text-red-400">0 hours (no match)</span>;
   }
 
   console.log(`[RemainingHoursDisplay] Matched: ${courseTitle} (${category}) -> ${slotData.courseTitle} (${slotData.category})`);
+  console.log(`[RemainingHoursDisplay] Using slot: ${slotData.slot}`);
+  console.log(`[RemainingHoursDisplay] Day order stats:`, dayOrderStats);
+  console.log(`[RemainingHoursDisplay] Slot data day order hours:`, slotData.dayOrderHours);
 
-  // Calculate remaining hours using bulletproof data from timetable
+  // Use the EXACT SAME calculation method as calculateSubjectHoursInDateRange (proven working)
   let totalRemainingHours = 0;
   Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
     const doNumber = parseInt(dayOrder);
-    const remainingDays = dayOrderStats[doNumber] || 0;
-    totalRemainingHours += remainingDays * hoursPerDay;
+    const dayCount = dayOrderStats[doNumber] || 0;
+    totalRemainingHours += dayCount * hoursPerDay;
+    console.log(`[RemainingHoursDisplay] DO${doNumber}: ${dayCount} days × ${hoursPerDay} hours = ${dayCount * hoursPerDay} hours`);
   });
-
-  return <span>{totalRemainingHours} hours</span>;
+  
+  console.log(`[RemainingHoursDisplay] Total remaining hours calculated: ${totalRemainingHours}`);
+  
+  if (totalRemainingHours === 0) {
+    return <span className="text-yellow-400">0 hours (no remaining days)</span>;
+  }
+  
+  return <span className="text-blue-400">{totalRemainingHours} hours</span>;
 };
 
 export default function AttendancePage() {
+  const router = useRouter();
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
   const [subjectRemainingHours, setSubjectRemainingHours] = useState<any[]>([]);
   const [showPredictionModal, setShowPredictionModal] = useState(false);
   const [calendarData, setCalendarData] = useState<any[]>([]);
+  const [semester, setSemester] = useState<number>(1); // Default to semester 1
   const [predictionResults, setPredictionResults] = useState<PredictionResult[]>([]);
   const [isPredictionMode, setIsPredictionMode] = useState(false);
   const [leavePeriods, setLeavePeriods] = useState<LeavePeriod[]>([]);
@@ -122,9 +216,10 @@ export default function AttendancePage() {
   const [showODMLModal, setShowODMLModal] = useState(false);
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    fetchAttendanceData();
+    fetchUnifiedData();
   }, []);
 
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
@@ -183,67 +278,362 @@ export default function AttendancePage() {
     setOdmlPeriods([]);
   };
 
-  const fetchAttendanceData = async () => {
+  const handleReAuthenticate = () => {
+    setShowPasswordModal(false);
+    router.push('/auth');
+  };
+
+  const refreshInBackground = async () => {
+    if (isRefreshing) {
+      return; // Already refreshing
+    }
+    
+    setIsRefreshing(true);
+    console.log('[Attendance] Background refresh started');
+    
     try {
-      setLoading(true);
-      const email = "gr8790@srmist.edu.in"; // You can make this dynamic
-      const password = "h!Grizi34"; // You can make this dynamic
-      
-      // Fetch attendance data
-      const response = await fetch(`/api/data/attendance?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`);
-      const result: AttendanceApiResponse = await response.json();
-
-      console.log('API Response:', result);
-      console.log('Response status:', response.status);
-      console.log('Response ok:', response.ok);
-      console.log('Result success:', result.success);
-      console.log('Result data exists:', !!result.data);
-      console.log('Result data type:', typeof result.data);
-
-      if (result.success && result.data) {
-        console.log('Data structure:', result.data);
-        console.log('All subjects length:', result.data.all_subjects?.length);
-        setAttendanceData(result.data);
-      } else {
-        console.error('API Error:', result.error);
-        console.error('Full result:', result);
-        setError(result.error || 'Failed to fetch attendance data');
+      const access_token = localStorage.getItem('access_token');
+      if (!access_token) {
+        console.error('[Attendance] No access token for background refresh');
+        return;
       }
 
-      // Also fetch comprehensive timetable data (only if attendance data is successful)
-      if (result.success) {
-        try {
-          // Get comprehensive timetable data using the bulletproof utility function
-          const timetableSummary = await getTimetableSummary(email, password);
-          
-          // Set all the data from the summary
-          setDayOrderStats(timetableSummary.dayOrderStats);
-          setSlotOccurrences(timetableSummary.slotOccurrences);
-          setSubjectRemainingHours(timetableSummary.subjectRemainingHours);
-          setCalendarData(timetableSummary.calendarData);
-          
-          console.log('Timetable summary loaded:', {
-            dayOrderStats: timetableSummary.dayOrderStats,
-            slotOccurrences: timetableSummary.slotOccurrences.length,
-            subjectRemainingHours: timetableSummary.subjectRemainingHours.length
-          });
+      const response = await fetch('/api/data/all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          access_token,
+          force_refresh: false  // Don't force - use server cache if available
+        })
+      });
 
-          // Debug: Log slot occurrences to see the data structure
-          console.log('Slot occurrences:', timetableSummary.slotOccurrences.map(s => ({
-            courseTitle: s.courseTitle,
-            category: s.category,
-            slots: s.slot
-          })));
-        } catch (fetchErr) {
-          console.error('Error fetching timetable summary:', fetchErr);
-          // Don't fail the entire operation if additional fetches fail
-        }
+      const result = await response.json();
+
+      if (result.success) {
+        const cacheKey = 'unified_data_cache';
+        const cachedTimestampKey = 'unified_data_cache_timestamp';
+        
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        console.log('[Attendance] ✅ Cache refreshed in background');
+      } else {
+        console.error('[Attendance] ❌ Background refresh failed:', result.error);
       }
     } catch (err) {
-      setError(`Failed to fetch attendance data: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      console.error('Error fetching attendance data:', err);
+      console.error('[Attendance] Background refresh error:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const fetchUnifiedData = async (forceRefresh = false) => {
+    try {
+      setLoading(true);
+      setError(null);
+      if (forceRefresh) {
+        setIsRefreshing(true);
+      }
+
+      const access_token = localStorage.getItem('access_token');
+      
+      if (!access_token) {
+        console.error('[Attendance] No access token found');
+        setError('Please sign in to view attendance');
+        setLoading(false);
+        return;
+      }
+
+      // ✅ STEP 1: Check browser cache first (unless force refresh)
+      const cacheKey = 'unified_data_cache';
+      const cachedTimestampKey = 'unified_data_cache_timestamp';
+      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
+      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      
+      if (!forceRefresh) {
+        const cachedData = localStorage.getItem(cacheKey);
+        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        
+        if (cachedData && cachedTimestamp) {
+          const age = Date.now() - parseInt(cachedTimestamp);
+          
+          if (age < cacheMaxAge) {
+            console.log('[Attendance] ✅ Using browser cache');
+            const result = JSON.parse(cachedData);
+            
+              // Process the cached data (same as API response processing)
+            if (result.success) {
+              // Extract cache info - mark as browser cache
+              setCacheInfo({
+                cached: true,
+                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
+              });
+
+              // Process attendance data
+              if (result.data.attendance?.success && result.data.attendance.data) {
+                setAttendanceData(result.data.attendance.data);
+                console.log('[Attendance] Loaded attendance with', result.data.attendance.data.all_subjects?.length, 'subjects');
+                
+                // Extract semester from attendance metadata
+                const extractedSemester = result.data.attendance?.semester || 
+                                         result.data.attendance?.data?.metadata?.semester || 
+                                         1;
+                console.log('[Attendance] Extracted semester from cache:', extractedSemester);
+                setSemester(extractedSemester);
+              } else {
+                throw new Error('Attendance data unavailable');
+              }
+
+              // Process timetable data
+              if (result.data.timetable?.success && result.data.timetable.data) {
+                const timetableData = result.data.timetable.data;
+                const calendarData = result.data.calendar?.data || [];
+                
+                // Handle empty timetable data gracefully
+                if (timetableData && 
+                    !Array.isArray(timetableData) && 
+                    Object.keys(timetableData).length > 0 &&
+                    timetableData.timetable &&
+                    Object.keys(timetableData.timetable).length > 0) {
+                  try {
+                    const occurrences = getSlotOccurrences(timetableData);
+                    setSlotOccurrences(occurrences);
+                    
+                    // Apply holiday logic from cached semester
+                    const extractedSemester = result.data.attendance?.semester || 
+                                             result.data.attendance?.data?.metadata?.semester || 
+                                             1;
+                    const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+                    
+                    const stats = getDayOrderStats(modifiedCalendarData);
+                    setDayOrderStats(stats);
+                    setCalendarData(modifiedCalendarData);
+                  } catch (err) {
+                    console.error('[Attendance] Error processing timetable from cache:', err);
+                  }
+                }
+              }
+              
+              // Background refresh if cache is expiring soon
+              const isExpiringSoon = age > refreshTriggerAge;
+              if (isExpiringSoon && !isRefreshing) {
+                console.log('[Attendance] ⏰ Cache expiring soon, refreshing in background...');
+                refreshInBackground();
+              }
+              
+              setLoading(false);
+              return;
+            }
+          } else {
+            console.log('[Attendance] Browser cache expired');
+          }
+        }
+      }
+
+      // ✅ STEP 2: Fetch from API (will use server cache if available)
+      console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+
+      const response = await fetch('/api/data/all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          access_token,
+          force_refresh: forceRefresh
+        })
+      });
+
+      const result = await response.json();
+      console.log('[Attendance] Unified API response:', result);
+
+      // ✅ STEP 3: Store in browser cache for next time
+      if (result.success) {
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        console.log('[Attendance] ✅ Stored in browser cache');
+      }
+
+      // Handle session expiry - use cached data if available
+      if (!response.ok || (result.error === 'session_expired')) {
+        console.error('[Attendance] Session expired - checking for cached data...');
+        
+        // Check if we have cached data to fall back to
+        const cachedData = localStorage.getItem(cacheKey);
+        if (cachedData) {
+          console.log('[Attendance] Using cached data as fallback');
+          const cachedResult = JSON.parse(cachedData);
+          
+          if (cachedResult.success) {
+            setCacheInfo({ cached: true, age: 9999 }); // Mark as stale cache
+            
+            // Process cached attendance data
+            if (cachedResult.data.attendance?.success && cachedResult.data.attendance.data) {
+              setAttendanceData(cachedResult.data.attendance.data);
+            }
+            
+            // Process cached timetable data
+            if (cachedResult.data.timetable?.success && cachedResult.data.timetable.data) {
+              const timetableData = cachedResult.data.timetable.data;
+              const calendarData = cachedResult.data.calendar?.data || [];
+              
+              if (timetableData && !Array.isArray(timetableData) && Object.keys(timetableData).length > 0) {
+                try {
+                  setSlotOccurrences(getSlotOccurrences(timetableData));
+                  
+                  // Apply holiday logic from cached semester
+                  const extractedSemester = cachedResult.data.attendance?.semester || 
+                                           cachedResult.data.attendance?.data?.metadata?.semester || 
+                                           1;
+                  const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+                  
+                  const stats = getDayOrderStats(modifiedCalendarData);
+                  setDayOrderStats(stats);
+                  setCalendarData(modifiedCalendarData);
+                } catch (err) {
+                  console.error('[Attendance] Error processing cached data:', err);
+                }
+              }
+            }
+            
+            // Show non-blocking notification instead of modal
+            setError('Your session has expired, but showing cached data. Please refresh to get latest data.');
+            setLoading(false);
+            return;
+          }
+        }
+        
+        // No cached data available - show password modal
+        console.error('[Attendance] No cached data available, prompting for re-authentication');
+        setError('Your session has expired. Please re-enter your password.');
+        setShowPasswordModal(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch data');
+      }
+
+      // Extract cache info
+      setCacheInfo({
+        cached: result.metadata?.cached || false,
+        age: result.metadata?.cache_age_seconds || 0
+      });
+
+      // Process attendance data
+      if (result.data.attendance?.success && result.data.attendance.data) {
+        setAttendanceData(result.data.attendance.data);
+        console.log('[Attendance] Loaded attendance with', result.data.attendance.data.all_subjects?.length, 'subjects');
+        
+        // Extract semester from attendance metadata
+        const extractedSemester = result.data.attendance?.semester || 
+                                 result.data.attendance?.data?.metadata?.semester || 
+                                 1;
+        console.log('[Attendance] Extracted semester:', extractedSemester);
+        setSemester(extractedSemester);
+      } else {
+        throw new Error('Attendance data unavailable');
+      }
+
+      // Also process timetable data from unified endpoint
+      if (result.data.timetable?.success && result.data.timetable.data) {
+        try {
+          const timetableData = result.data.timetable.data;
+          const calendarData = result.data.calendar?.data || [];
+          
+          // Enhanced validation for timetable data
+          console.log('[Attendance] Timetable data received:', timetableData);
+          console.log('[Attendance] Timetable data type:', typeof timetableData);
+          console.log('[Attendance] Timetable data keys:', Object.keys(timetableData || {}));
+          
+          // Handle empty timetable data gracefully
+          if (!timetableData || 
+              Array.isArray(timetableData) || 
+              Object.keys(timetableData).length === 0 ||
+              !timetableData.timetable ||
+              Object.keys(timetableData.timetable).length === 0) {
+            
+            console.warn('[Attendance] Timetable data is empty or invalid');
+            console.warn('[Attendance] This may indicate no timetable assigned or session issues');
+            
+            // Apply holiday logic even without timetable data
+            const extractedSemester = result.data.attendance?.semester || 
+                                     result.data.attendance?.data?.metadata?.semester || 
+                                     1;
+            const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+            
+            setSlotOccurrences([]);
+            setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+            setCalendarData(modifiedCalendarData);
+            
+            // Continue processing - attendance will still work without timetable
+            console.log('[Attendance] Continuing without timetable data - attendance functionality preserved');
+            return;
+          }
+          
+          // Use the PROVEN utility functions from timetableUtils (same as timetable page)
+          console.log('[Attendance] Using proven utility functions for timetable processing');
+          
+          // Get slot occurrences using the proven function
+          const occurrences = getSlotOccurrences(timetableData);
+          console.log('[Attendance] Slot occurrences from getSlotOccurrences:', occurrences.map(s => ({
+              courseTitle: s.courseTitle,
+              category: s.category,
+              slot: s.slot,
+            dayOrders: s.dayOrders,
+            dayOrderHours: s.dayOrderHours,
+            totalOccurrences: s.totalOccurrences
+            })));
+          setSlotOccurrences(occurrences);
+          
+          // Apply holiday logic based on semester (Saturdays after 26/10, all days after 10/11)
+          const extractedSemester = result.data.attendance?.semester || 
+                                   result.data.attendance?.data?.metadata?.semester || 
+                                   1;
+          const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+          console.log('[Attendance] Applied holiday logic for semester:', extractedSemester);
+          
+          // Get day order stats using the MODIFIED calendar data (holidays already excluded in getDayOrderStats)
+          const stats = getDayOrderStats(modifiedCalendarData);
+          console.log('[Attendance] Day order stats from getDayOrderStats:', stats);
+          setDayOrderStats(stats);
+          setCalendarData(modifiedCalendarData);
+          
+          console.log('[Attendance] Timetable data processed using proven functions:', {
+            slotOccurrences: occurrences.length,
+            dayOrderStats: stats
+          });
+        } catch (timetableErr) {
+          console.error('[Attendance] Error processing timetable data:', timetableErr);
+          // Set empty data gracefully on error
+          const calendarData = result.data.calendar?.data || [];
+          const extractedSemester = result.data.attendance?.semester || 
+                                   result.data.attendance?.data?.metadata?.semester || 
+                                   1;
+          const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+          
+          setSlotOccurrences([]);
+          setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+          setCalendarData(modifiedCalendarData);
+        }
+      } else {
+        console.warn('[Attendance] No timetable data available from API');
+        // Set empty data gracefully when no timetable data
+        const calendarData = result.data.calendar?.data || [];
+        const extractedSemester = result.data.attendance?.semester || 
+                                 result.data.attendance?.data?.metadata?.semester || 
+                                 1;
+        const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+        
+        setSlotOccurrences([]);
+        setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+        setCalendarData(modifiedCalendarData);
+      }
+
+    } catch (err) {
+      console.error('[Attendance] Error fetching data:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -336,19 +726,75 @@ export default function AttendancePage() {
     return (
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-9">
         <div className="text-white font-sora text-6xl font-bold justify-center items-center">Attendance</div>
-        <div className="text-red-400 font-sora text-xl">Error: {error}</div>
+        <div className="text-red-400 font-sora text-xl text-center px-4">{error}</div>
+        <div className="flex gap-4">
         <button 
-          onClick={fetchAttendanceData}
-          className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-6 py-3 rounded-lg"
+            onClick={() => fetchUnifiedData()}
+            className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-6 py-3 rounded-lg transition-colors"
         >
           Retry
         </button>
+          {error && error.includes('session') && (
+            <button 
+              onClick={handleReAuthenticate}
+              className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-6 py-3 rounded-lg transition-colors"
+            >
+              Sign In Again
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
+  // Debug logging
+  console.log('[Attendance] Component render state:', {
+    slotOccurrencesCount: slotOccurrences.length,
+    dayOrderStats: dayOrderStats,
+    attendanceDataCount: attendanceData?.all_subjects?.length || 0,
+    hasPrediction: predictionResults.length > 0
+  });
+
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
+      {/* Home Icon */}
+      <Link 
+        href="/dashboard"
+        className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
+        aria-label="Go to Dashboard"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          strokeWidth={2} 
+          stroke="currentColor" 
+          className="w-8 h-8"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+        </svg>
+      </Link>
+      
+      {/* Refresh Button */}
+      <button
+        onClick={() => fetchUnifiedData(true)}
+        disabled={isRefreshing}
+        className="absolute top-4 right-4 text-white hover:text-white/80 transition-colors z-50 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
+        title="Refresh data (bypasses cache)"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          strokeWidth={2} 
+          stroke="currentColor" 
+          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.25 18.002h5.916m-5.916 0a5.902 5.902 0 017.792-2.974m0 0a5.902 5.902 0 01-3.193 1.551m-7.599-5.224v5.224m11.62 0v-5.224m0-5.224a5.902 5.902 0 00-7.793 2.974M12.25 2.998h-7.599a5.902 5.902 0 00-5.25 9.348v5.224m0 0h7.599a5.902 5.902 0 007.793-2.974M12.25 2.998v5.224" />
+        </svg>
+        {isRefreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+      
       <div className="text-white font-sora text-8xl font-bold">Attendance</div>
       
       {/* Prediction Controls */}
@@ -606,8 +1052,75 @@ export default function AttendancePage() {
                     <div className="bg-white/10 border border-white/20 rounded-3xl p-4">
                       <div className="text-white font-sora text-lg font-bold mb-3">Hours Remaining</div>
                       <div className="text-blue-400 font-sora text-2xl font-bold">
-                        {prediction && dayOrderStats ? 
-                          `${calculateSubjectHoursInDateRange(subject, slotOccurrences, dayOrderStats)} hours` :
+                        {prediction ? 
+                          (() => {
+                            // SIMPLE CALCULATION: Calculate actual remaining hours after prediction
+                            const futureHours = prediction.totalHoursTillEndDate;
+                            
+                            // Calculate original remaining hours using the same logic as RemainingHoursDisplay
+                            const findSlotData = (courseTitle: string, category: string, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
+                              const normalizeCategory = (cat: string): string => {
+                                const normalized = cat.toLowerCase().trim();
+                                if (normalized.includes('lab')) return 'practical';
+                                if (normalized.includes('practical')) return 'practical';
+                                if (normalized.includes('theory')) return 'theory';
+                                return normalized;
+                              };
+                              
+                              let slotData = slotOccurrences.find(occurrence => 
+                                occurrence.courseTitle.toLowerCase().trim() === courseTitle.toLowerCase().trim() &&
+                                normalizeCategory(occurrence.category) === normalizeCategory(category)
+                              );
+                              
+                              if (!slotData) {
+                                const subjectTitle = courseTitle.toLowerCase().trim();
+                                const subjectCategory = normalizeCategory(category);
+                                
+                                const hasBothVersions = slotOccurrences.some(occ => 
+                                  occ.courseTitle.toLowerCase().trim() === subjectTitle && 
+                                  normalizeCategory(occ.category) !== subjectCategory
+                                );
+                                
+                                if (hasBothVersions) {
+                                  slotData = slotOccurrences.find(occurrence => 
+                                    occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
+                                    normalizeCategory(occurrence.category) === subjectCategory
+                                  );
+                                }
+                              }
+                              
+                              return slotData || null;
+                            };
+
+                            const slotData = findSlotData(subject.course_title, subject.category, slotOccurrences);
+                            
+                            if (!slotData || !dayOrderStats) {
+                              console.log(`[Attendance] Prediction - No timetable data for ${subject.course_title}`);
+                              return <span className="text-red-400">0 hours (no timetable data)</span>;
+                            }
+
+                            // Calculate original remaining hours
+                            let originalRemainingHours = 0;
+                            Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
+                              const doNumber = parseInt(dayOrder);
+                              const dayCount = dayOrderStats[doNumber] || 0;
+                              originalRemainingHours += dayCount * hoursPerDay;
+                            });
+                            
+                            // Calculate new remaining hours: original - future hours being added
+                            const newRemainingHours = originalRemainingHours - futureHours;
+                            
+                            console.log(`[Attendance] Prediction - Remaining hours calculation for ${subject.course_title}:`);
+                            console.log(`[Attendance] Prediction - Original remaining: ${originalRemainingHours}`);
+                            console.log(`[Attendance] Prediction - Future hours being added: ${futureHours}`);
+                            console.log(`[Attendance] Prediction - New remaining: ${newRemainingHours}`);
+                            
+                            if (newRemainingHours <= 0) {
+                              return <span className="text-yellow-400">0 hours (completed)</span>;
+                            }
+                            
+                            return <span className="text-blue-400">{newRemainingHours} hours</span>;
+                          })() :
                           <RemainingHoursDisplay 
                             courseTitle={subject.course_title} 
                             category={subject.category}
@@ -690,6 +1203,25 @@ export default function AttendancePage() {
           setOdmlPeriods={setOdmlPeriods}
           isCalculating={isCalculating}
         />
+      )}
+
+
+      {/* Re-auth Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
+            <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
+            <p className="text-gray-300 mb-6">
+              Your portal session has expired. Please sign in again to continue.
+            </p>
+            <button
+              onClick={handleReAuthenticate}
+              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
+            >
+              Sign In
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

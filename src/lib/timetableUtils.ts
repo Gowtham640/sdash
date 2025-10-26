@@ -71,23 +71,45 @@ export const getDayOrderStats = (calendarData: any[]): DayOrderStats => {
   
   const currentDateStr = getCurrentDateString();
   const endDateStr = "21/11/2025";
-  const currentDate = parseDate(currentDateStr);
-  const endDate = parseDate(endDateStr);
+  
+  console.log(`[STATS] Counting from ${currentDateStr} to ${endDateStr}`);
+  
+  // Use the WORKING parseDate method from calendar page
+  const parseDateLocal = (dateStr: string) => {
+    const [day, month, year] = dateStr.split('/').map(Number);
+    return new Date(year, month - 1, day);
+  };
+  
+  const currentDate = parseDateLocal(currentDateStr);
+  const endDate = parseDateLocal(endDateStr);
 
   calendarData.forEach((event: any) => {
-    if (event.date && event.day_order && event.day_order.startsWith('DO ')) {
-      const eventDate = parseDate(event.date);
-      
-      // Only count events from current date onwards and before/on end date
-      if (eventDate >= currentDate && eventDate <= endDate) {
-        const doNumber = parseInt(event.day_order.split(' ')[1]);
-        if (doNumber >= 1 && doNumber <= 5) {
-          stats[doNumber]++;
+    if (event.date && event.day_order) {
+      try {
+        const eventDate = parseDateLocal(event.date);
+        
+        // Skip holidays and days off
+        const isHoliday = event.day_order === "Holiday" || 
+                         event.day_order === "-" || 
+                         event.day_order === "DO -" ||
+                         event.content?.toLowerCase().includes('holiday');
+        
+        // Only count events from current date onwards and before/on end date
+        // Only count if it's a valid day order (not a holiday)
+        if (eventDate >= currentDate && eventDate <= endDate && !isHoliday && event.day_order.startsWith('DO ')) {
+          const doNumber = parseInt(event.day_order.split(' ')[1]);
+          if (doNumber >= 1 && doNumber <= 5) {
+            stats[doNumber]++;
+            console.log(`[STATS] Found DO ${doNumber} on ${event.date}`);
+          }
         }
+      } catch (error) {
+        console.warn(`[STATS] Failed to parse date: ${event.date}`, error);
       }
     }
   });
-
+  
+  console.log(`[STATS] Final counts:`, stats);
   return stats;
 };
 
@@ -95,6 +117,54 @@ export const getDayOrderStats = (calendarData: any[]): DayOrderStats => {
 export const getSlotOccurrences = (timetableData: any): SlotOccurrence[] => {
   const courseMap = new Map<string, SlotOccurrence>();
   const slotMap = new Map<string, Set<string>>(); // Track slots per course
+
+  // Enhanced validation and error handling
+  console.log('[getSlotOccurrences] Input timetableData:', timetableData);
+  console.log('[getSlotOccurrences] Type:', typeof timetableData);
+  console.log('[getSlotOccurrences] Is null/undefined:', timetableData == null);
+  
+  if (timetableData) {
+    console.log('[getSlotOccurrences] Keys:', Object.keys(timetableData));
+    console.log('[getSlotOccurrences] Has timetable property:', 'timetable' in timetableData);
+    if (timetableData.timetable) {
+      console.log('[getSlotOccurrences] Timetable keys:', Object.keys(timetableData.timetable));
+      console.log('[getSlotOccurrences] Timetable type:', typeof timetableData.timetable);
+    }
+  }
+
+  // Comprehensive validation
+  if (!timetableData) {
+    console.error('[getSlotOccurrences] timetableData is null or undefined');
+    return [];
+  }
+  
+  if (Array.isArray(timetableData)) {
+    console.error('[getSlotOccurrences] timetableData is an array instead of object');
+    return [];
+  }
+  
+  if (Object.keys(timetableData).length === 0) {
+    console.error('[getSlotOccurrences] timetableData is empty object');
+    return [];
+  }
+  
+  if (!timetableData.timetable) {
+    console.error('[getSlotOccurrences] timetableData.timetable is missing. Available keys:', Object.keys(timetableData));
+    return [];
+  }
+  
+  if (typeof timetableData.timetable !== 'object') {
+    console.error('[getSlotOccurrences] timetableData.timetable is not an object:', typeof timetableData.timetable);
+    return [];
+  }
+  
+  const timetableKeys = Object.keys(timetableData.timetable);
+  if (timetableKeys.length === 0) {
+    console.warn('[getSlotOccurrences] timetableData.timetable is empty - no day orders found');
+    return [];
+  }
+  
+  console.log('[getSlotOccurrences] Processing timetable with keys:', timetableKeys);
 
   // Check each day order in timetable
   ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach(doName => {

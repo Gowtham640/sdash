@@ -1,8 +1,11 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import Link from 'next/link';
 import LiquidEther from "@/components/LiquidEther";
-import { Calendar } from "@/components/ui/calendar"
+import { Calendar } from "@/components/ui/calendar";
+import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 
 interface CalendarEvent {
   date: string;
@@ -15,11 +18,15 @@ interface CalendarEvent {
 }
 
 export default function CalendarPage() {
+  const router = useRouter();
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Get current date in DD/MM/YYYY format
   const getCurrentDateString = () => {
@@ -53,7 +60,7 @@ export default function CalendarPage() {
   };
 
   useEffect(() => {
-    fetchCalendarData();
+    fetchUnifiedData();
   }, []);
 
   // Auto-scroll to current date when data loads
@@ -99,35 +106,174 @@ export default function CalendarPage() {
     }
   }, [calendarData, scrollContainerRef]);
 
+  const handleReAuthenticate = () => {
+    setShowPasswordModal(false);
+    router.push('/auth');
+  };
 
-  const fetchCalendarData = async (forceRefresh = false) => {
+  const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
-      
-      console.log('[FRONTEND] Fetching calendar data...', forceRefresh ? '(force refresh)' : '');
-      
-      const refreshParam = forceRefresh ? '&refresh=true' : '';
-      const response = await fetch(`/api/data/calender?email=gr8790@srmist.edu.in&password=h!Grizi34${refreshParam}`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (forceRefresh) {
+        setIsRefreshing(true);
       }
+
+      const access_token = localStorage.getItem('access_token');
       
+      if (!access_token) {
+        console.error('[Calendar] No access token found');
+        setError('Please sign in to view calendar');
+        setLoading(false);
+        return;
+      }
+
+      // ✅ STEP 1: Check browser cache first (unless force refresh)
+      const cacheKey = 'unified_data_cache';
+      const cachedTimestampKey = 'unified_data_cache_timestamp';
+      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
+      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      
+      if (!forceRefresh) {
+        const cachedData = localStorage.getItem(cacheKey);
+        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        
+        if (cachedData && cachedTimestamp) {
+          const age = Date.now() - parseInt(cachedTimestamp);
+          
+          if (age < cacheMaxAge) {
+            console.log('[Calendar] ✅ Using browser cache');
+            const result = JSON.parse(cachedData);
+            
+              // Process the cached data
+            if (result.success) {
+              setCacheInfo({
+                cached: true,
+                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
+              });
+
+              // Process calendar data
+              if (result.data.calendar?.success && result.data.calendar.data) {
+                let calendarEvents = result.data.calendar.data;
+                
+                // Get semester from attendance data
+                const semester = result.data.attendance?.semester || 
+                                 result.data.attendance?.data?.metadata?.semester || 1;
+                
+                console.log(`[Calendar] User semester: ${semester} (from cache)`);
+                
+                // Mark Saturdays as holidays if not semester 1
+                calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
+                
+                setCalendarData(calendarEvents);
+                console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events');
+              } else {
+                throw new Error('Calendar data unavailable');
+              }
+              
+              setLoading(false);
+              return;
+            }
+          } else {
+            console.log('[Calendar] Browser cache expired');
+          }
+        }
+      }
+
+      // ✅ STEP 2: Fetch from API (will use server cache if available)
+      console.log('[Calendar] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+
+      const response = await fetch('/api/data/all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          access_token,
+          force_refresh: forceRefresh
+        })
+      });
+
       const result = await response.json();
-      console.log('[FRONTEND] API response:', result);
-      
-      if (result.success && result.data) {
-        setCalendarData(result.data);
-        console.log('[FRONTEND] Calendar data set:', result.data.length, 'events');
-      } else {
-        throw new Error(result.error || 'Failed to fetch calendar data');
+      console.log('[Calendar] Unified API response:', result);
+
+      // ✅ STEP 3: Store in browser cache for next time
+      if (result.success) {
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        console.log('[Calendar] ✅ Stored in browser cache');
       }
+
+      // Handle session expiry - use cached data if available
+      if (!response.ok || (result.error === 'session_expired')) {
+        console.error('[Calendar] Session expired - checking for cached data...');
+        
+        // Check if we have cached data to fall back to
+        const cacheKey = 'unified_data_cache';
+        const cachedData = localStorage.getItem(cacheKey);
+        if (cachedData) {
+          console.log('[Calendar] Using cached data as fallback');
+          const cachedResult = JSON.parse(cachedData);
+          
+          if (cachedResult.success && cachedResult.data.calendar?.success && cachedResult.data.calendar.data) {
+            let calendarEvents = cachedResult.data.calendar.data;
+            
+            // Get semester from cached attendance data
+            const semester = cachedResult.data.attendance?.semester || 
+                             cachedResult.data.attendance?.data?.metadata?.semester || 1;
+            
+            // Mark Saturdays as holidays if not semester 1
+            calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
+            
+            setCalendarData(calendarEvents);
+            setCacheInfo({ cached: true, age: 9999 });
+            setError('Showing cached data (session expired). Refresh to get latest data.');
+            setLoading(false);
+            return;
+          }
+        }
+        
+        // No cached data - show password modal
+        console.error('[Calendar] No cached data, prompting for re-authentication');
+        setError('Your session has expired. Please re-enter your password.');
+        setShowPasswordModal(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch data');
+      }
+
+      // Extract cache info
+      setCacheInfo({
+        cached: result.metadata?.cached || false,
+        age: result.metadata?.cache_age_seconds || 0
+      });
+
+      // Process calendar data
+      if (result.data.calendar?.success && result.data.calendar.data) {
+        let calendarEvents = result.data.calendar.data;
+        
+        // Get semester from attendance data
+        const semester = result.data.attendance?.semester || 
+                         result.data.attendance?.data?.metadata?.semester || 1;
+        
+        console.log(`[Calendar] User semester: ${semester}`);
+        
+        // Mark Saturdays as holidays if not semester 1
+        calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
+        
+        setCalendarData(calendarEvents);
+        console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events');
+      } else {
+        throw new Error('Calendar data unavailable');
+      }
+
     } catch (err) {
-      console.error('[FRONTEND] Error fetching calendar data:', err);
+      console.error('[Calendar] Error fetching data:', err);
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -220,23 +366,72 @@ export default function CalendarPage() {
     return (
       <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-16">
         <div className="text-white text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
-        <div className="text-red-400 text-2xl font-sora">Error: {error}</div>
-        <button 
-          onClick={() => fetchCalendarData()}
-          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Retry
-        </button>
+        <div className="text-red-400 text-2xl font-sora text-center px-4">{error}</div>
+        <div className="flex gap-4">
+          <button 
+            onClick={() => fetchUnifiedData()}
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+          {error.includes('session') && (
+            <button 
+              onClick={handleReAuthenticate}
+              className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+            >
+              Sign In Again
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
     <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-8">
-        <div className="text-white text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
+      {/* Home Icon */}
+      <Link 
+        href="/dashboard"
+        className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
+        aria-label="Go to Dashboard"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          strokeWidth={2} 
+          stroke="currentColor" 
+          className="w-8 h-8"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+        </svg>
+      </Link>
+      
+      {/* Refresh Button */}
+      <button
+        onClick={() => fetchUnifiedData(true)}
+        disabled={isRefreshing}
+        className="absolute top-4 right-4 text-white hover:text-white/80 transition-colors z-50 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
+        title="Refresh data (bypasses cache)"
+      >
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          strokeWidth={2} 
+          stroke="currentColor" 
+          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.25 18.002h5.916m-5.916 0a5.902 5.902 0 017.792-2.974m0 0a5.902 5.902 0 01-3.193 1.551m-7.599-5.224v5.224m11.62 0v-5.224m0-5.224a5.902 5.902 0 00-7.793 2.974M12.25 2.998h-7.599a5.902 5.902 0 00-5.25 9.348v5.224m0 0h7.599a5.902 5.902 0 007.793-2.974M12.25 2.998v5.224" />
+        </svg>
+        {isRefreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+      
+      <div className="text-white text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
         <div className="text-white text-lg font-sora">
           Today's Date: {getCurrentDateString()} 
         </div>
+
         <div className="relative p-5 z-10 w-[90vw] h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-4 justify-center items-center overflow-y-auto">
           <div 
             ref={setScrollContainerRef}
@@ -312,6 +507,25 @@ export default function CalendarPage() {
           </div>
           <div className="text-gray-300 font-sora font-light text-sm"> Note: This is for all students. For specific course, please refer to the course calendar.</div>
         </div>
+
+
+        {/* Re-auth Modal */}
+        {showPasswordModal && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+            <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
+              <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
+              <p className="text-gray-300 mb-6">
+                Your portal session has expired. Please sign in again to continue.
+              </p>
+              <button
+                onClick={handleReAuthenticate}
+                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
+              >
+                Sign In
+              </button>
+            </div>
+          </div>
+        )}
     </div>
   );
 }

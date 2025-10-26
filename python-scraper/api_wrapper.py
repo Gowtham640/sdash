@@ -353,7 +353,89 @@ def calculate_attendance_percentage(hours_conducted, hours_absent):
         return "N/A"
 
 
-def create_attendance_json(attendance_data):
+def extract_semester_from_html(html_content):
+    """
+    Extract semester information from attendance page HTML
+    Looks specifically in the second table for semester information
+    """
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Find all tables on the page
+        tables = soup.find_all('table')
+        print(f"[SEMESTER] Found {len(tables)} tables on the page", file=sys.stderr)
+        
+        # Focus on the second table (index 1) as the user specified
+        if len(tables) >= 2:
+            second_table = tables[1]
+            print("[SEMESTER] ✓ Targeting second table (Student Info)", file=sys.stderr)
+            
+            # Get all rows in the second table
+            rows = second_table.find_all('tr')
+            print(f"[SEMESTER] Found {len(rows)} rows in second table", file=sys.stderr)
+            
+            # Look through each row for "Semester:"
+            for i, row in enumerate(rows):
+                cells = row.find_all(['td', 'th'])
+                
+                # Check each cell in the row
+                for j, cell in enumerate(cells):
+                    cell_text = cell.get_text(strip=True)
+                    
+                    # If this cell contains "Semester:"
+                    if 'semester' in cell_text.lower() and ':' in cell_text:
+                        print(f"[SEMESTER] Found 'Semester:' in row {i}, cell {j}: '{cell_text}'", file=sys.stderr)
+                        
+                        # The semester NUMBER is in the NEXT cell (j+1)
+                        if j + 1 < len(cells):
+                            next_cell = cells[j + 1]
+                            semester_text = next_cell.get_text(strip=True)
+                            
+                            print(f"[SEMESTER] Next cell content: '{semester_text}'", file=sys.stderr)
+                            
+                            # Extract number from the cell (handle <strong>3</strong> or just "3")
+                            semester_match = re.search(r'(\d)', semester_text)
+                            if semester_match:
+                                semester = int(semester_match.group(1))
+                                if 1 <= semester <= 8:
+                                    print(f"[SEMESTER] ✓✓✓ Extracted semester: {semester}", file=sys.stderr)
+                                    return semester
+                        else:
+                            print(f"[SEMESTER] No next cell found (j={j}, total cells={len(cells)})", file=sys.stderr)
+        
+        # Fallback: try the second table's text directly for semester info
+        if len(tables) >= 2:
+            second_table_text = tables[1].get_text().lower()
+            semester_match = re.search(r'semester\s*:?\s*(\d)', second_table_text)
+            if semester_match:
+                semester = int(semester_match.group(1))
+                if 1 <= semester <= 8:
+                    print(f"[SEMESTER] Found in second table text: {semester}", file=sys.stderr)
+                    return semester
+        
+        # Last resort: check all tables
+        print("[SEMESTER] Checking all tables for semester info", file=sys.stderr)
+        for i, table in enumerate(tables):
+            table_text = table.get_text().lower()
+            if 'semester' in table_text:
+                semester_match = re.search(r'semester\s*:?\s*(\d)', table_text)
+                if semester_match:
+                    semester = int(semester_match.group(1))
+                    if 1 <= semester <= 8:
+                        print(f"[SEMESTER] Found in table {i}: {semester}", file=sys.stderr)
+                        return semester
+        
+        print("[SEMESTER] No semester info found, defaulting to 1", file=sys.stderr)
+        return 1  # Default to semester 1
+        
+    except Exception as e:
+        print(f"[SEMESTER] Error extracting semester: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return 1  # Default to semester 1
+
+
+def create_attendance_json(attendance_data, semester=1):
     """Create JSON structure with attendance data"""
     
     # Calculate summary statistics
@@ -381,6 +463,7 @@ def create_attendance_json(attendance_data):
             "generated_at": datetime.now().isoformat(),
             "source": "SRM Academia Portal",
             "academic_year": "2025-26 ODD",
+            "semester": semester,
             "institution": "SRM Institute of Science and Technology",
             "college": "College of Engineering and Technology",
             "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -436,14 +519,19 @@ def api_get_attendance_data(email, password):
         print(f"[API] Got HTML content ({len(html_content)} characters)", file=sys.stderr)
         attendance_data = extract_attendance_data_from_html(html_content)
         
+        # Extract semester from HTML
+        semester = extract_semester_from_html(html_content)
+        print(f"[API] Extracted semester: {semester}", file=sys.stderr)
+        
         if attendance_data:
             print(f"[API] Successfully extracted {len(attendance_data)} attendance entries", file=sys.stderr)
-            attendance_json = create_attendance_json(attendance_data)
+            attendance_json = create_attendance_json(attendance_data, semester)
             return {
                 "success": True,
                 "data": attendance_json,
                 "type": "attendance",
                 "count": len(attendance_data),
+                "semester": semester,
                 "cached": False
             }
         else:
@@ -472,30 +560,37 @@ def api_get_attendance_data(email, password):
 
 
 def get_marks_page_html(scraper):
-    """Get the HTML content of the attendance page which contains both attendance and marks data"""
+    """Get the HTML content of the marks page (which is actually the attendance page)"""
     try:
-        print("\n=== NAVIGATING TO ATTENDANCE PAGE (CONTAINS MARKS) ===", file=sys.stderr)
+        print("\n=== NAVIGATING TO MARKS PAGE (ATTENDANCE PAGE) ===", file=sys.stderr)
         
-        # Navigate to the attendance page which contains both attendance and marks
-        marks_url = "https://academia.srmist.edu.in/#Page:My_Attendance"
+        # Navigate to the attendance page (where marks data is actually located)
+        attendance_url = "https://academia.srmist.edu.in/#Page:My_Attendance"
+        print(f"[MARKS] Navigating to: {attendance_url}", file=sys.stderr)
         
-        print(f"[STEP 1] Navigating to: {marks_url}", file=sys.stderr)
-        scraper.driver.get(marks_url)
-        time.sleep(0.5)  # Reduced from 2s to 0.5s - just wait for basic page structure
+        scraper.driver.get(attendance_url)
+        time.sleep(2)  # Wait for page to load
         
-        print(f"[OK] Current URL: {scraper.driver.current_url}", file=sys.stderr)
-        print(f"[OK] Page title: {scraper.driver.title}", file=sys.stderr)
-        
-        # Skip document.readyState wait - we disabled images, so basic structure loads quickly
-        print("[OK] Attendance/Marks page loaded successfully", file=sys.stderr)
+        print(f"[MARKS] Current URL: {scraper.driver.current_url}", file=sys.stderr)
+        print(f"[MARKS] Page title: {scraper.driver.title}", file=sys.stderr)
         
         # Get page source
         page_source = scraper.driver.page_source
+        page_length = len(page_source)
+        print(f"[MARKS] Page source length: {page_length} characters", file=sys.stderr)
         
-        return page_source
+        # Check if we got valid content
+        if page_source and page_length > 2000:
+            print(f"[MARKS] ✓ Got attendance page with marks data", file=sys.stderr)
+            return page_source
+        else:
+            print(f"[MARKS] ✗ Page too small or empty: {page_length} bytes", file=sys.stderr)
+            return None
         
     except Exception as e:
-        print(f"[FAIL] Error getting marks page: {e}", file=sys.stderr)
+        print(f"[MARKS] ✗ Error getting marks page: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         return None
 
 
@@ -563,11 +658,7 @@ def extract_course_titles_from_html(html_content):
 
 def extract_marks_data_from_html(html_content, course_titles=None):
     """
-    Extract marks data from HTML content based on the structure shown in the image.
-    The structure is:
-    - Main table with subject rows
-    - Each subject row has: Course Code, Subject Type, and nested table with assessments
-    - Nested table contains assessment details like "FT-II/15.00" and marks "13.50"
+    Extract marks data from HTML content using the old working logic.
     """
     marks_data = []
     
@@ -577,262 +668,172 @@ def extract_marks_data_from_html(html_content, course_titles=None):
         # Check if page shows access denied
         page_text = soup.get_text().lower()
         if 'not accessible' in page_text or 'not allowed to access' in page_text:
-            print("[ERROR] Access denied to marks page", file=sys.stderr)
+            print("[MARKS EXTRACT] Access denied to marks page", file=sys.stderr)
             return marks_data
         
-        # Find the main table containing marks data
-        # Look for table with "Test Performance" or "Internal Marks Detail" header
-        main_table = None
+        print(f"[MARKS EXTRACT] Starting extraction from {len(html_content)} characters", file=sys.stderr)
+        
+        # Find all tables
         tables = soup.find_all('table')
+        print(f"[MARKS EXTRACT] Found {len(tables)} tables on page", file=sys.stderr)
         
-        for table in tables:
-            table_text = table.get_text()
-            if 'Test Performance' in table_text or 'Internal Marks Detail' in table_text or 'Internal Marks' in table_text:
-                print("Found marks table", file=sys.stderr)
-                main_table = table
-                break
-        
-        # If no specific marks table found, look for any table with assessment patterns
-        if not main_table:
-            print("No specific marks table found, looking for assessment patterns...", file=sys.stderr)
-            for table_idx, table in enumerate(tables):
-                table_text = table.get_text()
-                print(f"  [DEBUG] Table {table_idx}: {len(table.find_all('tr'))} rows", file=sys.stderr)
-                print(f"  [DEBUG] Table {table_idx} text preview: '{table_text[:100]}...'", file=sys.stderr)
+        # Process each table
+        for table_idx, table in enumerate(tables):
+            rows = table.find_all('tr')
+            print(f"[MARKS EXTRACT] Table {table_idx}: {len(rows)} rows", file=sys.stderr)
+            
+            # Process each row (skip header rows)
+            for i, row in enumerate(rows):
+                cells = row.find_all('td')
                 
-                # Look for patterns like "FT-II/15.00" or assessment names
-                assessment_keywords = ['FT-', 'FP-', 'LLJ-', '/15.00', '/10.00', '/5.00', 'Test Performance', 'Assessment']
-                if any(pattern in table_text for pattern in assessment_keywords):
-                    print(f"  [OK] Found table {table_idx} with assessment patterns", file=sys.stderr)
-                    main_table = table
-                    break
-        
-        if not main_table:
-            print("No marks table found, trying alternative approaches...", file=sys.stderr)
-            
-            # Fallback 1: Look for any table with course codes
-            for table_idx, table in enumerate(tables):
-                table_text = table.get_text()
-                # Look for course code patterns
-                if re.search(r'\d{2}[A-Z]{3}\d{3}[A-Z]', table_text):
-                    print(f"  [FALLBACK] Found table {table_idx} with course codes", file=sys.stderr)
-                    main_table = table
-                    break
-            
-            # Fallback 2: Look for divs that might contain table-like data
-            if not main_table:
-                print("  [FALLBACK] Looking for divs with table-like data...", file=sys.stderr)
-                divs_with_tables = soup.find_all('div', class_=lambda x: x and 'table' in x.lower())
-                for div_idx, div in enumerate(divs_with_tables):
-                    inner_table = div.find('table')
-                    if inner_table:
-                        table_text = inner_table.get_text()
-                        if re.search(r'\d{2}[A-Z]{3}\d{3}[A-Z]', table_text):
-                            print(f"  [FALLBACK] Found div {div_idx} with course codes", file=sys.stderr)
-                            main_table = inner_table
-                            break
-            
-            if not main_table:
-                print("No suitable table found for marks extraction", file=sys.stderr)
-                return marks_data
-        
-        # Process the main table rows
-        rows = main_table.find_all('tr')
-        print(f"Found {len(rows)} rows in marks table", file=sys.stderr)
-        
-        for i, row in enumerate(rows):
-            cells = row.find_all('td')
-            
-            # Skip header row
-            if i == 0:
-                print(f"[DEBUG] Skipping header row {i}", file=sys.stderr)
-                continue
-            
-            # Skip rows with insufficient cells, but try different cell arrangements
-            if len(cells) < 2:
-                print(f"[DEBUG] Skipping row {i}: insufficient cells ({len(cells)})", file=sys.stderr)
-                continue
-            
-            # Try different cell arrangements for assessments
-            assessments_cell = None
-            if len(cells) >= 3:
-                assessments_cell = cells[2]  # Standard: Course, Type, Assessments
-            elif len(cells) >= 4:
-                assessments_cell = cells[3]  # Alternative: Course, Type, Other, Assessments
-            elif len(cells) >= 5:
-                assessments_cell = cells[4]  # Another alternative
-            else:
-                # Try to find any cell that contains assessment patterns
-                for cell_idx, cell in enumerate(cells):
-                    cell_text = cell.get_text(strip=True)
-                    if any(pattern in cell_text for pattern in ['FT-', 'FP-', 'LLJ-', '/15.00', '/10.00']):
-                        assessments_cell = cell
-                        print(f"[DEBUG] Found assessments in cell {cell_idx}", file=sys.stderr)
-                        break
-            
-            if not assessments_cell:
-                print(f"[DEBUG] Skipping row {i}: no assessment cell found", file=sys.stderr)
-                continue
-            
-            # Debug: Show row structure
-            row_text = row.get_text(strip=True)
-            if len(row_text) > 0:
-                print(f"[DEBUG] Row {i} preview: '{row_text[:50]}...'", file=sys.stderr)
-            
-            try:
-                # Extract course code and subject type from first two cells
-                course_code_cell = cells[0]
-                subject_type_cell = cells[1] if len(cells) > 1 else None
-                
-                # Debug: Print what's in each cell
-                print(f"\n[DEBUG] Row {i}:", file=sys.stderr)
-                print(f"  Cell 0 (Course): '{course_code_cell.get_text(strip=True)}'", file=sys.stderr)
-                print(f"  Cell 1 (Type): '{subject_type_cell.get_text(strip=True) if subject_type_cell else 'N/A'}'", file=sys.stderr)
-                print(f"  Assessments Cell: '{assessments_cell.get_text(strip=True)[:100]}...'", file=sys.stderr)
-                
-                # Extract course code using regex from the full text (handles "Regular" suffix)
-                course_code_text = course_code_cell.get_text(strip=True)
-                course_code_match = re.search(r'(\d{2}[A-Z]{3}\d{3}[A-Z])', course_code_text)
-                if not course_code_match:
-                    print(f"  [SKIP] No valid course code found in: '{course_code_text}'", file=sys.stderr)
+                # Skip header row
+                if i == 0:
+                    print(f"[DEBUG] Skipping header row {i}", file=sys.stderr)
                     continue
                 
-                course_code = course_code_match.group(1)
-                subject_type = subject_type_cell.get_text(strip=True) if subject_type_cell else "Unknown"
+                # Skip rows with insufficient cells, but try different cell arrangements
+                if len(cells) < 2:
+                    print(f"[DEBUG] Skipping row {i}: insufficient cells ({len(cells)})", file=sys.stderr)
+                    continue
                 
-                # Get course title from the course_titles dictionary
-                course_title = course_titles.get(course_code, "Unknown Course Title") if course_titles else "Unknown Course Title"
-                
-                # Debug: Show what's in the course_titles dictionary
-                print(f"  [DEBUG] Course titles dict has {len(course_titles) if course_titles else 0} entries", file=sys.stderr)
-                print(f"  [DEBUG] Looking for course_code: '{course_code}'", file=sys.stderr)
-                print(f"  [DEBUG] Found course_title: '{course_title}'", file=sys.stderr)
-                
-                print(f"  [OK] Processing course: {course_code} - {course_title} ({subject_type})", file=sys.stderr)
-                
-                # Extract assessments from the third cell
-                assessments = []
-                
-                # Method 1: Look for nested table in the assessments cell
-                nested_table = assessments_cell.find('table')
-                if nested_table:
-                    print(f"  [DEBUG] Found nested table with {len(nested_table.find_all('tr'))} rows", file=sys.stderr)
-                    # Process nested table rows
-                    nested_rows = nested_table.find_all('tr')
-                    for nested_row in nested_rows:
-                        nested_cells = nested_row.find_all('td')
-                        
-                        for cell in nested_cells:
-                            # Get the font element which contains the assessment data
-                            font_element = cell.find('font')
-                            if font_element:
-                                # Extract the strong element (assessment name/total) and the text after <br>
-                                strong_element = font_element.find('strong')
-                                if strong_element:
-                                    assessment_info = strong_element.get_text(strip=True)  # e.g., "FT-II/15.00"
-                                    
-                                    # Get the text after <br> tag (marks obtained)
-                                    br_tag = font_element.find('br')
-                                    if br_tag:
-                                        # Get the text that comes after the <br> tag
-                                        marks_obtained = br_tag.next_sibling
-                                        if marks_obtained:
-                                            marks_obtained = str(marks_obtained).strip()
-                                        else:
-                                            # Alternative: get all text and split by line breaks
-                                            all_text = font_element.get_text(strip=True)
-                                            lines = all_text.split('\n')
-                                            if len(lines) >= 2:
-                                                marks_obtained = lines[1].strip()
-                                            else:
-                                                continue
-                                    else:
-                                        continue
-                                    
-                                    # Parse assessment info
-                                    if '/' in assessment_info:
-                                        assessment_name, total_marks = assessment_info.split('/', 1)
-                                        assessment_name = assessment_name.strip()
-                                        total_marks = total_marks.strip()
-                                        
-                                        # Format marks to 2 decimal places
-                                        try:
-                                            total_marks_float = float(total_marks)
-                                            marks_obtained_float = float(marks_obtained)
-                                            total_marks = f"{total_marks_float:.2f}"
-                                            marks_obtained = f"{marks_obtained_float:.2f}"
-                                        except ValueError:
-                                            # If conversion fails, keep original values
-                                            pass
-                                        
-                                        assessments.append({
-                                            'assessment_name': assessment_name,
-                                            'total_marks': total_marks,
-                                            'marks_obtained': marks_obtained,
-                                            'percentage': calculate_percentage(marks_obtained, total_marks)
-                                        })
-                                        print(f"    [OK] Found assessment: {assessment_name} = {marks_obtained}/{total_marks}", file=sys.stderr)
-                
-                # Method 2: If no nested table found, try to extract from cell text directly
-                if not assessments:
-                    cell_text = assessments_cell.get_text(strip=True)
-                    print(f"  [DEBUG] No nested table, trying direct text extraction: '{cell_text[:200]}...'", file=sys.stderr)
-                    
-                    # Multiple assessment patterns to try
-                    assessment_patterns = [
-                        r'([A-Z]+-[IVX]+)/(\d+\.?\d*)\s+(\d+\.?\d*)',  # FT-II/15.00 13.50
-                        r'([A-Z]+-[IVX]+)/(\d+\.?\d*)\n(\d+\.?\d*)',   # FT-II/15.00\n13.50
-                        r'([A-Z]+-[IVX]+)/(\d+\.?\d*).*?(\d+\.?\d*)',  # More flexible
-                    ]
-                    
-                    for pattern_idx, pattern in enumerate(assessment_patterns):
-                        matches = re.findall(pattern, cell_text)
-                        print(f"  [DEBUG] Pattern {pattern_idx + 1} matches: {matches}", file=sys.stderr)
-                        if matches:
-                            for match in matches:
-                                assessment_name, total_marks, marks_obtained = match
-                                
-                                # Format marks to 2 decimal places
-                                try:
-                                    total_marks_float = float(total_marks)
-                                    marks_obtained_float = float(marks_obtained)
-                                    total_marks = f"{total_marks_float:.2f}"
-                                    marks_obtained = f"{marks_obtained_float:.2f}"
-                                except ValueError:
-                                    pass
-                                
-                                assessments.append({
-                                    'assessment_name': assessment_name,
-                                    'total_marks': total_marks,
-                                    'marks_obtained': marks_obtained,
-                                    'percentage': calculate_percentage(marks_obtained, total_marks)
-                                })
-                                print(f"  [OK] Found assessment: {assessment_name} = {marks_obtained}/{total_marks}", file=sys.stderr)
+                # Try different cell arrangements for assessments
+                assessments_cell = None
+                if len(cells) >= 3:
+                    assessments_cell = cells[2]  # Standard: Course, Type, Assessments
+                elif len(cells) >= 4:
+                    assessments_cell = cells[3]  # Alternative: Course, Type, Other, Assessments
+                elif len(cells) >= 5:
+                    assessments_cell = cells[4]  # Another alternative
+                else:
+                    # Try to find any cell that contains assessment patterns
+                    for cell_idx, cell in enumerate(cells):
+                        cell_text = cell.get_text(strip=True)
+                        if any(pattern in cell_text for pattern in ['FT-', 'FP-', 'LLJ-', '/15.00', '/10.00']):
+                            assessments_cell = cell
+                            print(f"[DEBUG] Found assessments in cell {cell_idx}", file=sys.stderr)
                             break
                 
-                # Method 3: Look for any text that contains assessment-like patterns
-                if not assessments:
-                    cell_text = assessments_cell.get_text(strip=True)
-                    print(f"  [DEBUG] Trying fallback pattern matching...", file=sys.stderr)
+                if not assessments_cell:
+                    print(f"[DEBUG] Skipping row {i}: no assessment cell found", file=sys.stderr)
+                    continue
+                
+                # Debug: Show row structure
+                row_text = row.get_text(strip=True)
+                if len(row_text) > 0:
+                    print(f"[DEBUG] Row {i} preview: '{row_text[:50]}...'", file=sys.stderr)
+                
+                try:
+                    # Extract course code and subject type from first two cells
+                    course_code_cell = cells[0]
+                    subject_type_cell = cells[1] if len(cells) > 1 else None
                     
-                    # Look for any pattern that looks like assessments
-                    fallback_patterns = [
-                        r'([A-Z]{2,}-[IVX]+)/(\d+\.?\d*)',  # Any assessment pattern
-                        r'(\w+)/(\d+\.?\d*)',               # Any word/number pattern
-                    ]
+                    # Debug: Print what's in each cell
+                    print(f"\n[DEBUG] Row {i}:", file=sys.stderr)
+                    print(f"  Cell 0 (Course): '{course_code_cell.get_text(strip=True)}'", file=sys.stderr)
+                    print(f"  Cell 1 (Type): '{subject_type_cell.get_text(strip=True) if subject_type_cell else 'N/A'}'", file=sys.stderr)
+                    print(f"  Assessments Cell: '{assessments_cell.get_text(strip=True)[:100]}...'", file=sys.stderr)
                     
-                    for pattern in fallback_patterns:
-                        matches = re.findall(pattern, cell_text)
-                        if matches:
-                            print(f"  [DEBUG] Fallback pattern found: {matches}", file=sys.stderr)
-                            # Try to find corresponding marks
-                            for match in matches:
-                                assessment_name, total_marks = match
-                                # Look for marks near this assessment
-                                marks_pattern = rf'{re.escape(assessment_name)}/{re.escape(total_marks)}.*?(\d+\.?\d*)'
-                                marks_match = re.search(marks_pattern, cell_text)
-                                if marks_match:
-                                    marks_obtained = marks_match.group(1)
+                    # Extract course code using regex from the full text (handles "Regular" suffix)
+                    course_code_text = course_code_cell.get_text(strip=True)
+                    course_code_match = re.search(r'(\d{2}[A-Z]{3}\d{3}[A-Z])', course_code_text)
+                    if not course_code_match:
+                        print(f"  [SKIP] No valid course code found in: '{course_code_text}'", file=sys.stderr)
+                        continue
+                    
+                    course_code = course_code_match.group(1)
+                    subject_type = subject_type_cell.get_text(strip=True) if subject_type_cell else "Unknown"
+                    
+                    # Get course title from the course_titles dictionary
+                    course_title = course_titles.get(course_code, "Unknown Course Title") if course_titles else "Unknown Course Title"
+                    
+                    # Debug: Show what's in the course_titles dictionary
+                    print(f"  [DEBUG] Course titles dict has {len(course_titles) if course_titles else 0} entries", file=sys.stderr)
+                    print(f"  [DEBUG] Looking for course_code: '{course_code}'", file=sys.stderr)
+                    print(f"  [DEBUG] Found course_title: '{course_title}'", file=sys.stderr)
+                    
+                    print(f"  [OK] Processing course: {course_code} - {course_title} ({subject_type})", file=sys.stderr)
+                    
+                    # Extract assessments from the third cell
+                    assessments = []
+                    
+                    # Method 1: Look for nested table in the assessments cell
+                    nested_table = assessments_cell.find('table')
+                    if nested_table:
+                        print(f"  [DEBUG] Found nested table with {len(nested_table.find_all('tr'))} rows", file=sys.stderr)
+                        # Process nested table rows
+                        nested_rows = nested_table.find_all('tr')
+                        for nested_row in nested_rows:
+                            nested_cells = nested_row.find_all('td')
+                            
+                            for cell in nested_cells:
+                                # Get the font element which contains the assessment data
+                                font_element = cell.find('font')
+                                if font_element:
+                                    # Extract the strong element (assessment name/total) and the text after <br>
+                                    strong_element = font_element.find('strong')
+                                    if strong_element:
+                                        assessment_info = strong_element.get_text(strip=True)  # e.g., "FT-II/15.00"
+                                        
+                                        # Get the text after <br> tag (marks obtained)
+                                        br_tag = font_element.find('br')
+                                        if br_tag:
+                                            # Get the text that comes after the <br> tag
+                                            marks_obtained = br_tag.next_sibling
+                                            if marks_obtained:
+                                                marks_obtained = str(marks_obtained).strip()
+                                            else:
+                                                # Alternative: get all text and split by line breaks
+                                                all_text = font_element.get_text(strip=True)
+                                                lines = all_text.split('\n')
+                                                if len(lines) >= 2:
+                                                    marks_obtained = lines[1].strip()
+                                                else:
+                                                    continue
+                                        else:
+                                            continue
+                                        
+                                        # Parse assessment info
+                                        if '/' in assessment_info:
+                                            assessment_name, total_marks = assessment_info.split('/', 1)
+                                            assessment_name = assessment_name.strip()
+                                            total_marks = total_marks.strip()
+                                            
+                                            # Format marks to 2 decimal places
+                                            try:
+                                                total_marks_float = float(total_marks)
+                                                marks_obtained_float = float(marks_obtained)
+                                                total_marks = f"{total_marks_float:.2f}"
+                                                marks_obtained = f"{marks_obtained_float:.2f}"
+                                            except ValueError:
+                                                # If conversion fails, keep original values
+                                                pass
+                                            
+                                            assessments.append({
+                                                'assessment_name': assessment_name,
+                                                'total_marks': total_marks,
+                                                'marks_obtained': marks_obtained,
+                                                'percentage': calculate_percentage(marks_obtained, total_marks)
+                                            })
+                                            print(f"    [OK] Found assessment: {assessment_name} = {marks_obtained}/{total_marks}", file=sys.stderr)
+                    
+                    # Method 2: If no nested table found, try to extract from cell text directly
+                    if not assessments:
+                        cell_text = assessments_cell.get_text(strip=True)
+                        print(f"  [DEBUG] No nested table, trying direct text extraction: '{cell_text[:200]}...'", file=sys.stderr)
+                        
+                        # Multiple assessment patterns to try
+                        assessment_patterns = [
+                            r'([A-Z]+-[IVX]+)/(\d+\.?\d*)\s+(\d+\.?\d*)',  # FT-II/15.00 13.50
+                            r'([A-Z]+-[IVX]+)/(\d+\.?\d*)\n(\d+\.?\d*)',   # FT-II/15.00\n13.50
+                            r'([A-Z]+-[IVX]+)/(\d+\.?\d*).*?(\d+\.?\d*)',  # More flexible
+                        ]
+                        
+                        for pattern_idx, pattern in enumerate(assessment_patterns):
+                            matches = re.findall(pattern, cell_text)
+                            print(f"  [DEBUG] Pattern {pattern_idx + 1} matches: {matches}", file=sys.stderr)
+                            if matches:
+                                for match in matches:
+                                    assessment_name, total_marks, marks_obtained = match
                                     
                                     # Format marks to 2 decimal places
                                     try:
@@ -849,33 +850,73 @@ def extract_marks_data_from_html(html_content, course_titles=None):
                                         'marks_obtained': marks_obtained,
                                         'percentage': calculate_percentage(marks_obtained, total_marks)
                                     })
-                                    print(f"  [OK] Fallback found: {assessment_name} = {marks_obtained}/{total_marks}", file=sys.stderr)
-                            break
-                
-                if assessments:
-                    marks_entry = {
-                        'course_code': course_code,
-                        'course_title': course_title,
-                        'subject_type': subject_type,
-                        'assessments': assessments,
-                        'total_assessments': len(assessments)
-                    }
+                                    print(f"  [OK] Found assessment: {assessment_name} = {marks_obtained}/{total_marks}", file=sys.stderr)
+                                break
                     
-                    marks_data.append(marks_entry)
-                    print(f"  [SUCCESS] {course_code}: {len(assessments)} assessments found", file=sys.stderr)
-                else:
-                    print(f"  [WARN] {course_code}: No assessments found", file=sys.stderr)
-                
-            except Exception as e:
-                print(f"[ERROR] Error processing row {i}: {e}", file=sys.stderr)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                continue
-        
-        print(f"Extracted marks data for {len(marks_data)} courses", file=sys.stderr)
+                    # Method 3: Look for any text that contains assessment-like patterns
+                    if not assessments:
+                        cell_text = assessments_cell.get_text(strip=True)
+                        print(f"  [DEBUG] Trying fallback pattern matching...", file=sys.stderr)
+                        
+                        # Look for any pattern that looks like assessments
+                        fallback_patterns = [
+                            r'([A-Z]{2,}-[IVX]+)/(\d+\.?\d*)',  # Any assessment pattern
+                            r'(\w+)/(\d+\.?\d*)',               # Any word/number pattern
+                        ]
+                        
+                        for pattern in fallback_patterns:
+                            matches = re.findall(pattern, cell_text)
+                            if matches:
+                                print(f"  [DEBUG] Fallback pattern found: {matches}", file=sys.stderr)
+                                # Try to find corresponding marks
+                                for match in matches:
+                                    assessment_name, total_marks = match
+                                    # Look for marks near this assessment
+                                    marks_pattern = rf'{re.escape(assessment_name)}/{re.escape(total_marks)}.*?(\d+\.?\d*)'
+                                    marks_match = re.search(marks_pattern, cell_text)
+                                    if marks_match:
+                                        marks_obtained = marks_match.group(1)
+                                        
+                                        # Format marks to 2 decimal places
+                                        try:
+                                            total_marks_float = float(total_marks)
+                                            marks_obtained_float = float(marks_obtained)
+                                            total_marks = f"{total_marks_float:.2f}"
+                                            marks_obtained = f"{marks_obtained_float:.2f}"
+                                        except ValueError:
+                                            pass
+                                        
+                                        assessments.append({
+                                            'assessment_name': assessment_name,
+                                            'total_marks': total_marks,
+                                            'marks_obtained': marks_obtained,
+                                            'percentage': calculate_percentage(marks_obtained, total_marks)
+                                        })
+                                        print(f"  [OK] Fallback found: {assessment_name} = {marks_obtained}/{total_marks}", file=sys.stderr)
+                                break
+                    
+                    if assessments:
+                        marks_entry = {
+                            'course_code': course_code,
+                            'course_title': course_title,
+                            'subject_type': subject_type,
+                            'assessments': assessments,
+                            'total_assessments': len(assessments)
+                        }
+                        
+                        marks_data.append(marks_entry)
+                        print(f"  [SUCCESS] {course_code}: {len(assessments)} assessments found", file=sys.stderr)
+                    else:
+                        print(f"  [WARN] {course_code}: No assessments found", file=sys.stderr)
+                    
+                except Exception as e:
+                    print(f"[ERROR] Error processing row {i}: {e}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    continue
     
     except Exception as e:
-        print(f"Error extracting marks data: {e}", file=sys.stderr)
+        print(f"[MARKS EXTRACT] Error extracting marks data: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
     
@@ -1117,52 +1158,55 @@ def get_calendar_data_with_scraper(scraper, email, password, force_refresh=False
 
 
 def get_attendance_and_marks_data_with_scraper(scraper, email, password):
-    """Get both attendance and marks data using the same page HTML (optimized)"""
+    """Get both attendance and marks data from the same page (using individual function logic)"""
     try:
-        print(f"[UNIFIED API] Getting attendance and marks data for: {email} (single page fetch)", file=sys.stderr)
+        print(f"[UNIFIED API] Getting attendance and marks data for: {email}", file=sys.stderr)
         
+        # Use the EXACT same logic as individual functions - fetch page once, extract both
         html_content = None
-        # Try to get data with existing session first
         if scraper.is_session_valid():
-            print("[UNIFIED API] Valid session found - trying to get attendance/marks data without login", file=sys.stderr)
-            html_content = get_attendance_page_html(scraper)
+            print("[UNIFIED API] Valid session found - trying to get data without login", file=sys.stderr)
+            # Use get_marks_page_html for proper validation (same as individual function)
+            html_content = get_marks_page_html(scraper)
         
-        # If session was invalid or data fetch failed, attempt login
         if html_content is None:
-            print("[UNIFIED API] Session invalid or expired - attempting login for attendance/marks", file=sys.stderr)
+            print("[UNIFIED API] Session invalid or expired - attempting login", file=sys.stderr)
             if not scraper.login(email, password):
-                print("[UNIFIED API] Login failed for attendance/marks!", file=sys.stderr)
-                return {"attendance": {"success": False, "error": "Login failed"}, 
-                       "marks": {"success": False, "error": "Login failed"}}
-            print("[UNIFIED API] Login successful for attendance/marks!", file=sys.stderr)
-            html_content = get_attendance_page_html(scraper)
+                print("[UNIFIED API] Login failed!", file=sys.stderr)
+                return {
+                    "attendance": {"success": False, "error": "Login failed"},
+                    "marks": {"success": False, "error": "Login failed"}
+                }
+            print("[UNIFIED API] Login successful!", file=sys.stderr)
+            # Use get_marks_page_html for proper validation (same as individual function)
+            html_content = get_marks_page_html(scraper)
 
         if not html_content:
-            print("[UNIFIED API] Failed to get attendance/marks HTML content after all attempts", file=sys.stderr)
-            return {"attendance": {"success": False, "error": "Failed to get data"}, 
-                   "marks": {"success": False, "error": "Failed to get data"}}
+            print("[UNIFIED API] Failed to get HTML content after all attempts", file=sys.stderr)
+            return {
+                "attendance": {"success": False, "error": "Failed to get data"},
+                "marks": {"success": False, "error": "Failed to get data"}
+            }
         
-        print(f"[UNIFIED API] Got attendance/marks HTML content ({len(html_content)} characters)", file=sys.stderr)
+        print(f"[UNIFIED API] Got HTML content ({len(html_content)} characters)", file=sys.stderr)
         
-        # Extract both attendance and marks from the same HTML
+        # Extract attendance data (same as individual function)
         print("[UNIFIED API] Extracting attendance data...", file=sys.stderr)
         attendance_data = extract_attendance_data_from_html(html_content)
         
-        print("[UNIFIED API] Extracting course titles...", file=sys.stderr)
-        course_titles = extract_course_titles_from_html(html_content)
+        # Extract semester from HTML
+        semester = extract_semester_from_html(html_content)
+        print(f"[UNIFIED API] Extracted semester: {semester}", file=sys.stderr)
         
-        print("[UNIFIED API] Extracting marks data...", file=sys.stderr)
-        marks_data = extract_marks_data_from_html(html_content, course_titles)
-        
-        # Process attendance results
         if attendance_data:
             print(f"[UNIFIED API] Successfully extracted {len(attendance_data)} attendance entries", file=sys.stderr)
-            attendance_json = create_attendance_json(attendance_data)
+            attendance_json = create_attendance_json(attendance_data, semester)
             attendance_result = {
                 "success": True,
                 "data": attendance_json,
                 "type": "attendance",
                 "count": len(attendance_data),
+                "semester": semester,
                 "cached": False
             }
         else:
@@ -1175,7 +1219,16 @@ def get_attendance_and_marks_data_with_scraper(scraper, email, password):
                 "cached": False
             }
         
-        # Process marks results
+        # Extract marks data (same as individual function) - USE THE SAME HTML BUT WITH PROPER VALIDATION
+        print("[UNIFIED API] Extracting marks data...", file=sys.stderr)
+        
+        # Extract course titles first (same as individual function)
+        print("[UNIFIED API] Extracting course titles...", file=sys.stderr)
+        course_titles = extract_course_titles_from_html(html_content)
+        
+        # Extract marks data with course titles (same as individual function)
+        marks_data = extract_marks_data_from_html(html_content, course_titles)
+        
         if marks_data:
             print(f"[UNIFIED API] Successfully extracted {len(marks_data)} marks entries", file=sys.stderr)
             marks_json = create_marks_json(marks_data)
@@ -1219,14 +1272,17 @@ def get_attendance_and_marks_data_with_scraper(scraper, email, password):
                 "cached": False
             }
         
-        return {"attendance": attendance_result, "marks": marks_result}
+        return {
+            "attendance": attendance_result,
+            "marks": marks_result
+        }
         
     except Exception as e:
-        print(f"[UNIFIED API] Error getting attendance/marks data: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return {"attendance": {"success": False, "error": f"API Error: {str(e)}"}, 
-               "marks": {"success": False, "error": f"API Error: {str(e)}"}}
+        print(f"[UNIFIED API] Exception in get_attendance_and_marks_data_with_scraper: {e}", file=sys.stderr)
+        return {
+            "attendance": {"success": False, "error": f"Exception: {str(e)}"},
+            "marks": {"success": False, "error": f"Exception: {str(e)}"}
+        }
 
 
 def get_timetable_data_with_scraper(scraper, email, password):
@@ -1258,11 +1314,32 @@ def get_timetable_data_with_scraper(scraper, email, password):
         # Extract course data and batch number
         courses, batch_number = extract_timetable_data_from_html(html_content)
         
+        print(f"[UNIFIED API] Extracted {len(courses) if courses else 0} courses", file=sys.stderr)
+        print(f"[UNIFIED API] Batch number: {batch_number}", file=sys.stderr)
+        
         if not courses:
-            print("[UNIFIED API] No timetable data extracted", file=sys.stderr)
+            print("[UNIFIED API] No timetable data extracted - possible causes:", file=sys.stderr)
+            print("  - No timetable assigned to student", file=sys.stderr)
+            print("  - Timetable page structure changed", file=sys.stderr)
+            print("  - HTML parsing failed", file=sys.stderr)
+            print("  - Session expired during extraction", file=sys.stderr)
+            print("[UNIFIED API] Returning proper empty timetable structure", file=sys.stderr)
+            
             return {
                 "success": True,
-                "data": [],
+                "data": {
+                    "metadata": {
+                        "generated_at": datetime.now().isoformat(),
+                        "source": "SRM Academia Portal",
+                        "academic_year": "2025-26 ODD",
+                        "format": "Day Order (DO) Timetable",
+                        "batch_number": batch_number,
+                        "batch_name": "No Timetable Available"
+                    },
+                    "time_slots": [],
+                    "slot_mapping": {},
+                    "timetable": {}
+                },
                 "type": "timetable",
                 "count": 0,
                 "cached": False
@@ -1272,8 +1349,13 @@ def get_timetable_data_with_scraper(scraper, email, password):
         if batch_number:
             print(f"[UNIFIED API] Batch number detected: {batch_number}", file=sys.stderr)
         
-        # Create timetable JSON
-        timetable_json = create_do_timetable_json(courses, batch_number)
+        # Create slot mapping from courses
+        from timetable_scraper import create_slot_mapping, expand_slot_mapping
+        slot_mapping = create_slot_mapping(courses)
+        expanded_slot_mapping = expand_slot_mapping(slot_mapping)
+        
+        # Create timetable JSON with proper slot mapping
+        timetable_json = create_do_timetable_json(expanded_slot_mapping, batch_number)
         
         print(f"[UNIFIED API] Successfully extracted {len(courses)} timetable entries", file=sys.stderr)
         return {
@@ -1402,8 +1484,13 @@ def api_get_all_data(email, password=None, force_refresh=False):
             results['timetable'] = timetable_result
             
             if timetable_result.get('success', False):
-                successful_data_types += 1
+                data = timetable_result.get('data', {})
                 print(f"[UNIFIED API] ✓ timetable data fetched successfully", file=sys.stderr)
+                print(f"[UNIFIED API] Timetable data type: {type(data)}", file=sys.stderr)
+                print(f"[UNIFIED API] Timetable data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}", file=sys.stderr)
+                if isinstance(data, dict) and 'timetable' in data:
+                    print(f"[UNIFIED API] Timetable.timetable keys: {list(data['timetable'].keys())}", file=sys.stderr)
+                successful_data_types += 1
             else:
                 print(f"[UNIFIED API] ✗ timetable data failed: {timetable_result.get('error', 'Unknown error')}", file=sys.stderr)
                 
@@ -1540,24 +1627,57 @@ if __name__ == "__main__":
         password = input_data.get('password')
         force_refresh = input_data.get('force_refresh', False)
 
-        if not email or not password:
-            print(json.dumps({"success": False, "error": "Email and password required"}))
-            sys.exit(1)
+        # ============================================================================
+        # ACTION-AWARE VALIDATION
+        # ============================================================================
+        # Some actions require password (for initial authentication)
+        # Some actions don't require password (they use existing sessions)
+        # ============================================================================
 
-        if action == 'get_calendar_data':
-            result = api_get_calendar_data(email, password, force_refresh)
-        elif action == 'get_timetable_data':
-            result = api_get_timetable_data(email, password)
-        elif action == 'get_attendance_data':
-            result = api_get_attendance_data(email, password)
-        elif action == 'get_marks_data':
-            result = api_get_marks_data(email, password)
+        if action == 'validate_credentials':
+            # Validate credentials: REQUIRES password
+            if not email or not password:
+                result = {"success": False, "error": "Email and password required"}
+            else:
+                result = api_validate_credentials(email, password)
+
         elif action == 'get_all_data':
-            result = api_get_all_data(email, password, force_refresh)
-        elif action == 'validate_credentials':
-            result = api_validate_credentials(email, password)
+            # Get all data: email REQUIRED, password OPTIONAL (uses session if available)
+            if not email:
+                result = {"success": False, "error": "Email is required"}
+            else:
+                result = api_get_all_data(email, password, force_refresh)
+
+        elif action == 'get_calendar_data':
+            # Calendar: REQUIRES password
+            if not email or not password:
+                result = {"success": False, "error": "Email and password required"}
+            else:
+                result = api_get_calendar_data(email, password, force_refresh)
+
+        elif action == 'get_timetable_data':
+            # Timetable: REQUIRES password
+            if not email or not password:
+                result = {"success": False, "error": "Email and password required"}
+            else:
+                result = api_get_timetable_data(email, password)
+
+        elif action == 'get_attendance_data':
+            # Attendance: REQUIRES password
+            if not email or not password:
+                result = {"success": False, "error": "Email and password required"}
+            else:
+                result = api_get_attendance_data(email, password)
+
+        elif action == 'get_marks_data':
+            # Marks: REQUIRES password
+            if not email or not password:
+                result = {"success": False, "error": "Email and password required"}
+            else:
+                result = api_get_marks_data(email, password)
+
         else:
-            result = {"success": False, "error": "Unknown action"}
+            result = {"success": False, "error": f"Unknown action: {action}"}
         
         # Output result as JSON (only once)
         print(json.dumps(result))

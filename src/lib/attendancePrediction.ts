@@ -71,15 +71,24 @@ export const getDayOrderStatsForDateRange = (
   console.log(`[DEBUG] Calculating day order stats for range: ${normalizedStart.toLocaleDateString()} to ${normalizedEnd.toLocaleDateString()}`);
   
   calendarData.forEach((event: any) => {
-    if (event.date && event.day_order && event.day_order.startsWith('DO ')) {
+    if (event.date && event.day_order) {
       try {
         const eventDate = parseDate(event.date);
         const normalizedEventDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
         
+        // Skip holidays and days off
+        const isHoliday = event.day_order === "Holiday" || 
+                         event.day_order === "-" || 
+                         event.day_order === "DO -" ||
+                         event.content?.toLowerCase().includes('holiday');
+        
         // Use proper date comparison (inclusive range)
         // Check if event date is within the range (inclusive)
+        // Only count if it's a valid day order (not a holiday)
         if (normalizedEventDate.getTime() >= normalizedStart.getTime() && 
-            normalizedEventDate.getTime() <= normalizedEnd.getTime()) {
+            normalizedEventDate.getTime() <= normalizedEnd.getTime() &&
+            !isHoliday && 
+            event.day_order.startsWith('DO ')) {
           
           const doNumber = parseInt(event.day_order.split(' ')[1]);
           if (!isNaN(doNumber) && doNumber >= 1 && doNumber <= 5) {

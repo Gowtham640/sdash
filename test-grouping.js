@@ -91,3 +91,4 @@ function getSlotOccurrences(timetableData) {
 const result = getSlotOccurrences(testData);
 console.log('Test Result:');
 console.log(JSON.stringify(result, null, 2));
+
