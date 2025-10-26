@@ -61,7 +61,10 @@ export async function POST(request: NextRequest) {
         throw new Error("Invalid token format");
       }
 
-      user_email = decoded.email || decoded.sub;
+      // Safely extract email from decoded token
+      const decodedEmail = decoded.email;
+      const decodedSub = decoded.sub;
+      user_email = (typeof decodedEmail === 'string' ? decodedEmail : null) || (typeof decodedSub === 'string' ? decodedSub : '') || '';
 
       if (!user_email) {
         throw new Error("Missing user email in token");
