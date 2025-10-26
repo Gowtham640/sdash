@@ -79,8 +79,8 @@ export async function POST(request: NextRequest) {
         throw new Error("Invalid token format");
       }
 
-      user_email = decoded.email || decoded.sub;
-      user_id = decoded.sub;
+      user_email = (decoded.email as string) || (decoded.sub as string) || '';
+      user_id = decoded.sub as string;
 
       console.log(`[API /data/all] Token decoded - User: ${user_email}`);
 
@@ -108,12 +108,13 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ✅ Returning cached data for ${user_email}`);
         
         // Add cache metadata to response
+        const cachedResult = cachedData as { metadata?: { cached_at?: number } };
         return NextResponse.json({
           ...cachedData,
           metadata: {
             ...cachedData.metadata,
             cached: true,
-            cache_age_seconds: Math.floor((Date.now() - cachedData.metadata.cached_at) / 1000),
+            cache_age_seconds: cachedResult.metadata?.cached_at ? Math.floor((Date.now() - cachedResult.metadata.cached_at) / 1000) : 0,
             cache_ttl_seconds: Math.floor((5 * 60 * 1000) / 1000)
           }
         });
@@ -142,14 +143,15 @@ export async function POST(request: NextRequest) {
 
     // Store in cache if successful
     if (result.success) {
-      result.metadata.cached_at = Date.now();
+      const resultWithMetadata = result as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
+      if (resultWithMetadata.metadata) {
+        resultWithMetadata.metadata.cached_at = Date.now();
+        resultWithMetadata.metadata.cached = false; // First request (not from cache)
+        resultWithMetadata.metadata.cache_age_seconds = 0;
+        resultWithMetadata.metadata.cache_ttl_seconds = 300;
+      }
       dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minute TTL
       console.log(`[API /data/all] 💾 Cached data for ${user_email}`);
-      
-      // Add cache metadata
-      result.metadata.cached = false; // First request (not from cache)
-      result.metadata.cache_age_seconds = 0;
-      result.metadata.cache_ttl_seconds = 300;
     }
 
     // Return the unified data
