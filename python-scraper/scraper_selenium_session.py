@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import hashlib
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -17,12 +18,33 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 class SRMAcademiaScraperSelenium:
-    def __init__(self, headless=False, use_session=True):
-        """Initialize the scraper with Selenium and session management"""
+    def __init__(self, headless=False, use_session=True, user_email=None):
+        """
+        Initialize the scraper with Selenium and per-user session management
+        
+        Args:
+            headless: Run Chrome in headless mode
+            use_session: Enable session persistence
+            user_email: User email for per-user session management (required if use_session=True)
+        """
         self.headless = headless
         self.use_session = use_session
-        self.session_file = "session_data.json"  # Use same file as persistent_portal_scraper
+        self.user_email = user_email
         self.session_timeout = 30 * 24 * 60 * 60  # 30 days in seconds
+        
+        # Create per-user session files if user_email is provided
+        if use_session and user_email:
+            # Create a safe filename from email using hash
+            email_hash = hashlib.md5(user_email.encode()).hexdigest()[:16]
+            self.user_session_id = f"{user_email.split('@')[0]}_{email_hash}"
+            self.session_file = f"session_data_{self.user_session_id}.json"
+            print(f"[SESSION] Using per-user session for: {user_email}", file=sys.stderr)
+        else:
+            # Fallback to global session (backward compatibility)
+            self.user_session_id = "global"
+            self.session_file = "session_data.json"
+            if use_session:
+                print("[SESSION] Warning: No user_email provided, using global session", file=sys.stderr)
         
         # Setup Chrome options
         chrome_options = Options()
@@ -34,13 +56,49 @@ class SRMAcademiaScraperSelenium:
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
-        # Add session persistence if enabled
+        # Performance optimizations
+        chrome_options.add_argument("--disable-images")  # Don't load images
+        chrome_options.add_argument("--disable-plugins")  # Disable plugins
+        chrome_options.add_argument("--disable-extensions")  # Disable extensions
+        chrome_options.add_argument("--disable-gpu")  # Disable GPU
+        chrome_options.add_argument("--disable-web-security")  # Disable web security checks
+        chrome_options.add_argument("--disable-features=VizDisplayCompositor")  # Disable compositor
+        chrome_options.add_argument("--disable-background-timer-throttling")  # Disable timer throttling
+        chrome_options.add_argument("--disable-backgrounding-occluded-windows")  # Disable backgrounding
+        chrome_options.add_argument("--disable-renderer-backgrounding")  # Disable renderer backgrounding
+        
+        # Additional safe performance optimizations
+        chrome_options.add_argument("--disable-default-apps")  # Disable default apps
+        chrome_options.add_argument("--disable-sync")  # Disable sync
+        chrome_options.add_argument("--disable-translate")  # Disable translate
+        chrome_options.add_argument("--disable-logging")  # Disable logging
+        chrome_options.add_argument("--disable-notifications")  # Disable notifications
+        chrome_options.add_argument("--disable-popup-blocking")  # Disable popup blocking
+        chrome_options.add_argument("--disable-prompt-on-repost")  # Disable repost prompts
+        chrome_options.add_argument("--disable-hang-monitor")  # Disable hang monitor
+        chrome_options.add_argument("--disable-client-side-phishing-detection")  # Disable phishing detection
+        chrome_options.add_argument("--disable-component-update")  # Disable component updates
+        chrome_options.add_argument("--disable-domain-reliability")  # Disable domain reliability
+        chrome_options.add_argument("--disable-features=TranslateUI")  # Disable translate UI
+        chrome_options.add_argument("--disable-ipc-flooding-protection")  # Disable IPC flooding protection
+        chrome_options.add_argument("--aggressive-cache-discard")  # Aggressive cache discard
+        chrome_options.add_argument("--memory-pressure-off")  # Turn off memory pressure
+        
+        # Add session persistence if enabled (per-user profiles)
         if use_session:
-            # Create a persistent Chrome profile directory
-            profile_dir = os.path.join(os.getcwd(), "chrome_session_profile")
+            # Create a per-user persistent Chrome profile directory
+            if user_email:
+                profile_dir = os.path.join(os.getcwd(), "chrome_sessions", self.user_session_id)
+            else:
+                # Fallback to global profile
+                profile_dir = os.path.join(os.getcwd(), "chrome_session_profile")
+            
             if not os.path.exists(profile_dir):
-                os.makedirs(profile_dir)
+                os.makedirs(profile_dir, exist_ok=True)
+                print(f"[SESSION] Created profile directory: {profile_dir}", file=sys.stderr)
+            
             chrome_options.add_argument(f"--user-data-dir={profile_dir}")
+            print(f"[SESSION] Using Chrome profile: {profile_dir}", file=sys.stderr)
         
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
@@ -122,7 +180,7 @@ class SRMAcademiaScraperSelenium:
             
             print(f"[STEP 1] Loading portal page...", file=sys.stderr)
             self.driver.get("https://academia.srmist.edu.in/")
-            time.sleep(3)
+            time.sleep(1)  # Reduced from 3s to 1s
             
             print(f"[OK] Page loaded: {self.driver.title}", file=sys.stderr)
             
@@ -193,15 +251,15 @@ class SRMAcademiaScraperSelenium:
             
             # Wait for login to complete
             print("[STEP 7] Waiting for login to complete...", file=sys.stderr)
-            time.sleep(5)
+            time.sleep(2)  # Reduced from 5s to 2s
             
             # Switch back to default content
             self.driver.switch_to.default_content()
             
             # Check if login was successful
             try:
-                # Wait for dashboard or any protected page to load
-                self.wait.until(
+                # Wait for dashboard or any protected page to load (with shorter timeout)
+                WebDriverWait(self.driver, 5).until(
                     lambda driver: "Dashboard" in driver.title or "academia" in driver.current_url
                 )
                 

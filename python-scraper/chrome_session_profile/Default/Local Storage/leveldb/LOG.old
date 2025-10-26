@@ -1,5 +1,3 @@
-2025/10/22-22:13:18.536 8a8 Reusing MANIFEST C:\Users\grizi\OneDrive\Desktop\Projects\Personal Projects\sdash\sdash\python-scraper\chrome_session_profile\Default\Local Storage\leveldb/MANIFEST-000001
-2025/10/22-22:13:18.546 8a8 Recovering log #3
-2025/10/22-22:13:18.546 8a8 Level-0 table #3: started
-2025/10/22-22:13:18.624 8a8 Level-0 table #3: 9428 bytes OK
-2025/10/22-22:13:18.632 8a8 Delete type=0 #3
+2025/10/24-21:43:55.070 7290 Reusing MANIFEST C:\Users\grizi\OneDrive\Desktop\Projects\Personal Projects\sdash\sdash\python-scraper\chrome_session_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2025/10/24-21:43:55.075 7290 Recovering log #3
+2025/10/24-21:43:55.078 7290 Reusing old log C:\Users\grizi\OneDrive\Desktop\Projects\Personal Projects\sdash\sdash\python-scraper\chrome_session_profile\Default\Local Storage\leveldb/000003.log 
