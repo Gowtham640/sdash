@@ -5,6 +5,7 @@ import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats } f
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 
 // Import types
 interface CalendarEvent {
@@ -185,10 +186,7 @@ export default function Dashboard() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: false  // Don't force - use server cache if available
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
       });
 
       const result = await response.json();
@@ -263,10 +261,7 @@ export default function Dashboard() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const result = await response.json();

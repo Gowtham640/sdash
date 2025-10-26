@@ -13,6 +13,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
 import ShinyText from '../../components/ShinyText';
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 
 interface AttendanceSubject {
   row_number: number;
@@ -311,10 +312,7 @@ export default function AttendancePage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: false  // Don't force - use server cache if available
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
       });
 
       const result = await response.json();
@@ -445,10 +443,7 @@ export default function AttendancePage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const result = await response.json();

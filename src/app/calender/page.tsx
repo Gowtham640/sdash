@@ -6,6 +6,7 @@ import Link from 'next/link';
 import LiquidEther from "@/components/LiquidEther";
 import { Calendar } from "@/components/ui/calendar";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 
 interface CalendarEvent {
   date: string;
@@ -186,10 +187,7 @@ export default function CalendarPage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const result = await response.json();

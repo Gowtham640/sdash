@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { access_token, force_refresh = false } = body;
+    const { access_token, force_refresh = false, password } = body;
 
     if (!access_token) {
       console.error("[API /data/all] No access token provided");
@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
 
     // Cache miss or force_refresh - call Python scraper
     console.log(`[API /data/all] ❌ Cache miss, fetching from Python for ${user_email}`);
-    const result = await callPythonUnifiedData(user_email, user_id, force_refresh);
+    const result = await callPythonUnifiedData(user_email, user_id, force_refresh, password);
 
     // Check if session expired
     if (!result.success && result.error === "session_expired") {
@@ -173,7 +173,7 @@ export async function POST(request: NextRequest) {
 /**
  * Call Python scraper to get all data using existing session
  */
-async function callPythonUnifiedData(email: string, user_id: string, force_refresh: boolean): Promise<Record<string, unknown>> {
+async function callPythonUnifiedData(email: string, user_id: string, force_refresh: boolean, password?: string): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       console.error("[API /data/all] Python scraper timeout after 60 seconds");
@@ -194,11 +194,11 @@ async function callPythonUnifiedData(email: string, user_id: string, force_refre
       let outputData = "";
       let errorData = "";
 
-      // Prepare input payload (no password - will use existing session)
+      // Prepare input payload (include password if provided for serverless environments)
       const payload = JSON.stringify({
         action: "get_all_data",
         email,
-        // password: not provided - Python will use existing session!
+        ...(password ? { password } : {}), // Only include password if provided
         force_refresh
       });
 

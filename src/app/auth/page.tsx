@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import LiquidEther from "@/components/LiquidEther";
 import { Eye, EyeOff } from "lucide-react";
+import { storePortalPassword } from "@/lib/passwordStorage";
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -79,6 +80,9 @@ export default function AuthPage() {
         data.data.session.refresh_token
       );
       localStorage.setItem("user", JSON.stringify(data.data.user));
+      
+      // Store portal password securely for session renewal
+      storePortalPassword(password);
 
       setIsSuccess(true);
 
