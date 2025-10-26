@@ -298,7 +298,7 @@ export default function MarksPage() {
                             stroke="#9CA3AF"
                             fontSize={10}
                             angle={0}
-                            textAnchor="front"
+                            textAnchor="start"
                             height={50}
                             domain={['dataMin', 'dataMax']}
                             tick={{ fontSize: 10 }}

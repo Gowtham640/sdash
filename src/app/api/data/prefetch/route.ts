@@ -131,7 +131,10 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
     const result = await callPythonUnifiedData(email);
 
     if (result.success) {
-      result.metadata.cached_at = Date.now();
+      const resultWithMetadata = result as { metadata?: { cached_at?: number } };
+      if (resultWithMetadata.metadata) {
+        resultWithMetadata.metadata.cached_at = Date.now();
+      }
       dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minute TTL
       console.log(`[Prefetch] ✅ Background fetch completed and cached for ${email}`);
     } else {
