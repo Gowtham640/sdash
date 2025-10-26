@@ -54,7 +54,10 @@ export default function Dashboard() {
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [marksData, setMarksData] = useState<MarksData | null>(null);
-  const [timetableData, setTimetableData] = useState<any>(null);
+  const [timetableData, setTimetableData] = useState<{
+    timetable?: Record<string, { do_name?: string; time_slots?: Record<string, unknown> }>;
+    slot_mapping?: Record<string, string>;
+  } | null>(null);
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -128,7 +131,7 @@ export default function Dashboard() {
     }
 
     const doKey = `DO ${doNumber}`;
-    const dayTimetable = timetableData.timetable[doKey];
+    const dayTimetable = timetableData?.timetable?.[doKey];
     
     if (!dayTimetable?.time_slots) {
       return [];
@@ -136,17 +139,18 @@ export default function Dashboard() {
 
     // Convert to array of {time, course_title, category}
     const timeSlots: TimeSlot[] = [];
-    Object.entries(dayTimetable.time_slots).forEach(([time, slot]: [string, any]) => {
-      if (slot?.slot_code) {
+    Object.entries(dayTimetable.time_slots).forEach(([time, slot]: [string, unknown]) => {
+      const typedSlot = slot as { slot_code?: string; slot_type?: string };
+      if (typedSlot?.slot_code) {
         // Find course title from slot mapping
-        const slotCode = slot.slot_code;
-        const slotMapping = timetableData.slot_mapping || {};
+        const slotCode = typedSlot.slot_code;
+        const slotMapping = timetableData?.slot_mapping || {};
         const courseTitle = slotMapping[slotCode] || '';
         
         timeSlots.push({
           time,
           course_title: courseTitle,
-          category: slot.slot_type || ''
+          category: typedSlot.slot_type || ''
         });
       }
     });
@@ -294,7 +298,14 @@ export default function Dashboard() {
     }
   };
 
-  const processUnifiedData = (result: any) => {
+  const processUnifiedData = (result: {
+    data: {
+      calendar?: { data?: Array<unknown>; success?: { data?: Array<unknown> } } | null;
+      attendance?: { data?: { all_subjects: unknown[] }; success?: { data?: { all_subjects: unknown[] } } } | null;
+      marks?: { data?: { all_courses: unknown[] }; success?: { data?: { all_courses: unknown[] } } } | null;
+      timetable?: { data?: unknown; success?: { data?: unknown } } | null;
+    };
+  }) => {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
@@ -302,7 +313,7 @@ export default function Dashboard() {
     // Process calendar data - handle both nested structures
     const calendar = result.data.calendar?.data || result.data.calendar?.success?.data;
     if (calendar && Array.isArray(calendar)) {
-      setCalendarData(calendar);
+      setCalendarData(calendar as CalendarEvent[]);
       console.log('[Dashboard] ✅ Calendar data loaded:', calendar.length);
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
@@ -311,7 +322,7 @@ export default function Dashboard() {
     // Process attendance data - handle both nested structures
     const attendance = result.data.attendance?.data || result.data.attendance?.success?.data;
     if (attendance && attendance.all_subjects) {
-      setAttendanceData(attendance);
+      setAttendanceData(attendance as AttendanceData);
       console.log('[Dashboard] ✅ Attendance data loaded:', attendance.all_subjects.length);
     } else {
       console.warn('[Dashboard] ⚠️ No attendance data found', attendance);
@@ -320,7 +331,7 @@ export default function Dashboard() {
     // Process marks data - handle both nested structures
     const marks = result.data.marks?.data || result.data.marks?.success?.data;
     if (marks && marks.all_courses) {
-      setMarksData(marks);
+      setMarksData(marks as MarksData);
       console.log('[Dashboard] ✅ Marks data loaded:', marks.all_courses.length);
     } else {
       console.warn('[Dashboard] ⚠️ No marks data found', marks);

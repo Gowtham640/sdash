@@ -131,7 +131,7 @@ export default function AuthPage() {
             onChange={(e) => setEmail(e.target.value)}
             disabled={isLoading}
             required
-            className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans font-medium text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
           />
 
           <div className="relative w-full">

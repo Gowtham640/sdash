@@ -318,7 +318,7 @@ export default function MarksPage() {
                               borderRadius: '8px',
                               color: '#F9FAFB'
                             }}
-                            formatter={(value: any, name: string) => [
+                            formatter={(value: number | string, name: string) => [
                               name === 'percentage' ? `${value}%` : value,
                               name === 'percentage' ? 'Percentage' : 'Marks'
                             ]}

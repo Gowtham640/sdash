@@ -17,7 +17,7 @@ import { spawn } from "child_process";
 /**
  * Decode JWT token without verification (extract claims)
  */
-function decodeJWT(token: string): Record<string, any> | null {
+function decodeJWT(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) {
@@ -143,7 +143,7 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
 /**
  * Call Python scraper to get all data using existing session
  */
-function callPythonUnifiedData(email: string): Promise<any> {
+async function callPythonUnifiedData(email: string): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       console.error("[Prefetch] Python scraper timeout after 60 seconds");

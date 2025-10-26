@@ -33,7 +33,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 /**
  * Decode JWT token without verification (extract claims)
  */
-function decodeJWT(token: string): Record<string, any> | null {
+function decodeJWT(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) {
@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
 /**
  * Call Python scraper to get all data using existing session
  */
-function callPythonUnifiedData(email: string, user_id: string, force_refresh: boolean): Promise<any> {
+async function callPythonUnifiedData(email: string, user_id: string, force_refresh: boolean): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       console.error("[API /data/all] Python scraper timeout after 60 seconds");

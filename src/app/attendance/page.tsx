@@ -61,6 +61,16 @@ interface AttendanceApiResponse {
   count?: number;
 }
 
+interface CalendarEvent {
+  date: string;
+  day_name: string;
+  content: string;
+  day_order: string;
+  month?: string;
+  month_name?: string;
+  year?: string;
+}
+
 
 // Component for displaying remaining hours (using proven utility functions)
 const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccurrences }: { 
@@ -205,9 +215,9 @@ export default function AttendancePage() {
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
-  const [subjectRemainingHours, setSubjectRemainingHours] = useState<any[]>([]);
+  const [subjectRemainingHours, setSubjectRemainingHours] = useState<Array<Record<string, unknown>>>([]);
   const [showPredictionModal, setShowPredictionModal] = useState(false);
-  const [calendarData, setCalendarData] = useState<any[]>([]);
+  const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [semester, setSemester] = useState<number>(1); // Default to semester 1
   const [predictionResults, setPredictionResults] = useState<PredictionResult[]>([]);
   const [isPredictionMode, setIsPredictionMode] = useState(false);
