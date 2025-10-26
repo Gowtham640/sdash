@@ -199,15 +199,15 @@ export default function TestUnifiedPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <div className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold">Duration</h4>
-                    <p className="text-lg font-bold text-blue-400">{testResults.duration}s</p>
+                    <p className="text-lg font-bold text-blue-400">{(testResults.duration as number) || 0}s</p>
                   </div>
                   <div className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold">Success Rate</h4>
-                    <p className="text-lg font-bold text-green-400">{testResults.successRate}</p>
+                    <p className="text-lg font-bold text-green-400">{(testResults.successRate as string) || 'N/A'}</p>
                   </div>
                   <div className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold">Data Types</h4>
-                    <p className="text-lg font-bold text-purple-400">{testResults.successfulDataTypes}/{testResults.totalDataTypes}</p>
+                    <p className="text-lg font-bold text-purple-400">{(testResults.successfulDataTypes as number) || 0}/{(testResults.totalDataTypes as number) || 0}</p>
                   </div>
                 <div className="bg-gray-800 p-4 rounded">
                   <h4 className="font-semibold">Cached</h4>
