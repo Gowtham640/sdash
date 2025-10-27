@@ -1402,24 +1402,22 @@ def api_get_all_data(email, password=None, force_refresh=False):
         session_valid = scraper.is_session_valid()
         print(f"[UNIFIED API] Session valid: {session_valid}", file=sys.stderr)
         
-        # Login logic: only if session invalid or password provided
-        if not session_valid:
-            if password:
-                print("[UNIFIED API] Session invalid - performing login with provided password", file=sys.stderr)
-                if not scraper.login(email, password):
-                    print("[UNIFIED API] Login failed!", file=sys.stderr)
-                    return {"success": False, "error": "login_failed", "message": "Invalid credentials"}
-                print("[UNIFIED API] Login successful!", file=sys.stderr)
-            else:
-                # No valid session and no password provided
-                print("[UNIFIED API] Session invalid and no password provided", file=sys.stderr)
-                return {
-                    "success": False,
-                    "error": "session_expired",
-                    "message": "Session expired. Please re-authenticate with your password."
-                }
-        else:
+        # SERVERLESS-FIRST LOGIN LOGIC: Always use password if provided (Vercel has no session persistence)
+        if password:
+            print("[UNIFIED API] Serverless environment - attempting login with provided password", file=sys.stderr)
+            if not scraper.login(email, password):
+                print("[UNIFIED API] Login failed!", file=sys.stderr)
+                return {"success": False, "error": "login_failed", "message": "Invalid credentials"}
+            print("[UNIFIED API] Login successful!", file=sys.stderr)
+        elif session_valid:
             print("[UNIFIED API] Valid session found - skipping login", file=sys.stderr)
+        else:
+            print("[UNIFIED API] No valid session and no password provided", file=sys.stderr)
+            return {
+                "success": False,
+                "error": "session_expired",
+                "message": "Session expired. Please re-authenticate with your password."
+            }
         
         # Fetch calendar data first
         print(f"[UNIFIED API] Fetching calendar data...", file=sys.stderr)
