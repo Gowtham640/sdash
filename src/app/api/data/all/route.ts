@@ -428,14 +428,16 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
     
     // Extract only static data from full response
     if (result.success && result.data) {
-      result = {
+      const resultWithMetadata = result as { metadata?: unknown };
+      const staticDataResult = {
         success: true,
         data: {
           calendar: result.data.calendar,
           timetable: result.data.timetable,
         },
-        metadata: result.metadata,
+        metadata: resultWithMetadata.metadata,
       };
+      result = staticDataResult as unknown as typeof result;
     }
   }
   
@@ -484,14 +486,16 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     
     // Extract only dynamic data from full response
     if (result.success && result.data) {
-      result = {
+      const resultWithMetadata = result as { metadata?: unknown };
+      const dynamicDataResult = {
         success: true,
         data: {
           attendance: result.data.attendance,
           marks: result.data.marks,
         },
-        metadata: result.metadata,
+        metadata: resultWithMetadata.metadata,
       };
+      result = dynamicDataResult as unknown as typeof result;
     }
   }
   

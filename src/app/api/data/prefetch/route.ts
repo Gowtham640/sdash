@@ -148,12 +148,14 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
 
 /**
  * Call backend scraper to get all data using HTTP API
+ * Note: This uses get_all_data (fallback for prefetch)
  */
 async function callPythonUnifiedData(email: string): Promise<Record<string, unknown>> {
-  return await callBackendScraper('get_all_data', {
+  const result = await callBackendScraper('get_all_data', {
     email,
     force_refresh: false,
   });
+  return result as unknown as Record<string, unknown>;
 }
 
 /**
