@@ -396,7 +396,7 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
     console.log(`[API /data/all] 📝 No semester data in attendance response`);
   }
 
-  return result as Record<string, unknown>;
+  return result as unknown as Record<string, unknown>;
 }
 
 /**
@@ -452,7 +452,7 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
     console.log(`[API /data/all]   - Timetable: ${staticResultData?.timetable ? "✓" : "✗"}`);
   }
 
-  return result as Record<string, unknown>;
+  return result as unknown as Record<string, unknown>;
 }
 
 /**
@@ -517,7 +517,7 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     }
   }
 
-  return result as Record<string, unknown>;
+  return result as unknown as Record<string, unknown>;
 }
 
 /**
