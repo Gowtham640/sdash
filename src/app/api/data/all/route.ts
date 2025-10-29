@@ -162,16 +162,19 @@ export async function POST(request: NextRequest) {
       const result = await callPythonAttendanceMarksOnly(user_email, user_id, password);
       const backendDuration = Date.now() - backendStartTime;
       
+      // Type-safe access to result properties
+      const resultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
+      
       console.log(`[API /data/all] 🔄 Backend response received`);
       console.log(`[API /data/all]   - Duration: ${backendDuration}ms`);
-      console.log(`[API /data/all]   - Success: ${result.success}`);
+      console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
       
-      if (!result.success) {
-        console.error(`[API /data/all] ❌ Backend error: ${result.error || 'Unknown error'}`);
+      if (!resultTyped.success) {
+        console.error(`[API /data/all] ❌ Backend error: ${resultTyped.error || 'Unknown error'}`);
       }
 
     // Check if session expired
-    if (!result.success && result.error === "session_expired") {
+      if (!resultTyped.success && resultTyped.error === "session_expired") {
         console.error("[API /data/all] ❌ Backend session expired");
         console.error("[API /data/all]   - User needs to re-authenticate");
         console.log(`[API /data/all]   - Total response time: ${Date.now() - requestStartTime}ms`);
@@ -188,16 +191,16 @@ export async function POST(request: NextRequest) {
       }
 
       // Return only attendance/marks - client will merge with cached timetable/calendar
-      const resultData = result.data as { attendance?: unknown; marks?: unknown } | undefined;
-      const resultMetadata = (result.metadata && typeof result.metadata === 'object') 
-        ? result.metadata as Record<string, unknown>
+      const resultData = resultTyped.data as { attendance?: unknown; marks?: unknown } | undefined;
+      const resultMetadata = (resultTyped.metadata && typeof resultTyped.metadata === 'object') 
+        ? resultTyped.metadata as Record<string, unknown>
         : {};
       
       const partialResult = {
-        success: result.success,
+        success: resultTyped.success || false,
         data: {
-          attendance: resultData?.attendance || (result as { attendance?: unknown }).attendance,
-          marks: resultData?.marks || (result as { marks?: unknown }).marks,
+          attendance: resultData?.attendance,
+          marks: resultData?.marks,
         },
         metadata: {
           ...resultMetadata,
@@ -281,7 +284,8 @@ export async function POST(request: NextRequest) {
     const result = mergeSplitDataResults(staticData, dynamicData);
     
     console.log(`[API /data/all] 📊 Merged result:`);
-    console.log(`[API /data/all]   - Overall success: ${result.success}`);
+    const mergedResultTyped = result as { success?: boolean };
+    console.log(`[API /data/all]   - Overall success: ${mergedResultTyped.success || false}`);
     
     // Safely access merged result data properties
     const mergedData = result.data as { 
@@ -296,8 +300,10 @@ export async function POST(request: NextRequest) {
     console.log(`[API /data/all]   - Marks: ${mergedData?.marks ? "✓" : "✗"}`);
     
     // Check for session expiry in either request
-    if ((staticData && !staticData.success && staticData.error === "session_expired") ||
-        (dynamicData && !dynamicData.success && dynamicData.error === "session_expired")) {
+    const staticDataTyped = staticData as { success?: boolean; error?: string } | null;
+    const dynamicDataTyped = dynamicData as { success?: boolean; error?: string } | null;
+    if ((staticDataTyped && !staticDataTyped.success && staticDataTyped.error === "session_expired") ||
+        (dynamicDataTyped && !dynamicDataTyped.success && dynamicDataTyped.error === "session_expired")) {
       console.error("[API /data/all] ❌ Backend session expired");
       console.error("[API /data/all]   - User needs to re-authenticate");
       console.log(`[API /data/all]   - Total response time: ${Date.now() - requestStartTime}ms`);
@@ -314,8 +320,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Store in short-term cache if successful
-    if (result.success) {
-      const resultWithMetadata = result as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
+    const resultTyped = result as { success?: boolean; metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
+    if (resultTyped.success) {
+      const resultWithMetadata = resultTyped as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
       
       // Store everything in short-term cache (5 minutes)
       if (resultWithMetadata.metadata) {
@@ -324,18 +331,19 @@ export async function POST(request: NextRequest) {
         resultWithMetadata.metadata.cache_age_seconds = 0;
         resultWithMetadata.metadata.cache_ttl_seconds = 300;
       }
-      dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minute TTL
+      dataCache.set(cacheKey, result as Record<string, unknown>, 5 * 60 * 1000); // 5 minute TTL
       console.log(`[API /data/all] 💾 Stored all data in server cache (5min TTL)`);
       console.log(`[API /data/all]   - Note: Long-term cache storage happens on client-side`);
     }
 
     const totalTime = Date.now() - requestStartTime;
+    const finalResultTyped = result as { success?: boolean };
     console.log(`[API /data/all] ✅ Response sent (${totalTime}ms total)`);
-    console.log(`[API /data/all]   - Status: ${result.success ? 200 : 500}`);
+    console.log(`[API /data/all]   - Status: ${finalResultTyped.success ? 200 : 500}`);
     console.log("===========================================");
 
     // Return the unified data
-    return NextResponse.json(result, { status: result.success ? 200 : 500 });
+    return NextResponse.json(result, { status: finalResultTyped.success ? 200 : 500 });
 
   } catch (error) {
     const totalTime = Date.now() - requestStartTime;
@@ -377,23 +385,26 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
   });
   const backendCallDuration = Date.now() - backendCallStart;
   
+  // Type-safe access to result properties
+  const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
+  
   console.log(`[API /data/all] 📡 Backend call completed: ${backendCallDuration}ms`);
-  console.log(`[API /data/all]   - Success: ${result.success}`);
-  console.log(`[API /data/all]   - Error: ${result.error || "none"}`);
+  console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
+  console.log(`[API /data/all]   - Error: ${resultTyped.error || "none"}`);
 
   // If backend doesn't support this action, fall back to get_dynamic_data (which fetches attendance/marks)
-  if (!result.success && result.error?.includes('Unknown action')) {
+  if (!resultTyped.success && typeof resultTyped.error === 'string' && resultTyped.error.includes('Unknown action')) {
     console.warn(`[API /data/all] ⚠️  Backend doesn't support get_attendance_marks_data`);
     console.log(`[API /data/all] 🔄 Falling back to get_dynamic_data`);
     return await callPythonDynamicData(email, user_id, password);
   }
 
   // Update user's semester in database if available (fire and forget)
-  const attendanceData = result.data as { attendance?: { semester?: number } } | undefined;
-  if (result.success && attendanceData?.attendance?.semester) {
+  const attendanceData = resultTyped.data as { attendance?: { semester?: number } } | undefined;
+  if (resultTyped.success && attendanceData?.attendance?.semester) {
     console.log(`[API /data/all] 📝 Semester found in response: ${attendanceData.attendance.semester}`);
     updateSemesterInDatabase(user_id, attendanceData.attendance.semester);
-  } else if (result.success) {
+  } else if (resultTyped.success) {
     console.log(`[API /data/all] 📝 No semester data in attendance response`);
   }
 
@@ -417,8 +428,11 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
     ...(password ? { password } : {}),
   });
   
+  // Type-safe access to result properties
+  const resultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
+  
   // Fallback to get_all_data if new endpoint not supported
-  if (!result.success && result.error?.includes('Unknown action')) {
+  if (!resultTyped.success && typeof resultTyped.error === 'string' && resultTyped.error.includes('Unknown action')) {
     console.warn(`[API /data/all] ⚠️  Backend doesn't support get_static_data, using get_all_data`);
     console.log(`[API /data/all] 🔄 Falling back to get_all_data for static data`);
     result = await callBackendScraper('get_all_data', {
@@ -428,9 +442,10 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
     });
     
     // Extract only static data from full response
-    if (result.success && result.data) {
-      const resultWithMetadata = result as { metadata?: unknown };
-      const resultData = result.data as { 
+    const fallbackResultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
+    if (fallbackResultTyped.success && fallbackResultTyped.data) {
+      const resultWithMetadata = fallbackResultTyped as { metadata?: unknown };
+      const resultData = fallbackResultTyped.data as { 
         calendar?: unknown; 
         timetable?: unknown;
       };
@@ -449,12 +464,14 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
   const backendCallDuration = Date.now() - backendCallStart;
   
   console.log(`[API /data/all] 📡 Static data call completed: ${backendCallDuration}ms`);
-  console.log(`[API /data/all]   - Success: ${result.success}`);
-  console.log(`[API /data/all]   - Error: ${result.error || "none"}`);
+  // Use typed result for final access
+  const finalResultTyped = result as { success?: boolean; error?: string; data?: unknown };
+  console.log(`[API /data/all]   - Success: ${finalResultTyped.success || false}`);
+  console.log(`[API /data/all]   - Error: ${finalResultTyped.error || "none"}`);
   
-  if (result.success) {
+  if (finalResultTyped.success) {
     console.log(`[API /data/all] 📊 Static data received:`);
-    const staticResultData = result.data as { calendar?: unknown; timetable?: unknown } | undefined;
+    const staticResultData = finalResultTyped.data as { calendar?: unknown; timetable?: unknown } | undefined;
     console.log(`[API /data/all]   - Calendar: ${staticResultData?.calendar ? "✓" : "✗"}`);
     console.log(`[API /data/all]   - Timetable: ${staticResultData?.timetable ? "✓" : "✗"}`);
   }
@@ -479,8 +496,11 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     ...(password ? { password } : {}),
   });
   
+  // Type-safe access to result properties
+  const resultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
+  
   // Fallback to get_all_data if new endpoint not supported
-  if (!result.success && result.error?.includes('Unknown action')) {
+  if (!resultTyped.success && typeof resultTyped.error === 'string' && resultTyped.error.includes('Unknown action')) {
     console.warn(`[API /data/all] ⚠️  Backend doesn't support get_dynamic_data, using get_all_data`);
     console.log(`[API /data/all] 🔄 Falling back to get_all_data for dynamic data`);
     result = await callBackendScraper('get_all_data', {
@@ -490,9 +510,10 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     });
     
     // Extract only dynamic data from full response
-    if (result.success && result.data) {
-      const resultWithMetadata = result as { metadata?: unknown };
-      const resultData = result.data as { 
+    const fallbackResultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
+    if (fallbackResultTyped.success && fallbackResultTyped.data) {
+      const resultWithMetadata = fallbackResultTyped as { metadata?: unknown };
+      const resultData = fallbackResultTyped.data as { 
         attendance?: unknown; 
         marks?: unknown;
       };
@@ -511,24 +532,26 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
   const backendCallDuration = Date.now() - backendCallStart;
   
   console.log(`[API /data/all] 📡 Dynamic data call completed: ${backendCallDuration}ms`);
-  console.log(`[API /data/all]   - Success: ${result.success}`);
-  console.log(`[API /data/all]   - Error: ${result.error || "none"}`);
+  // Use typed result for final access
+  const finalResultTyped = result as { success?: boolean; error?: string; data?: unknown };
+  console.log(`[API /data/all]   - Success: ${finalResultTyped.success || false}`);
+  console.log(`[API /data/all]   - Error: ${finalResultTyped.error || "none"}`);
   
-  if (result.success) {
+  if (finalResultTyped.success) {
     console.log(`[API /data/all] 📊 Dynamic data received:`);
     // Safely access nested data properties
-    const dynamicResultData = result.data as { attendance?: unknown; marks?: unknown } | undefined;
+    const dynamicResultData = finalResultTyped.data as { attendance?: unknown; marks?: unknown } | undefined;
     console.log(`[API /data/all]   - Attendance: ${dynamicResultData?.attendance ? "✓" : "✗"}`);
     console.log(`[API /data/all]   - Marks: ${dynamicResultData?.marks ? "✓" : "✗"}`);
     
-    // Update user's semester in database if available (fire and forget)
-    const dynamicAttendanceData = result.data as { attendance?: { semester?: number } } | undefined;
+    // Update user's semester in database if训练 available (fire and forget)
+    const dynamicAttendanceData = finalResultTyped.data as { attendance?: { semester?: number } } | undefined;
     if (dynamicAttendanceData?.attendance?.semester) {
       console.log(`[API /data/all] 📝 Semester found in response: ${dynamicAttendanceData.attendance.semester}`);
       updateSemesterInDatabase(user_id, dynamicAttendanceData.attendance.semester);
     } else {
       console.log(`[API /data/all] 📝 No semester data to update`);
-      const checkAttendanceData = result.data as { attendance?: unknown } | undefined;
+      const checkAttendanceData = finalResultTyped.data as { attendance?: unknown } | undefined;
       console.log(`[API /data/all]   - Attendance data exists: ${checkAttendanceData?.attendance ? "✓" : "✗"}`);
     }
   }
@@ -588,12 +611,15 @@ function mergeSplitDataResults(
   }
   
   // Add error if both failed
+  const staticDataError = staticData ? (staticData as { error?: string }).error : undefined;
+  const dynamicDataError = dynamicData ? (dynamicData as { error?: string }).error : undefined;
+  
   if (!staticSuccess && !dynamicSuccess) {
-    merged.error = `Both requests failed. Static: ${staticData?.error || "Unknown"}, Dynamic: ${dynamicData?.error || "Unknown"}`;
+    merged.error = `Both requests failed. Static: ${staticDataError || "Unknown"}, Dynamic: ${dynamicDataError || "Unknown"}`;
   } else if (!staticSuccess) {
-    merged.error = `Static data failed: ${staticData?.error || "Unknown"}`;
+    merged.error = `Static data failed: ${staticDataError || "Unknown"}`;
   } else if (!dynamicSuccess) {
-    merged.error = `Dynamic data failed: ${dynamicData?.error || "Unknown"}`;
+    merged.error = `Dynamic data failed: ${dynamicDataError || "Unknown"}`;
   }
   
   return merged;
