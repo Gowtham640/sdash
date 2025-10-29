@@ -388,14 +388,15 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
   }
 
   // Update user's semester in database if available (fire and forget)
-  if (result.success && result.data?.attendance?.semester) {
-    console.log(`[API /data/all] 📝 Semester found in response: ${result.data.attendance.semester}`);
-    updateSemesterInDatabase(user_id, result.data.attendance.semester);
+  const attendanceData = result.data as { attendance?: { semester?: number } } | undefined;
+  if (result.success && attendanceData?.attendance?.semester) {
+    console.log(`[API /data/all] 📝 Semester found in response: ${attendanceData.attendance.semester}`);
+    updateSemesterInDatabase(user_id, attendanceData.attendance.semester);
   } else if (result.success) {
     console.log(`[API /data/all] 📝 No semester data in attendance response`);
   }
 
-  return result;
+  return result as Record<string, unknown>;
 }
 
 /**
@@ -446,11 +447,12 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
   
   if (result.success) {
     console.log(`[API /data/all] 📊 Static data received:`);
-    console.log(`[API /data/all]   - Calendar: ${result.data?.calendar ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Timetable: ${result.data?.timetable ? "✓" : "✗"}`);
+    const staticResultData = result.data as { calendar?: unknown; timetable?: unknown } | undefined;
+    console.log(`[API /data/all]   - Calendar: ${staticResultData?.calendar ? "✓" : "✗"}`);
+    console.log(`[API /data/all]   - Timetable: ${staticResultData?.timetable ? "✓" : "✗"}`);
   }
 
-  return result;
+  return result as Record<string, unknown>;
 }
 
 /**
@@ -505,16 +507,17 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     console.log(`[API /data/all]   - Marks: ${result.data?.marks ? "✓" : "✗"}`);
     
     // Update user's semester in database if available (fire and forget)
-    if (result.data?.attendance?.semester) {
-      console.log(`[API /data/all] 📝 Semester found in response: ${result.data.attendance.semester}`);
-      updateSemesterInDatabase(user_id, result.data.attendance.semester);
+    const dynamicAttendanceData = result.data as { attendance?: { semester?: number } } | undefined;
+    if (dynamicAttendanceData?.attendance?.semester) {
+      console.log(`[API /data/all] 📝 Semester found in response: ${dynamicAttendanceData.attendance.semester}`);
+      updateSemesterInDatabase(user_id, dynamicAttendanceData.attendance.semester);
     } else {
       console.log(`[API /data/all] 📝 No semester data to update`);
       console.log(`[API /data/all]   - Attendance data exists: ${result.data?.attendance ? "✓" : "✗"}`);
     }
   }
 
-  return result;
+  return result as Record<string, unknown>;
 }
 
 /**
