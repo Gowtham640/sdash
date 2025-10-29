@@ -4,6 +4,14 @@ import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { 
+  getCachedTimetable, 
+  getCachedCalendar, 
+  isLongTermCacheValid, 
+  storeLongTermCache,
+  getLongTermCacheAge,
+  getLongTermCacheDaysRemaining 
+} from '@/lib/longTermCache';
 
 interface TimeSlot {
   time: string;
@@ -122,19 +130,87 @@ export default function TimetablePage() {
         }
       }
 
-      // ✅ STEP 2: Fetch from API (will use server cache if available)
-      console.log('[Timetable] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+      // ✅ STEP 2: Check long-term cache for timetable/calendar
+      console.log("[Timetable] 🔍 Checking long-term cache...");
+      const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
+      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
+      const hasLongTermCache = isLongTermCacheValid() && cachedTimetable && cachedCalendar;
+
+      if (hasLongTermCache) {
+        const daysLeft = getLongTermCacheDaysRemaining();
+        const cacheAge = getLongTermCacheAge();
+        console.log(`[Timetable] ✅ Long-term cache FOUND`);
+        console.log(`[Timetable]   - Cache age: ${cacheAge} days`);
+        console.log(`[Timetable]   - Days remaining: ${daysLeft} days`);
+        console.log(`[Timetable]   - Timetable: ✓ Cached`);
+        console.log(`[Timetable]   - Calendar: ✓ Cached`);
+      } else {
+        console.log(`[Timetable] ❌ Long-term cache NOT FOUND or EXPIRED`);
+        if (!isLongTermCacheValid()) {
+          console.log(`[Timetable]   - Reason: Cache expired (${getLongTermCacheAge()} days old)`);
+        }
+      }
+
+      // ✅ STEP 3: Fetch from API
+      const apiStartTime = Date.now();
+      const fetchType = forceRefresh ? '(force refresh all)' : (hasLongTermCache ? '(fetching attendance/marks only - optimized)' : '(fetching all data)');
+      console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
       });
 
-      const result = await response.json();
-      console.log('[Timetable] Unified API response:', result);
+      const apiDuration = Date.now() - apiStartTime;
+      let result = await response.json();
+      
+      console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
+      console.log(`[Timetable]   - Success: ${result.success}`);
+      console.log(`[Timetable]   - Status: ${response.status}`);
+      console.log(`[Timetable]   - Partial data: ${result.metadata?.partial_data || false}`);
 
-      // ✅ STEP 3: Store in browser cache for next time
+      // ✅ STEP 4: Merge long-term cache with API response if needed
+      if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
+        console.log('[Timetable] 🔗 Merging long-term cache with fresh attendance/marks');
+        result = {
+          ...result,
+          data: {
+            ...result.data,
+            timetable: {
+              success: true,
+              data: cachedTimetable,
+              cached: true,
+              age_days: getLongTermCacheAge()
+            },
+            calendar: {
+              success: true,
+              data: cachedCalendar,
+              cached: true,
+              age_days: getLongTermCacheAge()
+            }
+          },
+          metadata: {
+            ...result.metadata,
+            timetable_cached: true,
+            calendar_cached: true,
+            cache_days_remaining: getLongTermCacheDaysRemaining()
+          }
+        };
+      }
+
+      // ✅ STEP 5: Store timetable/calendar in long-term cache if fresh data received
+      if (result.success && !hasLongTermCache && result.data?.timetable?.success && result.data?.timetable?.data &&
+          result.data?.calendar?.success && result.data?.calendar?.data) {
+        console.log('[Timetable] 💾 Storing timetable & calendar in long-term cache...');
+        storeLongTermCache(
+          result.data.timetable.data,
+          result.data.calendar.data
+        );
+        console.log('[Timetable] ✅ Stored in long-term cache (valid for 30 days)');
+      }
+
+      // ✅ STEP 6: Store in short-term browser cache for next time
       if (result.success) {
         localStorage.setItem(cacheKey, JSON.stringify(result));
         localStorage.setItem(cachedTimestampKey, Date.now().toString());
@@ -156,7 +232,7 @@ export default function TimetablePage() {
 
       // Extract cache info
       setCacheInfo({
-        cached: result.metadata?.cached || false,
+        cached: result.metadata?.cached || result.metadata?.timetable_cached || false,
         age: result.metadata?.cache_age_seconds || 0
       });
 
@@ -313,7 +389,32 @@ export default function TimetablePage() {
         </svg>
       </Link>
       
-      <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">Timetable</div>
+      <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
+        <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
+        <button
+          onClick={() => fetchUnifiedData(true)}
+          disabled={isRefreshing || loading}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base flex items-center gap-2"
+          title="Refresh all data from server"
+        >
+          {isRefreshing ? (
+            <>
+              <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Refreshing...
+            </>
+          ) : (
+            <>
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh Cache
+            </>
+          )}
+        </button>
+      </div>
 
       <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
         <div className="h-full overflow-auto">

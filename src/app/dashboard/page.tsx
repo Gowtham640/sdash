@@ -6,6 +6,14 @@ import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { 
+  getCachedTimetable, 
+  getCachedCalendar, 
+  isLongTermCacheValid, 
+  storeLongTermCache,
+  getLongTermCacheAge,
+  getLongTermCacheDaysRemaining 
+} from '@/lib/longTermCache';
 
 // Import types
 interface CalendarEvent {
@@ -256,15 +264,79 @@ export default function Dashboard() {
         }
       }
 
+      // Check long-term cache for timetable/calendar
+      console.log("[Dashboard] 🔍 Checking long-term cache...");
+      const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
+      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
+      const hasLongTermCache = isLongTermCacheValid() && cachedTimetable && cachedCalendar;
+
+      if (hasLongTermCache) {
+        const daysLeft = getLongTermCacheDaysRemaining();
+        const cacheAge = getLongTermCacheAge();
+        console.log(`[Dashboard] ✅ Long-term cache FOUND`);
+        console.log(`[Dashboard]   - Cache age: ${cacheAge} days`);
+        console.log(`[Dashboard]   - Days remaining: ${daysLeft} days`);
+      } else {
+        console.log(`[Dashboard] ❌ Long-term cache NOT FOUND or EXPIRED`);
+      }
+
       // Fetch from API
-      console.log('[Dashboard] Fetching from API...');
+      const apiStartTime = Date.now();
+      const fetchType = forceRefresh ? '(force refresh all)' : (hasLongTermCache ? '(fetching attendance/marks only - optimized)' : '(fetching all data)');
+      console.log(`[Dashboard] 🚀 Fetching from API ${fetchType}`);
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
       });
 
-      const result = await response.json();
+      const apiDuration = Date.now() - apiStartTime;
+      let result = await response.json();
+      
+      console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
+      console.log(`[Dashboard]   - Success: ${result.success}`);
+      console.log(`[Dashboard]   - Status: ${response.status}`);
+      console.log(`[Dashboard]   - Partial data: ${result.metadata?.partial_data || false}`);
+
+      // Merge long-term cache with API response if needed
+      if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
+        console.log('[Dashboard] 🔗 Merging long-term cache with fresh attendance/marks');
+        result = {
+          ...result,
+          data: {
+            ...result.data,
+            timetable: {
+              success: true,
+              data: cachedTimetable,
+              cached: true,
+              age_days: getLongTermCacheAge()
+            },
+            calendar: {
+              success: true,
+              data: cachedCalendar,
+              cached: true,
+              age_days: getLongTermCacheAge()
+            }
+          },
+          metadata: {
+            ...result.metadata,
+            timetable_cached: true,
+            calendar_cached: true,
+            cache_days_remaining: getLongTermCacheDaysRemaining()
+          }
+        };
+      }
+
+      // Store timetable/calendar in long-term cache if fresh data received
+      if (result.success && !hasLongTermCache && result.data?.timetable?.success && result.data?.timetable?.data &&
+          result.data?.calendar?.success && result.data?.calendar?.data) {
+        console.log('[Dashboard] 💾 Storing timetable & calendar in long-term cache...');
+        storeLongTermCache(
+          result.data.timetable.data,
+          result.data.calendar.data
+        );
+        console.log('[Dashboard] ✅ Stored in long-term cache (valid for 30 days)');
+      }
 
       // Store in browser cache
       if (result.success) {
@@ -423,10 +495,33 @@ export default function Dashboard() {
         hoveredPillTextColor="#000000"
         pillTextColor="#ffffff"
       />
-      <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8">
+      <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
         </div>
+        <button
+          onClick={() => fetchUnifiedData(true)}
+          disabled={isRefreshing || loading}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base flex items-center gap-2"
+          title="Refresh all data from server"
+        >
+          {isRefreshing ? (
+            <>
+              <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Refreshing...
+            </>
+          ) : (
+            <>
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh Cache
+            </>
+          )}
+        </button>
       </div>
 
       {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}

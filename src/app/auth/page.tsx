@@ -96,24 +96,25 @@ export default function AuthPage() {
 
       setIsSuccess(true);
 
-      // Trigger background data prefetch (don't wait for it)
-      console.log("[Auth Page] Triggering background data prefetch...");
-      fetch("/api/data/prefetch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          access_token: data.data.session.access_token
-        })
-      })
-        .then(res => res.json())
-        .then(result => {
-          console.log("[Auth Page] Prefetch triggered:", result.message);
-        })
-        .catch(err => {
-          console.log("[Auth Page] Prefetch error (non-critical):", err);
-        });
+      // DISABLED: Trigger background data prefetch (don't wait for it)
+      // Prefetch disabled to prevent duplicate requests conflicting with dashboard load
+      // console.log("[Auth Page] Triggering background data prefetch...");
+      // fetch("/api/data/prefetch", {
+      //   method: "POST",
+      //   headers: { "Content-Type": "application/json" },
+      //   body: JSON.stringify({
+      //     access_token: data.data.session.access_token
+      //   })
+      // })
+      //   .then(res => res.json())
+      //   .then(result => {
+      //     console.log("[Auth Page] Prefetch triggered:", result.message);
+      //   })
+      //   .catch(err => {
+      //     console.log("[Auth Page] Prefetch error (non-critical):", err);
+      //   });
 
-      // Redirect to dashboard immediately (prefetch happens in background)
+      // Redirect to dashboard immediately (dashboard will fetch data normally)
       setTimeout(() => {
         console.log("[Auth Page] Redirecting to dashboard...");
         router.push("/dashboard");

@@ -137,17 +137,36 @@ export function isPasswordAvailable(): boolean {
 /**
  * Get request body with password included
  */
-export function getRequestBodyWithPassword(access_token: string, force_refresh: boolean = false): { access_token: string; force_refresh: boolean; password?: string } {
+export function getRequestBodyWithPassword(
+  access_token: string, 
+  force_refresh: boolean = false,
+  has_long_term_cache: boolean = false
+): { access_token: string; force_refresh: boolean; has_long_term_cache?: boolean; password?: string } {
+  console.log('[PasswordStorage] 🔍 Retrieving password for API request...');
   const password = getPortalPassword();
   
   if (!password) {
-    console.error('[PasswordStorage] No password available for API request - this will likely fail!');
-    console.error('[PasswordStorage] User may need to re-authenticate');
+    console.error('[PasswordStorage] ❌ CRITICAL: No password available for API request!');
+    console.error('[PasswordStorage]   - This request will likely FAIL');
+    console.error('[PasswordStorage]   - User needs to re-authenticate');
+    console.error('[PasswordStorage]   - Check localStorage and sessionStorage for password');
+  } else {
+    console.log('[PasswordStorage] ✅ Password retrieved successfully');
+    console.log(`[PasswordStorage]   - Password length: ${password.length} characters`);
+    console.log(`[PasswordStorage]   - Will be sent to backend`);
   }
   
-  return {
+  const requestBody = {
     access_token,
     force_refresh,
+    ...(has_long_term_cache ? { has_long_term_cache: true } : {}),
     ...(password ? { password } : {})
   };
+  
+  console.log('[PasswordStorage] 📦 Request body prepared:');
+  console.log(`[PasswordStorage]   - Has password: ${password ? "✓" : "✗"}`);
+  console.log(`[PasswordStorage]   - Force refresh: ${force_refresh}`);
+  console.log(`[PasswordStorage]   - Has long-term cache: ${has_long_term_cache}`);
+  
+  return requestBody;
 }

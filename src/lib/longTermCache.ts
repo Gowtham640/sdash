@@ -15,12 +15,23 @@ export function isLongTermCacheValid(): boolean {
   try {
     const timestamp = localStorage.getItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
     if (!timestamp) {
+      console.log('[LongTermCache] 🔍 Validation: No timestamp found');
       return false;
     }
     
     const age = Date.now() - parseInt(timestamp);
-    return age < LONG_TERM_CACHE_DURATION;
-  } catch {
+    const isValid = age < LONG_TERM_CACHE_DURATION;
+    const ageDays = Math.floor(age / (24 * 60 * 60 * 1000));
+    
+    if (isValid) {
+      console.log(`[LongTermCache] ✅ Validation: Cache valid (${ageDays} days old)`);
+    } else {
+      console.log(`[LongTermCache] ❌ Validation: Cache expired (${ageDays} days old, max 30 days)`);
+    }
+    
+    return isValid;
+  } catch (error) {
+    console.error('[LongTermCache] ❌ Validation error:', error);
     return false;
   }
 }
@@ -31,13 +42,21 @@ export function isLongTermCacheValid(): boolean {
 export function getCachedTimetable(): any | null {
   try {
     if (!isLongTermCacheValid()) {
+      console.log('[LongTermCache] ⚠️  Cannot get timetable: Cache invalid');
       return null;
     }
     
     const cached = localStorage.getItem(TIMETABLE_CACHE_KEY);
-    return cached ? JSON.parse(cached) : null;
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      console.log('[LongTermCache] ✅ Retrieved timetable from cache');
+      return parsed;
+    }
+    console.log('[LongTermCache] ⚠️  Timetable not found in cache');
+    return null;
   } catch (error) {
-    console.error('[LongTermCache] Error getting timetable:', error);
+    console.error('[LongTermCache] ❌ Error getting timetable');
+    console.error(`[LongTermCache]   - Error: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }
@@ -48,13 +67,21 @@ export function getCachedTimetable(): any | null {
 export function getCachedCalendar(): any | null {
   try {
     if (!isLongTermCacheValid()) {
+      console.log('[LongTermCache] ⚠️  Cannot get calendar: Cache invalid');
       return null;
     }
     
     const cached = localStorage.getItem(CALENDAR_CACHE_KEY);
-    return cached ? JSON.parse(cached) : null;
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      console.log('[LongTermCache] ✅ Retrieved calendar from cache');
+      return parsed;
+    }
+    console.log('[LongTermCache] ⚠️  Calendar not found in cache');
+    return null;
   } catch (error) {
-    console.error('[LongTermCache] Error getting calendar:', error);
+    console.error('[LongTermCache] ❌ Error getting calendar');
+    console.error(`[LongTermCache]   - Error: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }
@@ -64,18 +91,43 @@ export function getCachedCalendar(): any | null {
  */
 export function storeLongTermCache(timetable: any, calendar: any): void {
   try {
+    const timetableSize = JSON.stringify(timetable).length;
+    const calendarSize = JSON.stringify(calendar).length;
+    const totalSize = timetableSize + calendarSize;
+    
+    console.log('[LongTermCache] 💾 Storing data...');
+    console.log(`[LongTermCache]   - Timetable size: ${(timetableSize / 1024).toFixed(2)} KB`);
+    console.log(`[LongTermCache]   - Calendar size: ${(calendarSize / 1024).toFixed(2)} KB`);
+    console.log(`[LongTermCache]   - Total size: ${(totalSize / 1024).toFixed(2)} KB`);
+    
     localStorage.setItem(TIMETABLE_CACHE_KEY, JSON.stringify(timetable));
     localStorage.setItem(CALENDAR_CACHE_KEY, JSON.stringify(calendar));
     localStorage.setItem(LONG_TERM_CACHE_TIMESTAMP_KEY, Date.now().toString());
     
-    console.log('[LongTermCache] Stored timetable & calendar for 1 month ✓');
+    // Verify storage
+    const storedTimetable = localStorage.getItem(TIMETABLE_CACHE_KEY);
+    const storedCalendar = localStorage.getItem(CALENDAR_CACHE_KEY);
+    
+    if (storedTimetable && storedCalendar) {
+      console.log('[LongTermCache] ✅ Storage verified successfully');
+      console.log(`[LongTermCache]   - Valid until: ${new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toLocaleDateString()}`);
+    } else {
+      throw new Error('Storage verification failed');
+    }
   } catch (error) {
-    console.error('[LongTermCache] Failed to store:', error);
+    console.error('[LongTermCache] ❌ Storage failed');
+    console.error(`[LongTermCache]   - Error: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[LongTermCache]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+    
     // If quota exceeded, try to clear old caches
-    try {
-      localStorage.removeItem(TIMETABLE_CACHE_KEY + '_old');
-    } catch {
-      // Ignore errors
+    if (error instanceof Error && error.message.includes('quota')) {
+      console.warn('[LongTermCache] ⚠️  localStorage quota exceeded, attempting cleanup...');
+      try {
+        localStorage.removeItem(TIMETABLE_CACHE_KEY + '_old');
+        localStorage.removeItem(CALENDAR_CACHE_KEY + '_old');
+      } catch {
+        // Ignore cleanup errors
+      }
     }
   }
 }

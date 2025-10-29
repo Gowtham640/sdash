@@ -28,41 +28,96 @@ export async function callBackendScraper<T = any>(
   action: string,
   data: ScraperRequest
 ): Promise<ScraperResponse<T>> {
+  const requestStartTime = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
-  try {
-    console.log(`[Backend Client] Calling ${action} for ${data.email}`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`[Backend Client] 🚀 Calling backend API`);
+  console.log(`[Backend Client]   - Action: ${action}`);
+  console.log(`[Backend Client]   - Email: ${data.email}`);
+  console.log(`[Backend Client]   - Backend URL: ${BACKEND_URL}`);
+  console.log(`[Backend Client]   - Password: ${data.password ? "✓ Provided" : "✗ Not provided"}`);
+  console.log(`[Backend Client]   - Force refresh: ${data.force_refresh || false}`);
 
+  try {
+    const fetchStartTime = Date.now();
     const response = await fetch(`${BACKEND_URL}/api/scrape`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, ...data }),
       signal: controller.signal,
     });
+    const fetchDuration = Date.now() - fetchStartTime;
 
     clearTimeout(timeoutId);
 
+    console.log(`[Backend Client] 📡 HTTP response received: ${fetchDuration}ms`);
+    console.log(`[Backend Client]   - Status: ${response.status} ${response.statusText}`);
+    console.log(`[Backend Client]   - OK: ${response.ok}`);
+
     if (!response.ok) {
-      console.error(`[Backend Client] HTTP ${response.status}: ${response.statusText}`);
+      const errorText = await response.text().catch(() => response.statusText);
+      console.error(`[Backend Client] ❌ HTTP Error:`);
+      console.error(`[Backend Client]   - Status: ${response.status}`);
+      console.error(`[Backend Client]   - Status Text: ${response.statusText}`);
+      console.error(`[Backend Client]   - Response: ${errorText.substring(0, 200)}`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      
       return {
         success: false,
         error: `Backend error: ${response.status} ${response.statusText}`,
       };
     }
 
+    const parseStartTime = Date.now();
     const result: ScraperResponse<T> = await response.json();
-    console.log(`[Backend Client] ${action} success:`, result.success);
+    const parseDuration = Date.now() - parseStartTime;
+    const totalDuration = Date.now() - requestStartTime;
+
+    console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
+    console.log(`[Backend Client]   - Success: ${result.success}`);
+    console.log(`[Backend Client]   - Error: ${result.error || "none"}`);
+    console.log(`[Backend Client]   - Cached: ${result.cached || false}`);
+    if (result.success) {
+      console.log(`[Backend Client]   - Data types received:`);
+      if (result.data) {
+        console.log(`[Backend Client]     - Calendar: ${(result.data as any).calendar ? "✓" : "✗"}`);
+        console.log(`[Backend Client]     - Attendance: ${(result.data as any).attendance ? "✓" : "✗"}`);
+        console.log(`[Backend Client]     - Marks: ${(result.data as any).marks ? "✓" : "✗"}`);
+        console.log(`[Backend Client]     - Timetable: ${(result.data as any).timetable ? "✓" : "✗"}`);
+      }
+    }
+    console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
     return result;
   } catch (error) {
     clearTimeout(timeoutId);
+    const totalDuration = Date.now() - requestStartTime;
     
     if (error instanceof Error && error.name === 'AbortError') {
-      console.error(`[Backend Client] Request timeout for ${action}`);
+      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error(`[Backend Client] ❌ REQUEST TIMEOUT`);
+      console.error(`[Backend Client]   - Action: ${action}`);
+      console.error(`[Backend Client]   - Duration: ${totalDuration}ms (exceeded 60s limit)`);
+      console.error(`[Backend Client]   - Email: ${data.email}`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      
       return { success: false, error: 'Request timeout after 60 seconds' };
     }
 
-    console.error(`[Backend Client] Error calling ${action}:`, error);
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error(`[Backend Client] ❌ NETWORK/FETCH ERROR`);
+    console.error(`[Backend Client]   - Action: ${action}`);
+    console.error(`[Backend Client]   - Duration: ${totalDuration}ms`);
+    console.error(`[Backend Client]   - Error Type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+    console.error(`[Backend Client]   - Error Message: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof Error && error.stack) {
+      console.error(`[Backend Client]   - Stack: ${error.stack.split('\n').slice(0, 3).join('\n')}`);
+    }
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
