@@ -189,6 +189,10 @@ export async function POST(request: NextRequest) {
 
       // Return only attendance/marks - client will merge with cached timetable/calendar
       const resultData = result.data as { attendance?: unknown; marks?: unknown } | undefined;
+      const resultMetadata = (result.metadata && typeof result.metadata === 'object') 
+        ? result.metadata as Record<string, unknown>
+        : {};
+      
       const partialResult = {
         success: result.success,
         data: {
@@ -196,7 +200,7 @@ export async function POST(request: NextRequest) {
           marks: resultData?.marks || (result as { marks?: unknown }).marks,
         },
         metadata: {
-          ...result.metadata,
+          ...resultMetadata,
           timetable_cached: true,
           calendar_cached: true,
           attendance_fresh: true,
