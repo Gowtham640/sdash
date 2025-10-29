@@ -242,8 +242,11 @@ export async function POST(request: NextRequest) {
       const staticDuration = Date.now() - backendStartTime;
       console.log(`[API /data/all] ✅ Static data received (${staticDuration}ms)`);
       console.log(`[API /data/all]   - Success: ${staticData.success}`);
-      console.log(`[API /data/all]   - Calendar: ${staticData.data?.calendar ? "✓" : "✗"}`);
-      console.log(`[API /data/all]   - Timetable: ${staticData.data?.timetable ? "✓" : "✗"}`);
+      
+      // Safely access nested data properties
+      const staticDataData = staticData.data as { calendar?: unknown; timetable?: unknown } | undefined;
+      console.log(`[API /data/all]   - Calendar: ${staticDataData?.calendar ? "✓" : "✗"}`);
+      console.log(`[API /data/all]   - Timetable: ${staticDataData?.timetable ? "✓" : "✗"}`);
     } catch (error) {
       console.error(`[API /data/all] ❌ Static data request failed`);
       console.error(`[API /data/all]   - Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -259,8 +262,11 @@ export async function POST(request: NextRequest) {
       const dynamicDuration = Date.now() - dynamicStartTime;
       console.log(`[API /data/all] ✅ Dynamic data received (${dynamicDuration}ms)`);
       console.log(`[API /data/all]   - Success: ${dynamicData.success}`);
-      console.log(`[API /data/all]   - Attendance: ${dynamicData.data?.attendance ? "✓" : "✗"}`);
-      console.log(`[API /data/all]   - Marks: ${dynamicData.data?.marks ? "✓" : "✗"}`);
+      
+      // Safely access nested data properties
+      const dynamicDataData = dynamicData.data as { attendance?: unknown; marks?: unknown } | undefined;
+      console.log(`[API /data/all]   - Attendance: ${dynamicDataData?.attendance ? "✓" : "✗"}`);
+      console.log(`[API /data/all]   - Marks: ${dynamicDataData?.marks ? "✓" : "✗"}`);
     } catch (error) {
       console.error(`[API /data/all] ❌ Dynamic data request failed`);
       console.error(`[API /data/all]   - Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -522,10 +528,10 @@ function mergeSplitDataResults(
   const merged: Record<string, unknown> = {
     success: overallSuccess,
     data: {
-      calendar: staticData?.data?.calendar || { success: false, error: "Not fetched" },
-      timetable: staticData?.data?.timetable || { success: false, error: "Not fetched" },
-      attendance: dynamicData?.data?.attendance || { success: false, error: "Not fetched" },
-      marks: dynamicData?.data?.marks || { success: false, error: "Not fetched" },
+      calendar: (staticData?.data as { calendar?: unknown } | undefined)?.calendar || { success: false, error: "Not fetched" },
+      timetable: (staticData?.data as { timetable?: unknown } | undefined)?.timetable || { success: false, error: "Not fetched" },
+      attendance: (dynamicData?.data as { attendance?: unknown } | undefined)?.attendance || { success: false, error: "Not fetched" },
+      marks: (dynamicData?.data as { marks?: unknown } | undefined)?.marks || { success: false, error: "Not fetched" },
     },
     metadata: {
       generated_at: new Date().toISOString(),
