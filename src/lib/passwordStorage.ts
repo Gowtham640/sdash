@@ -37,27 +37,75 @@ function xorDecrypt(encrypted: string, key: string): string {
 }
 
 /**
- * Store portal password securely
+ * Store portal password securely with verification and fallback
+ * Returns true if storage was successful, false otherwise
  */
-export function storePortalPassword(password: string): void {
+export function storePortalPassword(password: string): boolean {
   try {
     const encrypted = xorEncrypt(password, ENCRYPTION_KEY);
+    
+    // Store in localStorage
     localStorage.setItem('portal_password_encrypted', encrypted);
-    console.log('[PasswordStorage] Password stored securely');
+    
+    // Verify it was stored correctly
+    const verified = localStorage.getItem('portal_password_encrypted');
+    if (verified !== encrypted) {
+      console.error('[PasswordStorage] Verification failed - localStorage may be full or disabled');
+      return false;
+    }
+    
+    // Also store backup in sessionStorage as fallback
+    try {
+      sessionStorage.setItem('portal_password_backup', encrypted);
+      console.log('[PasswordStorage] Password stored in both localStorage and sessionStorage ✓');
+    } catch (sessionError) {
+      console.warn('[PasswordStorage] sessionStorage backup failed, but localStorage succeeded');
+    }
+    
+    console.log('[PasswordStorage] Password stored and verified ✓');
+    return true;
   } catch (error) {
     console.error('[PasswordStorage] Error storing password:', error);
+    return false;
   }
 }
 
 /**
- * Retrieve portal password
+ * Retrieve portal password with fallback to sessionStorage
  */
 export function getPortalPassword(): string | null {
   try {
-    const encrypted = localStorage.getItem('portal_password_encrypted');
-    if (!encrypted) return null;
+    // Try localStorage first
+    let encrypted = localStorage.getItem('portal_password_encrypted');
+    
+    // Fallback to sessionStorage if localStorage is empty
+    if (!encrypted) {
+      console.warn('[PasswordStorage] localStorage empty, trying sessionStorage backup...');
+      encrypted = sessionStorage.getItem('portal_password_backup');
+      
+      if (encrypted) {
+        console.log('[PasswordStorage] Found backup in sessionStorage, restoring to localStorage');
+        // Restore to localStorage for next time
+        try {
+          localStorage.setItem('portal_password_encrypted', encrypted);
+        } catch (restoreError) {
+          console.warn('[PasswordStorage] Could not restore to localStorage:', restoreError);
+        }
+      }
+    }
+    
+    if (!encrypted) {
+      console.warn('[PasswordStorage] No password found in any storage (localStorage or sessionStorage)');
+      return null;
+    }
     
     const decrypted = xorDecrypt(encrypted, ENCRYPTION_KEY);
+    
+    if (!decrypted) {
+      console.error('[PasswordStorage] Decryption returned empty string');
+      return null;
+    }
+    
     return decrypted;
   } catch (error) {
     console.error('[PasswordStorage] Error retrieving password:', error);
@@ -66,15 +114,24 @@ export function getPortalPassword(): string | null {
 }
 
 /**
- * Clear stored password
+ * Clear stored password from all storage locations
  */
 export function clearPortalPassword(): void {
   try {
     localStorage.removeItem('portal_password_encrypted');
-    console.log('[PasswordStorage] Password cleared');
+    sessionStorage.removeItem('portal_password_backup');
+    console.log('[PasswordStorage] Password cleared from all storage locations');
   } catch (error) {
     console.error('[PasswordStorage] Error clearing password:', error);
   }
+}
+
+/**
+ * Check if password is available in storage
+ */
+export function isPasswordAvailable(): boolean {
+  const password = getPortalPassword();
+  return password !== null && password.length > 0;
 }
 
 /**
@@ -82,6 +139,12 @@ export function clearPortalPassword(): void {
  */
 export function getRequestBodyWithPassword(access_token: string, force_refresh: boolean = false): { access_token: string; force_refresh: boolean; password?: string } {
   const password = getPortalPassword();
+  
+  if (!password) {
+    console.error('[PasswordStorage] No password available for API request - this will likely fail!');
+    console.error('[PasswordStorage] User may need to re-authenticate');
+  }
+  
   return {
     access_token,
     force_refresh,

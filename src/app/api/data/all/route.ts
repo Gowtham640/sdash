@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dataCache } from "@/lib/dataCache";
-import { spawn } from "child_process";
+import { callBackendScraper } from '@/lib/scraperClient';
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { 
+  getCachedTimetable, 
+  getCachedCalendar, 
+  isLongTermCacheValid, 
+  storeLongTermCache,
+  getLongTermCacheAge 
+} from '@/lib/longTermCache';
 
 /**
  * Unified data endpoint - Returns all data types in one call
@@ -123,8 +130,75 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/all] Force refresh enabled, bypassing cache for ${user_email}`);
     }
 
-    // Cache miss or force_refresh - call Python scraper
-    console.log(`[API /data/all] ❌ Cache miss, fetching from Python for ${user_email}`);
+    // Check long-term cache for timetable/calendar (if not forcing refresh)
+    const cachedTimetable = !force_refresh ? getCachedTimetable() : null;
+    const cachedCalendar = !force_refresh ? getCachedCalendar() : null;
+    const hasLongTermCache = isLongTermCacheValid() && cachedTimetable && cachedCalendar;
+
+    if (hasLongTermCache) {
+      console.log(`[API /data/all] ✅ Using long-term cache for timetable & calendar (${getLongTermCacheAge()} days old)`);
+      console.log(`[API /data/all] Fetching ONLY attendance & marks from backend`);
+      
+      // Fetch ONLY attendance and marks from backend
+      const result = await callPythonAttendanceMarksOnly(user_email, user_id, password);
+
+      // Check if session expired
+      if (!result.success && result.error === "session_expired") {
+        console.log("[API /data/all] Python session expired, user needs to re-authenticate");
+        return NextResponse.json(
+          {
+            success: false,
+            error: "session_expired",
+            message: "Your portal session has expired. Please re-enter your password.",
+            requires_password: true
+          },
+          { status: 401 }
+        );
+      }
+
+      // Merge cached timetable/calendar with fresh attendance/marks
+      const mergedResult = {
+        success: result.success,
+        data: {
+          calendar: {
+            success: true,
+            data: cachedCalendar,
+            cached: true,
+            source: 'long_term_cache',
+            age_days: getLongTermCacheAge()
+          },
+          timetable: {
+            success: true,
+            data: cachedTimetable,
+            cached: true,
+            source: 'long_term_cache',
+            age_days: getLongTermCacheAge()
+          },
+          attendance: result.data?.attendance || result.attendance,
+          marks: result.data?.marks || result.marks,
+        },
+        metadata: {
+          ...result.metadata,
+          timetable_cached: true,
+          calendar_cached: true,
+          cache_age_days: getLongTermCacheAge(),
+          cache_days_remaining: 30 - getLongTermCacheAge(),
+          attendance_fresh: true,
+          marks_fresh: true
+        }
+      };
+
+      // Store in short-term cache
+      if (mergedResult.success) {
+        dataCache.set(cacheKey, mergedResult, 5 * 60 * 1000); // 5 minute TTL
+        console.log(`[API /data/all] 💾 Cached merged data for ${user_email}`);
+      }
+
+      return NextResponse.json(mergedResult, { status: mergedResult.success ? 200 : 500 });
+    }
+
+    // No long-term cache or force refresh - fetch everything from Python scraper
+    console.log(`[API /data/all] ❌ Cache miss, fetching ALL data from Python for ${user_email}`);
     const result = await callPythonUnifiedData(user_email, user_id, force_refresh, password);
 
     // Check if session expired
@@ -141,9 +215,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store in cache if successful
+    // Store in short-term cache and long-term cache if successful
     if (result.success) {
-      const resultWithMetadata = result as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
+      const resultWithMetadata = result as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number }; data?: { timetable?: { success?: boolean; data?: any }; calendar?: { success?: boolean; data?: any } } };
+      
+      // Store timetable and calendar in long-term cache (1 month)
+      if (resultWithMetadata.data?.timetable?.success && resultWithMetadata.data?.timetable?.data &&
+          resultWithMetadata.data?.calendar?.success && resultWithMetadata.data?.calendar?.data) {
+        storeLongTermCache(
+          resultWithMetadata.data.timetable.data,
+          resultWithMetadata.data.calendar.data
+        );
+        console.log(`[API /data/all] 💾 Stored timetable & calendar in long-term cache (1 month)`);
+      }
+
+      // Store everything in short-term cache (5 minutes)
       if (resultWithMetadata.metadata) {
         resultWithMetadata.metadata.cached_at = Date.now();
         resultWithMetadata.metadata.cached = false; // First request (not from cache)
@@ -151,7 +237,7 @@ export async function POST(request: NextRequest) {
         resultWithMetadata.metadata.cache_ttl_seconds = 300;
       }
       dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minute TTL
-      console.log(`[API /data/all] 💾 Cached data for ${user_email}`);
+      console.log(`[API /data/all] 💾 Cached all data for ${user_email}`);
     }
 
     // Return the unified data
@@ -171,148 +257,80 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Call Python scraper to get all data using existing session
+ * Call backend scraper to get only attendance and marks (timetable/calendar from cache)
+ */
+async function callPythonAttendanceMarksOnly(email: string, user_id: string, password?: string): Promise<Record<string, unknown>> {
+  // Try to call the optimized endpoint that only fetches attendance/marks
+  // If backend doesn't support it yet, fall back to get_all_data
+  const result = await callBackendScraper('get_attendance_marks_data', {
+    email,
+    ...(password ? { password } : {}), // Only include password if provided
+  });
+
+  // If backend doesn't support this action, fall back to get_all_data
+  if (!result.success && result.error?.includes('Unknown action')) {
+    console.log(`[API /data/all] Backend doesn't support get_attendance_marks_data, using get_all_data`);
+    return await callPythonUnifiedData(email, user_id, false, password);
+  }
+
+  // Update user's semester in database if available (fire and forget)
+  if (result.success && result.data?.attendance?.semester) {
+    updateSemesterInDatabase(user_id, result.data.attendance.semester);
+  }
+
+  console.log(`[API /data/all] Attendance/Marks fetch - Success: ${result.success}, Error: ${result.error || 'none'}`);
+  return result;
+}
+
+/**
+ * Call backend scraper to get all data using HTTP API
  */
 async function callPythonUnifiedData(email: string, user_id: string, force_refresh: boolean, password?: string): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      console.error("[API /data/all] Python scraper timeout after 60 seconds");
-      resolve({
-        success: false,
-        error: "Request timeout after 60 seconds"
-      });
-    }, 60000); // 60 second timeout
-
-    try {
-      console.log(`[API /data/all] Spawning Python scraper for: ${email}`);
-
-      const pythonProcess = spawn("python", ["python-scraper/api_wrapper.py"], {
-        cwd: process.cwd(),
-        shell: true,
-      });
-
-      let outputData = "";
-      let errorData = "";
-
-      // Prepare input payload (include password if provided for serverless environments)
-      const payload = JSON.stringify({
-        action: "get_all_data",
-        email,
-        ...(password ? { password } : {}), // Only include password if provided
-        force_refresh
-      });
-
-      console.log(`[API /data/all] Sending payload to Python:`, payload);
-
-      // Send payload to Python process
-      pythonProcess.stdin.write(payload);
-      pythonProcess.stdin.end();
-
-      // Capture stdout
-      pythonProcess.stdout.on("data", (data) => {
-        const chunk = data.toString();
-        outputData += chunk;
-        console.log(`[API /data/all] Python stdout: ${chunk.substring(0, 200)}`);
-      });
-
-      // Capture stderr for logging
-      pythonProcess.stderr.on("data", (data) => {
-        const chunk = data.toString();
-        errorData += chunk;
-        console.error(`[API /data/all] Python stderr: ${chunk.trim()}`);
-      });
-
-      // Handle process completion
-      pythonProcess.on("close", (code) => {
-        clearTimeout(timeout);
-
-        console.log(`[API /data/all] Python process closed with code: ${code}`);
-        console.log(`[API /data/all] Total stdout length: ${outputData.length} bytes`);
-
-        if (code !== 0) {
-          console.error(`[API /data/all] Python process failed with exit code ${code}`);
-          console.error(`[API /data/all] stderr: ${errorData}`);
-          resolve({
-            success: false,
-            error: `Python process failed with exit code ${code}`,
-            stderr: errorData
-          });
-          return;
-        }
-
-        // Parse Python output
-        try {
-          // Extract JSON from output (in case there's extra logging)
-          const jsonMatch = outputData.match(/\{[\s\S]*\}/);
-          const jsonString = jsonMatch ? jsonMatch[0] : outputData;
-
-          console.log(`[API /data/all] Parsing JSON response...`);
-          const result = JSON.parse(jsonString);
-
-          // Update user's semester in database if available (fire and forget)
-          if (result.success && result.data?.attendance?.semester) {
-            const semester = result.data.attendance.semester;
-            console.log(`[API /data/all] Updating user's semester to: ${semester}`);
-            console.log(`[API /data/all] User ID: ${user_id}, Semester: ${semester}`);
-            
-            // Fire and forget - don't wait for DB update
-            (async () => {
-              try {
-                const { data, error } = await supabaseAdmin
-                  .from("users")
-                  .update({ semester })
-                  .eq("id", user_id)
-                  .select();
-                
-                if (error) {
-                  console.error(`[API /data/all] Failed to update semester: ${error.message}`);
-                  console.error(`[API /data/all] Error details:`, JSON.stringify(error));
-                } else {
-                  console.log(`[API /data/all] ✓ Updated user semester in database to: ${semester}`);
-                  console.log(`[API /data/all] Updated row:`, JSON.stringify(data));
-                }
-              } catch (dbError) {
-                console.error(`[API /data/all] Exception updating semester: ${dbError}`);
-              }
-            })();
-          } else {
-            console.log(`[API /data/all] No semester data to update. Success: ${result.success}`);
-            console.log(`[API /data/all] Attendance data: ${JSON.stringify(result.data?.attendance)}`);
-          }
-
-          console.log(`[API /data/all] Success: ${result.success}, Error: ${result.error || 'none'}`);
-          resolve(result);
-
-        } catch (parseError) {
-          console.error(`[API /data/all] Failed to parse Python output:`, parseError);
-          console.error(`[API /data/all] Raw output: ${outputData.substring(0, 500)}`);
-          resolve({
-            success: false,
-            error: "Failed to parse Python response",
-            raw_output: outputData.substring(0, 500)
-          });
-        }
-      });
-
-      // Handle process errors
-      pythonProcess.on("error", (error) => {
-        clearTimeout(timeout);
-        console.error(`[API /data/all] Python process error:`, error);
-        resolve({
-          success: false,
-          error: `Python process error: ${error.message}`
-        });
-      });
-
-    } catch (error) {
-      clearTimeout(timeout);
-      console.error(`[API /data/all] Exception spawning Python:`, error);
-      resolve({
-        success: false,
-        error: `Exception: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
+  const result = await callBackendScraper('get_all_data', {
+    email,
+    ...(password ? { password } : {}), // Only include password if provided
+    force_refresh,
   });
+
+  // Update user's semester in database if available (fire and forget)
+  if (result.success && result.data?.attendance?.semester) {
+    updateSemesterInDatabase(user_id, result.data.attendance.semester);
+  } else {
+    console.log(`[API /data/all] No semester data to update. Success: ${result.success}`);
+    console.log(`[API /data/all] Attendance data: ${JSON.stringify(result.data?.attendance)}`);
+  }
+
+  console.log(`[API /data/all] Success: ${result.success}, Error: ${result.error || 'none'}`);
+  return result;
+}
+
+/**
+ * Update user's semester in database (fire and forget)
+ */
+async function updateSemesterInDatabase(user_id: string, semester: number): Promise<void> {
+  console.log(`[API /data/all] Updating user's semester to: ${semester}`);
+  console.log(`[API /data/all] User ID: ${user_id}, Semester: ${semester}`);
+  
+  // Fire and forget - don't wait for DB update
+  (async () => {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from("users")
+        .update({ semester })
+        .eq("id", user_id)
+        .select();
+      
+      if (error) {
+        console.error(`[API /data/all] Failed to update semester: ${error.message}`);
+        console.error(`[API /data/all] Error details:`, JSON.stringify(error));
+      } else {
+        console.log(`[API /data/all] ✓ Updated user semester in database to: ${semester}`);
+        console.log(`[API /data/all] Updated row:`, JSON.stringify(data));
+      }
+    } catch (dbError) {
+      console.error(`[API /data/all] Exception updating semester: ${dbError}`);
+    }
+  })();
 }
 
 /**

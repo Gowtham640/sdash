@@ -82,7 +82,17 @@ export default function AuthPage() {
       localStorage.setItem("user", JSON.stringify(data.data.user));
       
       // Store portal password securely for session renewal
-      storePortalPassword(password);
+      const passwordStored = storePortalPassword(password);
+      if (!passwordStored) {
+        console.error('[Auth Page] Failed to store password!');
+        setError(
+          'Authentication successful, but failed to save credentials. ' +
+          'Please check if cookies/storage are enabled in your browser settings.'
+        );
+        setIsLoading(false);
+        return;
+      }
+      console.log('[Auth Page] Password stored and verified successfully');
 
       setIsSuccess(true);
 
