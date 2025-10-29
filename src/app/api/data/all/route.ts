@@ -281,10 +281,18 @@ export async function POST(request: NextRequest) {
     
     console.log(`[API /data/all] 📊 Merged result:`);
     console.log(`[API /data/all]   - Overall success: ${result.success}`);
-    console.log(`[API /data/all]   - Calendar: ${result.data?.calendar ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Timetable: ${result.data?.timetable ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Attendance: ${result.data?.attendance ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Marks: ${result.data?.marks ? "✓" : "✗"}`);
+    
+    // Safely access merged result data properties
+    const mergedData = result.data as { 
+      calendar?: unknown; 
+      timetable?: unknown; 
+      attendance?: unknown; 
+      marks?: unknown 
+    } | undefined;
+    console.log(`[API /data/all]   - Calendar: ${mergedData?.calendar ? "✓" : "✗"}`);
+    console.log(`[API /data/all]   - Timetable: ${mergedData?.timetable ? "✓" : "✗"}`);
+    console.log(`[API /data/all]   - Attendance: ${mergedData?.attendance ? "✓" : "✗"}`);
+    console.log(`[API /data/all]   - Marks: ${mergedData?.marks ? "✓" : "✗"}`);
     
     // Check for session expiry in either request
     if ((staticData && !staticData.success && staticData.error === "session_expired") ||
