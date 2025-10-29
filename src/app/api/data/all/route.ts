@@ -558,11 +558,21 @@ function mergeSplitDataResults(
   };
   
   // Combine metadata from both results if available
-  if (staticData?.metadata) {
-    Object.assign(merged.metadata, { static_metadata: staticData.metadata });
+  const baseMetadata = merged.metadata as Record<string, unknown>;
+  
+  if (staticData?.metadata && typeof staticData.metadata === 'object' && staticData.metadata !== null) {
+    const staticMetadata = staticData.metadata as Record<string, unknown>;
+    merged.metadata = {
+      ...baseMetadata,
+      static_metadata: staticMetadata,
+    } as Record<string, unknown>;
   }
-  if (dynamicData?.metadata) {
-    Object.assign(merged.metadata, { dynamic_metadata: dynamicData.metadata });
+  if (dynamicData?.metadata && typeof dynamicData.metadata === 'object' && dynamicData.metadata !== null) {
+    const dynamicMetadata = dynamicData.metadata as Record<string, unknown>;
+    merged.metadata = {
+      ...(merged.metadata as Record<string, unknown>),
+      dynamic_metadata: dynamicMetadata,
+    } as Record<string, unknown>;
   }
   
   // Add error if both failed

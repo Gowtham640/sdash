@@ -12,7 +12,7 @@ export interface ScraperRequest {
   force_refresh?: boolean;
 }
 
-export interface ScraperResponse<T = any> {
+export interface ScraperResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
@@ -24,7 +24,7 @@ export interface ScraperResponse<T = any> {
  * Unified HTTP client for backend scraper API
  * Replaces all Python spawn() calls
  */
-export async function callBackendScraper<T = any>(
+export async function callBackendScraper<T = unknown>(
   action: string,
   data: ScraperRequest
 ): Promise<ScraperResponse<T>> {
@@ -82,10 +82,16 @@ export async function callBackendScraper<T = any>(
     if (result.success) {
       console.log(`[Backend Client]   - Data types received:`);
       if (result.data) {
-        console.log(`[Backend Client]     - Calendar: ${(result.data as any).calendar ? "✓" : "✗"}`);
-        console.log(`[Backend Client]     - Attendance: ${(result.data as any).attendance ? "✓" : "✗"}`);
-        console.log(`[Backend Client]     - Marks: ${(result.data as any).marks ? "✓" : "✗"}`);
-        console.log(`[Backend Client]     - Timetable: ${(result.data as any).timetable ? "✓" : "✗"}`);
+      const resultData = result.data as { 
+        calendar?: unknown; 
+        attendance?: unknown; 
+        marks?: unknown; 
+        timetable?: unknown 
+      } | undefined;
+      console.log(`[Backend Client]     - Calendar: ${resultData?.calendar ? "✓" : "✗"}`);
+      console.log(`[Backend Client]     - Attendance: ${resultData?.attendance ? "✓" : "✗"}`);
+      console.log(`[Backend Client]     - Marks: ${resultData?.marks ? "✓" : "✗"}`);
+      console.log(`[Backend Client]     - Timetable: ${resultData?.timetable ? "✓" : "✗"}`);
       }
     }
     console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
