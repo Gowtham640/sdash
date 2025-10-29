@@ -188,11 +188,12 @@ export async function POST(request: NextRequest) {
       }
 
       // Return only attendance/marks - client will merge with cached timetable/calendar
+      const resultData = result.data as { attendance?: unknown; marks?: unknown } | undefined;
       const partialResult = {
         success: result.success,
         data: {
-          attendance: result.data?.attendance || result.attendance,
-          marks: result.data?.marks || result.marks,
+          attendance: resultData?.attendance || (result as { attendance?: unknown }).attendance,
+          marks: resultData?.marks || (result as { marks?: unknown }).marks,
         },
         metadata: {
           ...result.metadata,
