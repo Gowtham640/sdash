@@ -210,8 +210,9 @@ export async function POST(request: NextRequest) {
       };
 
       console.log(`[API /data/all] 📊 Partial data response prepared`);
-      console.log(`[API /data/all]   - Attendance: ${partialResult.data.attendance ? "✓" : "✗"}`);
-      console.log(`[API /data/all]   - Marks: ${partialResult.data.marks ? "✓" : "✗"}`);
+      const partialResultData = partialResult.data as { attendance?: unknown; marks?: unknown };
+      console.log(`[API /data/all]   - Attendance: ${partialResultData?.attendance ? "✓" : "✗"}`);
+      console.log(`[API /data/all]   - Marks: ${partialResultData?.marks ? "✓" : "✗"}`);
 
       // Store in short-term cache
       if (partialResult.success) {
@@ -515,8 +516,10 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
   
   if (result.success) {
     console.log(`[API /data/all] 📊 Dynamic data received:`);
-    console.log(`[API /data/all]   - Attendance: ${result.data?.attendance ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Marks: ${result.data?.marks ? "✓" : "✗"}`);
+    // Safely access nested data properties
+    const dynamicResultData = result.data as { attendance?: unknown; marks?: unknown } | undefined;
+    console.log(`[API /data/all]   - Attendance: ${dynamicResultData?.attendance ? "✓" : "✗"}`);
+    console.log(`[API /data/all]   - Marks: ${dynamicResultData?.marks ? "✓" : "✗"}`);
     
     // Update user's semester in database if available (fire and forget)
     const dynamicAttendanceData = result.data as { attendance?: { semester?: number } } | undefined;
@@ -525,7 +528,8 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
       updateSemesterInDatabase(user_id, dynamicAttendanceData.attendance.semester);
     } else {
       console.log(`[API /data/all] 📝 No semester data to update`);
-      console.log(`[API /data/all]   - Attendance data exists: ${result.data?.attendance ? "✓" : "✗"}`);
+      const checkAttendanceData = result.data as { attendance?: unknown } | undefined;
+      console.log(`[API /data/all]   - Attendance data exists: ${checkAttendanceData?.attendance ? "✓" : "✗"}`);
     }
   }
 

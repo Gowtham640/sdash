@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
     
     // Cache the result if successful
     if (result && typeof result === 'object' && 'success' in result && result.success) {
-      setCachedResponse(email, result);
+      setCachedResponse(email, result as unknown as Record<string, unknown>);
     }
     
     console.log('[API] Python scraper completed');
