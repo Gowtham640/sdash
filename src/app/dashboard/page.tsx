@@ -6,6 +6,7 @@ import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 import { 
   getCachedTimetable, 
   getCachedCalendar, 
@@ -73,6 +74,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
   const menuItems = [
     { label: 'Home', ariaLabel: 'Go to home page', link: '/' },
     { label: 'About', ariaLabel: 'Learn about us', link: '/about' },
@@ -170,6 +172,17 @@ export default function Dashboard() {
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
@@ -441,8 +454,16 @@ export default function Dashboard() {
   if (loading) {
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
-      <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">
+      <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Loading your Dashboard...
+        </div>
+        <div className="max-w-2xl px-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+            Meanwhile, here are some interesting facts:
+          </div>
+          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+            {currentFact}
+          </div>
         </div>
       </div>
     );

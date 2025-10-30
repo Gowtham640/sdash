@@ -7,6 +7,7 @@ import LiquidEther from "@/components/LiquidEther";
 import { Calendar } from "@/components/ui/calendar";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 
 interface CalendarEvent {
   date: string;
@@ -23,6 +24,7 @@ export default function CalendarPage() {
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [error, setError] = useState<string | null>(null);
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
@@ -63,6 +65,17 @@ export default function CalendarPage() {
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   // Auto-scroll to current date when data loads
   useEffect(() => {
@@ -356,6 +369,14 @@ export default function CalendarPage() {
       <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-8 sm:pt-9 md:pt-9 lg:pt-10 gap-10 sm:gap-12 md:gap-14 lg:gap-16">
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora">Loading calendar data...</div>
+        <div className="max-w-2xl px-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+            Meanwhile, here are some interesting facts:
+          </div>
+          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+            {currentFact}
+          </div>
+        </div>
       </div>
     );
   }

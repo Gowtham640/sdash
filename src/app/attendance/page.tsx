@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
 import ShinyText from '../../components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 
 interface AttendanceSubject {
   row_number: number;
@@ -228,10 +229,22 @@ export default function AttendancePage() {
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
 
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
     if (!attendanceData) {
@@ -723,6 +736,14 @@ export default function AttendancePage() {
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
         <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl">Loading attendance data...</div>
+        <div className="max-w-2xl px-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+            Meanwhile, here are some interesting facts:
+          </div>
+          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+            {currentFact}
+          </div>
+        </div>
       </div>
     );
   }

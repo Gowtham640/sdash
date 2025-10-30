@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 import { 
   getCachedTimetable, 
   getCachedCalendar, 
@@ -57,10 +58,22 @@ export default function TimetablePage() {
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
 
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
@@ -334,9 +347,17 @@ export default function TimetablePage() {
   if (loading) {
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
-        <div className="w-[90vw] h-[90vh] bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-10 justify-center items-center">
+        <div className="w-[90vw] h-[90vh] bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-6 justify-center items-center">
           <div className="text-white text-4xl font-sora font-bold">Timetable</div>
           <div className="text-white text-2xl font-sora">Loading timetable data...</div>
+          <div className="max-w-2xl px-6">
+            <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+              Meanwhile, here are some interesting facts:
+            </div>
+            <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+              {currentFact}
+            </div>
+          </div>
         </div>
       </div>
     );
