@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup
 # ============================================================================
 
 CACHE_FILE = "calendar_cache.json"
-CACHE_DURATION_HOURS = 6  # Cache for 6 hours
+CACHE_DURATION_HOURS = 24 * 30  # Cache for 1 month (30 days)
 
 
 def is_cache_valid():

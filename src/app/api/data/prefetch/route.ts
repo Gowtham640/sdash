@@ -135,7 +135,7 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
       if (resultWithMetadata.metadata) {
         resultWithMetadata.metadata.cached_at = Date.now();
       }
-      dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minute TTL
+      dataCache.set(cacheKey, result, 3 * 60 * 60 * 1000); // 3 hour TTL
       console.log(`[Prefetch] ✅ Background fetch completed and cached for ${email}`);
     } else {
       console.error(`[Prefetch] ❌ Background fetch failed for ${email}:`, result.error);

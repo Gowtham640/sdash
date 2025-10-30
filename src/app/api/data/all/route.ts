@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
             ...cachedData.metadata,
             cached: true,
             cache_age_seconds: cacheAge,
-            cache_ttl_seconds: Math.floor((5 * 60 * 1000) / 1000)
+            cache_ttl_seconds: Math.floor((3 * 60 * 60 * 1000) / 1000)
           }
         });
       } else {
@@ -219,8 +219,8 @@ export async function POST(request: NextRequest) {
 
       // Store in short-term cache
       if (partialResult.success) {
-        dataCache.set(cacheKey, partialResult, 5 * 60 * 1000); // 5 minute TTL
-        console.log(`[API /data/all] 💾 Stored partial data in server cache (5min TTL)`);
+        dataCache.set(cacheKey, partialResult, 3 * 60 * 60 * 1000); // 3 hour TTL
+        console.log(`[API /data/all] 💾 Stored partial data in server cache (3hour TTL)`);
       }
 
       const totalTime = Date.now() - requestStartTime;
@@ -324,15 +324,15 @@ export async function POST(request: NextRequest) {
     if (resultTyped.success) {
       const resultWithMetadata = resultTyped as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
       
-      // Store everything in short-term cache (5 minutes)
+      // Store everything in short-term cache (3 hours)
       if (resultWithMetadata.metadata) {
         resultWithMetadata.metadata.cached_at = Date.now();
         resultWithMetadata.metadata.cached = false; // First request (not from cache)
         resultWithMetadata.metadata.cache_age_seconds = 0;
-        resultWithMetadata.metadata.cache_ttl_seconds = 300;
+        resultWithMetadata.metadata.cache_ttl_seconds = 10800; // 3 hours in seconds
       }
-      dataCache.set(cacheKey, result as Record<string, unknown>, 5 * 60 * 1000); // 5 minute TTL
-      console.log(`[API /data/all] 💾 Stored all data in server cache (5min TTL)`);
+      dataCache.set(cacheKey, result as Record<string, unknown>, 3 * 60 * 60 * 1000); // 3 hour TTL
+      console.log(`[API /data/all] 💾 Stored all data in server cache (3hour TTL)`);
       console.log(`[API /data/all]   - Note: Long-term cache storage happens on client-side`);
     }
 
