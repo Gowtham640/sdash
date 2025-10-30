@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import ShinyText from '../../components/ShinyText';
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 
 interface Assessment {
   assessment_name: string;
@@ -60,10 +62,22 @@ export default function MarksPage() {
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
 
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
@@ -90,8 +104,8 @@ export default function MarksPage() {
       // ✅ STEP 1: Check browser cache first (unless force refresh)
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
-      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      const cacheMaxAge = 3 * 60 * 60 * 1000; // 3 hours
+      const refreshTriggerAge = 2.5 * 60 * 60 * 1000; // 2.5 hours - start background refresh
       
       if (!forceRefresh) {
         const cachedData = localStorage.getItem(cacheKey);
@@ -134,10 +148,7 @@ export default function MarksPage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const result = await response.json();
@@ -207,6 +218,14 @@ export default function MarksPage() {
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Marks</div>
         <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl">Loading marks data...</div>
+        <div className="max-w-2xl px-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+            Meanwhile, here are some interesting facts:
+          </div>
+          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+            {currentFact}
+          </div>
+        </div>
       </div>
     );
   }
@@ -256,7 +275,9 @@ export default function MarksPage() {
         </svg>
       </Link>
       
-      <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
+      <div className="flex flex-col items-center gap-4">
+        <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
+      </div>
       
       {/* Individual Course Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
@@ -298,7 +319,7 @@ export default function MarksPage() {
                             stroke="#9CA3AF"
                             fontSize={10}
                             angle={0}
-                            textAnchor="front"
+                            textAnchor="start"
                             height={50}
                             domain={['dataMin', 'dataMax']}
                             tick={{ fontSize: 10 }}

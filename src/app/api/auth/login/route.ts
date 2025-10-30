@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Wrap imports in try-catch to handle potential import errors
-let handleUserSignIn: any;
-let AuthErrorCode: any;
+let handleUserSignIn: ((email: string, password: string) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
+let AuthErrorCode: Record<string, string> | undefined;
 
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const authModule = require("@/lib/auth");
   handleUserSignIn = authModule.handleUserSignIn;
   AuthErrorCode = authModule.AuthErrorCode;
@@ -58,20 +59,21 @@ export async function POST(request: NextRequest) {
     const result = await handleUserSignIn(email, password);
 
     // If sign-in failed, return error response
-    if (!result.session || result.error) {
+    if (!result.session || (result as { error?: string }).error) {
       const statusCode =
-        ErrorStatusCodeMap[result.errorCode || "INTERNAL_ERROR"] ||
+        ErrorStatusCodeMap[(result as { errorCode?: string }).errorCode || "INTERNAL_ERROR"] ||
         500;
 
+      const errorResult = result as { error?: string };
       console.error(
-        `[API] Sign-in failed with status ${statusCode}: ${result.error}`
+        `[API] Sign-in failed with status ${statusCode}: ${errorResult.error}`
       );
 
       return NextResponse.json(
         {
           success: false,
-          error: result.error,
-          errorCode: result.errorCode,
+          error: errorResult.error,
+          errorCode: (result as { errorCode?: string }).errorCode,
         },
         { status: statusCode }
       );

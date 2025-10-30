@@ -12,7 +12,8 @@ interface CachedData {
  */
 class DataCache {
   private cache: Map<string, CachedData> = new Map();
-  private defaultTTL = 5 * 60 * 1000; // 5 minutes
+  private defaultTTL = 3 * 60 * 60 * 1000; // 3 hours (attendance and marks)
+  private longTermTTL = 30 * 24 * 60 * 60 * 1000; // 30 days (timetable and calendar)
 
   /**
    * Get cached data if not expired

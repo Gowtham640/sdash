@@ -13,6 +13,8 @@ import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
 import ShinyText from '../../components/ShinyText';
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 
 interface AttendanceSubject {
   row_number: number;
@@ -227,10 +229,22 @@ export default function AttendancePage() {
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
 
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
     if (!attendanceData) {
@@ -311,10 +325,7 @@ export default function AttendancePage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: false  // Don't force - use server cache if available
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
       });
 
       const result = await response.json();
@@ -356,8 +367,8 @@ export default function AttendancePage() {
       // ✅ STEP 1: Check browser cache first (unless force refresh)
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
-      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      const cacheMaxAge = 3 * 60 * 60 * 1000; // 3 hours
+      const refreshTriggerAge = 2.5 * 60 * 60 * 1000; // 2.5 hours - start background refresh
       
       if (!forceRefresh) {
         const cachedData = localStorage.getItem(cacheKey);
@@ -445,10 +456,7 @@ export default function AttendancePage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const result = await response.json();
@@ -728,6 +736,14 @@ export default function AttendancePage() {
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
         <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl">Loading attendance data...</div>
+        <div className="max-w-2xl px-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+            Meanwhile, here are some interesting facts:
+          </div>
+          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+            {currentFact}
+          </div>
+        </div>
       </div>
     );
   }
@@ -785,7 +801,9 @@ export default function AttendancePage() {
         </svg>
       </Link>
       
-      <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
+      <div className="flex flex-col items-center gap-4">
+        <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
+      </div>
       
       {/* Prediction Controls */}
       <div className="flex gap-4 items-center">

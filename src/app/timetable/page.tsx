@@ -3,6 +3,16 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
+import { 
+  getCachedTimetable, 
+  getCachedCalendar, 
+  isLongTermCacheValid, 
+  storeLongTermCache,
+  getLongTermCacheAge,
+  getLongTermCacheDaysRemaining 
+} from '@/lib/longTermCache';
 
 interface TimeSlot {
   time: string;
@@ -48,10 +58,22 @@ export default function TimetablePage() {
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
 
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
@@ -121,22 +143,87 @@ export default function TimetablePage() {
         }
       }
 
-      // ✅ STEP 2: Fetch from API (will use server cache if available)
-      console.log('[Timetable] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+      // ✅ STEP 2: Check long-term cache for timetable/calendar
+      console.log("[Timetable] 🔍 Checking long-term cache...");
+      const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
+      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
+      const hasLongTermCache = isLongTermCacheValid() && cachedTimetable && cachedCalendar;
+
+      if (hasLongTermCache) {
+        const daysLeft = getLongTermCacheDaysRemaining();
+        const cacheAge = getLongTermCacheAge();
+        console.log(`[Timetable] ✅ Long-term cache FOUND`);
+        console.log(`[Timetable]   - Cache age: ${cacheAge} days`);
+        console.log(`[Timetable]   - Days remaining: ${daysLeft} days`);
+        console.log(`[Timetable]   - Timetable: ✓ Cached`);
+        console.log(`[Timetable]   - Calendar: ✓ Cached`);
+      } else {
+        console.log(`[Timetable] ❌ Long-term cache NOT FOUND or EXPIRED`);
+        if (!isLongTermCacheValid()) {
+          console.log(`[Timetable]   - Reason: Cache expired (${getLongTermCacheAge()} days old)`);
+        }
+      }
+
+      // ✅ STEP 3: Fetch from API
+      const apiStartTime = Date.now();
+      const fetchType = forceRefresh ? '(force refresh all)' : (hasLongTermCache ? '(fetching attendance/marks only - optimized)' : '(fetching all data)');
+      console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
       });
 
-      const result = await response.json();
-      console.log('[Timetable] Unified API response:', result);
+      const apiDuration = Date.now() - apiStartTime;
+      let result = await response.json();
+      
+      console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
+      console.log(`[Timetable]   - Success: ${result.success}`);
+      console.log(`[Timetable]   - Status: ${response.status}`);
+      console.log(`[Timetable]   - Partial data: ${result.metadata?.partial_data || false}`);
 
-      // ✅ STEP 3: Store in browser cache for next time
+      // ✅ STEP 4: Merge long-term cache with API response if needed
+      if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
+        console.log('[Timetable] 🔗 Merging long-term cache with fresh attendance/marks');
+        result = {
+          ...result,
+          data: {
+            ...result.data,
+            timetable: {
+              success: true,
+              data: cachedTimetable,
+              cached: true,
+              age_days: getLongTermCacheAge()
+            },
+            calendar: {
+              success: true,
+              data: cachedCalendar,
+              cached: true,
+              age_days: getLongTermCacheAge()
+            }
+          },
+          metadata: {
+            ...result.metadata,
+            timetable_cached: true,
+            calendar_cached: true,
+            cache_days_remaining: getLongTermCacheDaysRemaining()
+          }
+        };
+      }
+
+      // ✅ STEP 5: Store timetable/calendar in long-term cache if fresh data received
+      if (result.success && !hasLongTermCache && result.data?.timetable?.success && result.data?.timetable?.data &&
+          result.data?.calendar?.success && result.data?.calendar?.data) {
+        console.log('[Timetable] 💾 Storing timetable & calendar in long-term cache...');
+        storeLongTermCache(
+          result.data.timetable.data,
+          result.data.calendar.data
+        );
+        console.log('[Timetable] ✅ Stored in long-term cache (valid for 30 days)');
+      }
+
+      // ✅ STEP 6: Store in short-term browser cache for next time
       if (result.success) {
         localStorage.setItem(cacheKey, JSON.stringify(result));
         localStorage.setItem(cachedTimestampKey, Date.now().toString());
@@ -158,7 +245,7 @@ export default function TimetablePage() {
 
       // Extract cache info
       setCacheInfo({
-        cached: result.metadata?.cached || false,
+        cached: result.metadata?.cached || result.metadata?.timetable_cached || false,
         age: result.metadata?.cache_age_seconds || 0
       });
 
@@ -260,9 +347,17 @@ export default function TimetablePage() {
   if (loading) {
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
-        <div className="w-[90vw] h-[90vh] bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-10 justify-center items-center">
+        <div className="w-[90vw] h-[90vh] bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-6 justify-center items-center">
           <div className="text-white text-4xl font-sora font-bold">Timetable</div>
           <div className="text-white text-2xl font-sora">Loading timetable data...</div>
+          <div className="max-w-2xl px-6">
+            <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+              Meanwhile, here are some interesting facts:
+            </div>
+            <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+              {currentFact}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -315,7 +410,9 @@ export default function TimetablePage() {
         </svg>
       </Link>
       
-      <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">Timetable</div>
+      <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
+        <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
+      </div>
 
       <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
         <div className="h-full overflow-auto">

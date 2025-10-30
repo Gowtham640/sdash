@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import LiquidEther from "@/components/LiquidEther";
 import { Eye, EyeOff } from "lucide-react";
+import { storePortalPassword } from "@/lib/passwordStorage";
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -79,27 +80,41 @@ export default function AuthPage() {
         data.data.session.refresh_token
       );
       localStorage.setItem("user", JSON.stringify(data.data.user));
+      
+      // Store portal password securely for session renewal
+      const passwordStored = storePortalPassword(password);
+      if (!passwordStored) {
+        console.error('[Auth Page] Failed to store password!');
+        setError(
+          'Authentication successful, but failed to save credentials. ' +
+          'Please check if cookies/storage are enabled in your browser settings.'
+        );
+        setIsLoading(false);
+        return;
+      }
+      console.log('[Auth Page] Password stored and verified successfully');
 
       setIsSuccess(true);
 
-      // Trigger background data prefetch (don't wait for it)
-      console.log("[Auth Page] Triggering background data prefetch...");
-      fetch("/api/data/prefetch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          access_token: data.data.session.access_token
-        })
-      })
-        .then(res => res.json())
-        .then(result => {
-          console.log("[Auth Page] Prefetch triggered:", result.message);
-        })
-        .catch(err => {
-          console.log("[Auth Page] Prefetch error (non-critical):", err);
-        });
+      // DISABLED: Trigger background data prefetch (don't wait for it)
+      // Prefetch disabled to prevent duplicate requests conflicting with dashboard load
+      // console.log("[Auth Page] Triggering background data prefetch...");
+      // fetch("/api/data/prefetch", {
+      //   method: "POST",
+      //   headers: { "Content-Type": "application/json" },
+      //   body: JSON.stringify({
+      //     access_token: data.data.session.access_token
+      //   })
+      // })
+      //   .then(res => res.json())
+      //   .then(result => {
+      //     console.log("[Auth Page] Prefetch triggered:", result.message);
+      //   })
+      //   .catch(err => {
+      //     console.log("[Auth Page] Prefetch error (non-critical):", err);
+      //   });
 
-      // Redirect to dashboard immediately (prefetch happens in background)
+      // Redirect to dashboard immediately (dashboard will fetch data normally)
       setTimeout(() => {
         console.log("[Auth Page] Redirecting to dashboard...");
         router.push("/dashboard");

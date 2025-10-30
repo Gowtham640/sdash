@@ -76,18 +76,24 @@ export const getDayOrderStatsForDateRange = (
         const eventDate = parseDate(event.date);
         const normalizedEventDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
         
-        // Skip holidays and days off
+        // Skip holidays and days off - check both portal markers ("-", "DO -") and our calendar markers ("Holiday")
+        // This includes Sundays and other non-class days from the portal
         const isHoliday = event.day_order === "Holiday" || 
                          event.day_order === "-" || 
                          event.day_order === "DO -" ||
                          event.content?.toLowerCase().includes('holiday');
+        
+        // Skip if it's a holiday (including Sundays and other non-class days)
+        if (isHoliday) {
+          console.log(`[DEBUG] Skipping holiday/non-class day: ${event.date} with day_order: "${event.day_order}"`);
+          return;
+        }
         
         // Use proper date comparison (inclusive range)
         // Check if event date is within the range (inclusive)
         // Only count if it's a valid day order (not a holiday)
         if (normalizedEventDate.getTime() >= normalizedStart.getTime() && 
             normalizedEventDate.getTime() <= normalizedEnd.getTime() &&
-            !isHoliday && 
             event.day_order.startsWith('DO ')) {
           
           const doNumber = parseInt(event.day_order.split(' ')[1]);

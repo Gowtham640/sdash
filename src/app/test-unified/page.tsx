@@ -1,15 +1,14 @@
 'use client'
 
 import { useState } from 'react';
-import { useUser } from '@/contexts/UserContext';
 
 interface UnifiedDataResponse {
   success: boolean;
   data?: {
-    attendance?: any;
-    marks?: any;
-    timetable?: any;
-    calendar?: any;
+    attendance?: Record<string, unknown>;
+    marks?: Record<string, unknown>;
+    timetable?: Record<string, unknown>;
+    calendar?: Record<string, unknown>;
   };
   metadata?: {
     generated_at: string;
@@ -28,8 +27,11 @@ export default function TestUnifiedPage() {
   const [data, setData] = useState<UnifiedDataResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<any>(null);
-  const { email, password, isAuthenticated } = useUser();
+  const [testResults, setTestResults] = useState<Record<string, unknown> | null>(null);
+  // Get email and password from localStorage since UserContext is not available
+  const email = typeof window !== 'undefined' ? localStorage.getItem('user_email') || '' : '';
+  const password = typeof window !== 'undefined' ? localStorage.getItem('user_password') || '' : '';
+  const isAuthenticated = typeof window !== 'undefined' ? !!localStorage.getItem('user_email') : false;
 
   const testUnifiedEndpoint = async () => {
     if (!email || !password) {
@@ -82,7 +84,7 @@ export default function TestUnifiedPage() {
 
     try {
       const endpoints = ['attendance', 'marks', 'timetable', 'calender'];
-      const results: any = {};
+      const results: Record<string, unknown> = {};
       
       for (const endpoint of endpoints) {
         const startTime = Date.now();
@@ -161,31 +163,34 @@ export default function TestUnifiedPage() {
               <div>
                 <h3 className="text-xl font-semibold mb-3">Individual Endpoints Performance:</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {Object.entries(testResults.results).map(([endpoint, result]: [string, any]) => (
+                  {testResults.results && typeof testResults.results === 'object' ? Object.entries(testResults.results as Record<string, unknown>).map(([endpoint, result]) => {
+                    const typedResult = result as { success?: boolean; duration?: number; dataSize?: number; error?: string };
+                    return (
                     <div key={endpoint} className="bg-gray-800 p-4 rounded">
                       <h4 className="font-semibold capitalize">{endpoint}</h4>
                       <p className="text-sm">
-                        <span className={result.success ? 'text-green-400' : 'text-red-400'}>
-                          {result.success ? '✓ Success' : '✗ Failed'}
+                        <span className={typedResult.success ? 'text-green-400' : 'text-red-400'}>
+                          {typedResult.success ? '✓ Success' : '✗ Failed'}
                         </span>
                       </p>
-                      {result.duration && (
+                      {typedResult.duration && (
                         <p className="text-sm text-gray-400">
-                          Duration: {result.duration}s
+                          Duration: {typedResult.duration}s
                         </p>
                       )}
-                      {result.dataSize && (
+                      {typedResult.dataSize && (
                         <p className="text-sm text-gray-400">
-                          Size: {result.dataSize} bytes
+                          Size: {typedResult.dataSize} bytes
                         </p>
                       )}
-                      {result.error && (
+                      {typedResult.error && (
                         <p className="text-sm text-red-400">
-                          Error: {result.error}
+                          Error: {typedResult.error}
                         </p>
                       )}
                     </div>
-                  ))}
+                  );
+                  }) : null}
                 </div>
               </div>
             ) : (
@@ -194,15 +199,15 @@ export default function TestUnifiedPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <div className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold">Duration</h4>
-                    <p className="text-lg font-bold text-blue-400">{testResults.duration}s</p>
+                    <p className="text-lg font-bold text-blue-400">{(testResults.duration as number) || 0}s</p>
                   </div>
                   <div className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold">Success Rate</h4>
-                    <p className="text-lg font-bold text-green-400">{testResults.successRate}</p>
+                    <p className="text-lg font-bold text-green-400">{(testResults.successRate as string) || 'N/A'}</p>
                   </div>
                   <div className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold">Data Types</h4>
-                    <p className="text-lg font-bold text-purple-400">{testResults.successfulDataTypes}/{testResults.totalDataTypes}</p>
+                    <p className="text-lg font-bold text-purple-400">{(testResults.successfulDataTypes as number) || 0}/{(testResults.totalDataTypes as number) || 0}</p>
                   </div>
                 <div className="bg-gray-800 p-4 rounded">
                   <h4 className="font-semibold">Cached</h4>
@@ -217,7 +222,7 @@ export default function TestUnifiedPage() {
                 <div className="bg-gray-800 p-4 rounded">
                   <h4 className="font-semibold mb-2">Available Data Types:</h4>
                   <div className="flex flex-wrap gap-2">
-                    {testResults.dataTypes.map((type: string) => (
+                    {((testResults.dataTypes as string[]) || []).map((type: string) => (
                       <span key={type} className="bg-blue-600 px-3 py-1 rounded-full text-sm">
                         {type}
                       </span>
@@ -243,26 +248,29 @@ export default function TestUnifiedPage() {
             <div className="mb-4">
               <h3 className="text-lg font-semibold mb-2">Data Summary:</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {data.data && Object.entries(data.data).map(([type, typeData]: [string, any]) => (
+                {data.data && typeof data.data === 'object' ? Object.entries(data.data as Record<string, unknown>).map(([type, typeData]) => {
+                  const typedTypeData = typeData as { success?: boolean; count?: number; error?: string };
+                  return (
                   <div key={type} className="bg-gray-800 p-4 rounded">
                     <h4 className="font-semibold capitalize mb-2">{type}</h4>
                     <p className="text-sm">
-                      <span className={typeData.success ? 'text-green-400' : 'text-red-400'}>
-                        {typeData.success ? '✓ Available' : '✗ Failed'}
+                      <span className={typedTypeData.success ? 'text-green-400' : 'text-red-400'}>
+                        {typedTypeData.success ? '✓ Available' : '✗ Failed'}
                       </span>
                     </p>
-                    {typeData.count && (
+                    {typedTypeData.count && (
                       <p className="text-sm text-gray-400">
-                        Count: {typeData.count}
+                        Count: {typedTypeData.count}
                       </p>
                     )}
-                    {typeData.error && (
+                    {typedTypeData.error && (
                       <p className="text-sm text-red-400">
-                        Error: {typeData.error}
+                        Error: {typedTypeData.error}
                       </p>
                     )}
                   </div>
-                ))}
+                );
+                }) : null}
               </div>
             </div>
 

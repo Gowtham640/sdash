@@ -6,6 +6,8 @@ import Link from 'next/link';
 import LiquidEther from "@/components/LiquidEther";
 import { Calendar } from "@/components/ui/calendar";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
+import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRandomFact } from "@/lib/randomFacts";
 
 interface CalendarEvent {
   date: string;
@@ -22,6 +24,7 @@ export default function CalendarPage() {
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [error, setError] = useState<string | null>(null);
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
@@ -62,6 +65,17 @@ export default function CalendarPage() {
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Rotate facts every 8 seconds while loading
+  useEffect(() => {
+    if (!loading) return;
+    
+    const interval = setInterval(() => {
+      setCurrentFact(getRandomFact());
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   // Auto-scroll to current date when data loads
   useEffect(() => {
@@ -186,10 +200,7 @@ export default function CalendarPage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          access_token,
-          force_refresh: forceRefresh
-        })
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const result = await response.json();
@@ -358,6 +369,14 @@ export default function CalendarPage() {
       <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-8 sm:pt-9 md:pt-9 lg:pt-10 gap-10 sm:gap-12 md:gap-14 lg:gap-16">
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora">Loading calendar data...</div>
+        <div className="max-w-2xl px-6">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
+            Meanwhile, here are some interesting facts:
+          </div>
+          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+            {currentFact}
+          </div>
+        </div>
       </div>
     );
   }
@@ -407,10 +426,12 @@ export default function CalendarPage() {
         </svg>
       </Link>
       
-      <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
+      <div className="flex flex-col items-center gap-4">
+        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
         <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
-          Today's Date: {getCurrentDateString()} 
+          Today&apos;s Date: {getCurrentDateString()} 
         </div>
+      </div>
 
         <div className="relative p-3 sm:p-4 md:p-4.5 lg:p-5 z-10 w-[95vw] sm:w-[92vw] md:w-[90vw] lg:w-[90vw] h-[65vh] sm:h-[68vh] md:h-[69vh] lg:h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center overflow-y-auto">
           <div 

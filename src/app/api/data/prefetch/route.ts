@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dataCache } from "@/lib/dataCache";
-import { spawn } from "child_process";
+import { callBackendScraper } from '@/lib/scraperClient';
 
 /**
  * Background data prefetch endpoint
@@ -61,7 +61,10 @@ export async function POST(request: NextRequest) {
         throw new Error("Invalid token format");
       }
 
-      user_email = decoded.email || decoded.sub;
+      // Safely extract email from decoded token
+      const decodedEmail = decoded.email;
+      const decodedSub = decoded.sub;
+      user_email = (typeof decodedEmail === 'string' ? decodedEmail : null) || (typeof decodedSub === 'string' ? decodedSub : '') || '';
 
       if (!user_email) {
         throw new Error("Missing user email in token");
@@ -128,8 +131,11 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
     const result = await callPythonUnifiedData(email);
 
     if (result.success) {
-      result.metadata.cached_at = Date.now();
-      dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minute TTL
+      const resultWithMetadata = result as { metadata?: { cached_at?: number } };
+      if (resultWithMetadata.metadata) {
+        resultWithMetadata.metadata.cached_at = Date.now();
+      }
+      dataCache.set(cacheKey, result, 3 * 60 * 60 * 1000); // 3 hour TTL
       console.log(`[Prefetch] ✅ Background fetch completed and cached for ${email}`);
     } else {
       console.error(`[Prefetch] ❌ Background fetch failed for ${email}:`, result.error);
@@ -141,111 +147,15 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
 }
 
 /**
- * Call Python scraper to get all data using existing session
+ * Call backend scraper to get all data using HTTP API
+ * Note: This uses get_all_data (fallback for prefetch)
  */
 async function callPythonUnifiedData(email: string): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      console.error("[Prefetch] Python scraper timeout after 60 seconds");
-      resolve({
-        success: false,
-        error: "Request timeout after 60 seconds"
-      });
-    }, 60000); // 60 second timeout
-
-    try {
-      console.log(`[Prefetch] Spawning Python scraper for: ${email}`);
-
-      const pythonProcess = spawn("python", ["python-scraper/api_wrapper.py"], {
-        cwd: process.cwd(),
-        shell: true,
-      });
-
-      let outputData = "";
-      let errorData = "";
-
-      // Prepare input payload (no password - will use existing session)
-      const payload = JSON.stringify({
-        action: "get_all_data",
-        email,
-        force_refresh: false
-      });
-
-      console.log(`[Prefetch] Sending payload to Python:`, payload.substring(0, 100));
-
-      // Send payload to Python process
-      pythonProcess.stdin.write(payload);
-      pythonProcess.stdin.end();
-
-      // Capture stdout
-      pythonProcess.stdout.on("data", (data) => {
-        const chunk = data.toString();
-        outputData += chunk;
-        console.log(`[Prefetch] Python stdout: ${chunk.substring(0, 200)}`);
-      });
-
-      // Capture stderr for logging
-      pythonProcess.stderr.on("data", (data) => {
-        const chunk = data.toString();
-        errorData += chunk;
-        console.error(`[Prefetch] Python stderr: ${chunk.trim()}`);
-      });
-
-      // Handle process completion
-      pythonProcess.on("close", (code) => {
-        clearTimeout(timeout);
-
-        console.log(`[Prefetch] Python process closed with code: ${code}`);
-
-        if (code !== 0) {
-          console.error(`[Prefetch] Python process failed with exit code ${code}`);
-          resolve({
-            success: false,
-            error: `Python process failed with exit code ${code}`
-          });
-          return;
-        }
-
-        // Parse Python output
-        try {
-          // Extract JSON from output (in case there's extra logging)
-          const jsonMatch = outputData.match(/\{[\s\S]*\}/);
-          const jsonString = jsonMatch ? jsonMatch[0] : outputData;
-
-          console.log(`[Prefetch] Parsing JSON response...`);
-          const result = JSON.parse(jsonString);
-
-          console.log(`[Prefetch] Success: ${result.success}`);
-          resolve(result);
-
-        } catch (parseError) {
-          console.error(`[Prefetch] Failed to parse Python output:`, parseError);
-          resolve({
-            success: false,
-            error: "Failed to parse Python response"
-          });
-        }
-      });
-
-      // Handle process errors
-      pythonProcess.on("error", (error) => {
-        clearTimeout(timeout);
-        console.error(`[Prefetch] Python process error:`, error);
-        resolve({
-          success: false,
-          error: `Python process error: ${error.message}`
-        });
-      });
-
-    } catch (error) {
-      clearTimeout(timeout);
-      console.error(`[Prefetch] Exception spawning Python:`, error);
-      resolve({
-        success: false,
-        error: `Exception: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
+  const result = await callBackendScraper('get_all_data', {
+    email,
+    force_refresh: false,
   });
+  return result as unknown as Record<string, unknown>;
 }
 
 /**

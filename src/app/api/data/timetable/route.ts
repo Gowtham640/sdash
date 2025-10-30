@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
+import { callBackendScraper } from '@/lib/scraperClient';
 
 // In-memory cache for timetable data
 const timetableCache = new Map();
 const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 interface TimetableCacheEntry {
-  data: any;
+  data: Record<string, unknown>;
   timestamp: number;
 }
 
@@ -42,71 +41,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    console.log('[TIMETABLE API] Spawning Python process...');
+    console.log('[TIMETABLE API] Calling backend scraper...');
     
-    const pythonProcess = spawn('python', ['api_wrapper.py'], {
-      cwd: path.join(process.cwd(), 'python-scraper'),
-      stdio: ['pipe', 'pipe', 'pipe']
+    const result = await callBackendScraper('get_timetable_data', {
+      email,
+      password,
     });
 
-    // Prepare input data
-    const inputData = {
-      action: 'get_timetable_data',
-      email: email,
-      password: password
-    };
-
-    console.log('[TIMETABLE API] Sending input to Python:', inputData);
-
-    // Send input to Python process
-    pythonProcess.stdin.write(JSON.stringify(inputData));
-    pythonProcess.stdin.end();
-
-    // Collect output
-    let stdout = '';
-    let stderr = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      stderr += data.toString();
-      console.log('[TIMETABLE API] Python stderr:', data.toString());
-    });
-
-    // Wait for process to complete
-    const exitCode = await new Promise<number>((resolve) => {
-      pythonProcess.on('close', (code) => {
-        console.log('[TIMETABLE API] Python process exited with code:', code);
-        resolve(code || 0);
-      });
-    });
-
-    console.log('[TIMETABLE API] Python stdout:', stdout);
-    console.log('[TIMETABLE API] Python stderr:', stderr);
-
-    if (exitCode !== 0) {
-      console.error('[TIMETABLE API] Python process failed with exit code:', exitCode);
-      return NextResponse.json(
-        { success: false, error: `Python process failed with exit code ${exitCode}` },
-        { status: 500 }
-      );
-    }
-
-    // Parse Python output
-    let result;
-    try {
-      result = JSON.parse(stdout);
-      console.log('[TIMETABLE API] Parsed result:', result);
-    } catch (parseError) {
-      console.error('[TIMETABLE API] Failed to parse Python output:', parseError);
-      console.error('[TIMETABLE API] Raw stdout:', stdout);
-      return NextResponse.json(
-        { success: false, error: 'Failed to parse Python output' },
-        { status: 500 }
-      );
-    }
+    console.log('[TIMETABLE API] Backend response success:', result.success);
 
     // Cache successful results
     if (result.success && result.data) {

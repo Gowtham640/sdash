@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
+import { callBackendScraper } from '@/lib/scraperClient';
 
 // ============================================================================
 // MEMORY CACHE CONFIGURATION
 // ============================================================================
 
 interface CacheEntry {
-  data: any;
+  data: Record<string, unknown>;
   timestamp: number;
   expires: number;
 }
@@ -15,7 +14,7 @@ interface CacheEntry {
 const memoryCache = new Map<string, CacheEntry>();
 const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
-function getCachedResponse(email: string): any | null {
+function getCachedResponse(email: string): Record<string, unknown> | null {
   const cacheKey = `calendar_${email}`;
   const cached = memoryCache.get(cacheKey);
   
@@ -32,7 +31,7 @@ function getCachedResponse(email: string): any | null {
   return null;
 }
 
-function setCachedResponse(email: string, data: any): void {
+function setCachedResponse(email: string, data: Record<string, unknown>): void {
   const cacheKey = `calendar_${email}`;
   memoryCache.set(cacheKey, {
     data,
@@ -96,7 +95,7 @@ export async function GET(request: NextRequest) {
     
     // Cache the result if successful
     if (result && typeof result === 'object' && 'success' in result && result.success) {
-      setCachedResponse(email, result);
+      setCachedResponse(email, result as unknown as Record<string, unknown>);
     }
     
     console.log('[API] Python scraper completed');
@@ -117,108 +116,9 @@ export async function GET(request: NextRequest) {
 }
 
 async function callPythonCalendarFunction(email: string, password: string, forceRefresh: boolean = false) {
-  return new Promise((resolve, reject) => {
-    console.log('[API] Starting Python process...');
-    
-    const pythonScriptPath = path.join(process.cwd(), 'python-scraper', 'api_wrapper.py');
-    console.log('[API] Python script path:', pythonScriptPath);
-    
-    const pythonProcess = spawn('python', ['api_wrapper.py'], {
-      cwd: path.join(process.cwd(), 'python-scraper'),
-      env: { ...process.env }
-    });
-
-    let output = '';
-    let errorOutput = '';
-    let resolved = false;
-
-    // Set timeout for Python process (2 minutes)
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        console.log('[API] Python process timeout');
-        pythonProcess.kill();
-        reject(new Error('Python process timeout after 2 minutes'));
-      }
-    }, 120000);
-
-    // Send input data to Python
-    const inputData = JSON.stringify({
-      action: 'get_calendar_data',
-      email: email,
-      password: password,
-      force_refresh: forceRefresh
-    });
-    
-    console.log('[API] Sending input to Python:', inputData);
-    pythonProcess.stdin.write(inputData);
-    pythonProcess.stdin.end();
-
-    pythonProcess.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      console.log('[API] Python stdout chunk:', chunk);
-      output += chunk;
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      const chunk = data.toString();
-      console.log('[API] Python stderr:', chunk);
-      errorOutput += chunk;
-    });
-
-    pythonProcess.on('close', (code) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      
-      console.log('[API] Python process closed with code:', code);
-      console.log('[API] Python output:', output);
-      console.log('[API] Python error output:', errorOutput);
-      
-      if (code === 0) {
-        try {
-          // Handle multiple JSON objects in output
-          const lines = output.trim().split('\n');
-          let result = null;
-          
-          // Find the last valid JSON object
-          for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i].trim();
-            if (line && line.startsWith('{') && line.endsWith('}')) {
-              try {
-                result = JSON.parse(line);
-                break;
-              } catch (e) {
-                continue;
-              }
-            }
-          }
-          
-          if (result) {
-            console.log('[API] Parsed result:', result);
-            resolve(result);
-          } else {
-            console.error('[API] No valid JSON found in output');
-            console.error('[API] Raw output:', output);
-            reject(new Error('No valid JSON response from Python'));
-          }
-        } catch (parseError) {
-          console.error('[API] JSON parse error:', parseError);
-          console.error('[API] Raw output:', output);
-          reject(new Error(`Failed to parse Python output: ${parseError}`));
-        }
-      } else {
-        console.error('[API] Python process failed');
-        reject(new Error(`Python process failed with code ${code}: ${errorOutput}`));
-      }
-    });
-
-    pythonProcess.on('error', (error) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      
-      console.error('[API] Python process error:', error);
-      reject(new Error(`Failed to start Python process: ${error}`));
-    });
+  return await callBackendScraper('get_calendar_data', {
+    email,
+    password,
+    force_refresh: forceRefresh,
   });
 }
