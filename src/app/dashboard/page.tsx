@@ -281,7 +281,7 @@ export default function Dashboard() {
       console.log("[Dashboard] 🔍 Checking long-term cache...");
       const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
       const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasLongTermCache = isLongTermCacheValid() && cachedTimetable && cachedCalendar;
+      const hasLongTermCache = !!(isLongTermCacheValid() && cachedTimetable && cachedCalendar);
 
       if (hasLongTermCache) {
         const daysLeft = getLongTermCacheDaysRemaining();

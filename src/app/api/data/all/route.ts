@@ -372,16 +372,16 @@ export async function POST(request: NextRequest) {
  * Call backend scraper to get only attendance and marks (timetable/calendar from cache)
  */
 async function callPythonAttendanceMarksOnly(email: string, user_id: string, password?: string): Promise<Record<string, unknown>> {
-  console.log(`[API /data/all] 🔄 Calling backend: get_attendance_marks_data`);
+  console.log(`[API /data/all] 🔄 Calling backend: get_all_data (extracting attendance/marks only)`);
   console.log(`[API /data/all]   - Email: ${email}`);
   console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
   
-  // Try to call the optimized endpoint that only fetches attendance/marks
-  // If backend doesn't support it yet, fall back to get_all_data
+  // Call get_all_data but extract only attendance and marks
   const backendCallStart = Date.now();
-  const result = await callBackendScraper('get_attendance_marks_data', {
+  const result = await callBackendScraper('get_all_data', {
     email,
-    ...(password ? { password } : {}), // Only include password if provided
+    ...(password ? { password } : {}),
+    force_refresh: false,
   });
   const backendCallDuration = Date.now() - backendCallStart;
   
@@ -392,20 +392,31 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
   console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
   console.log(`[API /data/all]   - Error: ${resultTyped.error || "none"}`);
 
-  // If backend doesn't support this action, fall back to get_dynamic_data (which fetches attendance/marks)
-  if (!resultTyped.success && typeof resultTyped.error === 'string' && resultTyped.error.includes('Unknown action')) {
-    console.warn(`[API /data/all] ⚠️  Backend doesn't support get_attendance_marks_data`);
-    console.log(`[API /data/all] 🔄 Falling back to get_dynamic_data`);
-    return await callPythonDynamicData(email, user_id, password);
-  }
-
-  // Update user's semester in database if available (fire and forget)
-  const attendanceData = resultTyped.data as { attendance?: { semester?: number } } | undefined;
-  if (resultTyped.success && attendanceData?.attendance?.semester) {
-    console.log(`[API /data/all] 📝 Semester found in response: ${attendanceData.attendance.semester}`);
-    updateSemesterInDatabase(user_id, attendanceData.attendance.semester);
-  } else if (resultTyped.success) {
-    console.log(`[API /data/all] 📝 No semester data in attendance response`);
+  // Extract only attendance and marks from full response
+  if (resultTyped.success && resultTyped.data) {
+    const fullData = resultTyped.data as { attendance?: unknown; marks?: unknown; timetable?: unknown; calendar?: unknown };
+    const extractedResult = {
+      success: true,
+      data: {
+        attendance: fullData.attendance,
+        marks: fullData.marks,
+      },
+      metadata: {
+        attendance_fresh: true,
+        marks_fresh: true,
+        timetable_cached: true, // From client cache
+        calendar_cached: true,  // From client cache
+      }
+    };
+    
+    // Update user's semester in database if available (fire and forget)
+    const attendanceData = fullData.attendance as { semester?: number } | undefined;
+    if (attendanceData?.semester) {
+      console.log(`[API /data/all] 📝 Semester found in response: ${attendanceData.semester}`);
+      updateSemesterInDatabase(user_id, attendanceData.semester);
+    }
+    
+    return extractedResult as unknown as Record<string, unknown>;
   }
 
   return result as unknown as Record<string, unknown>;
