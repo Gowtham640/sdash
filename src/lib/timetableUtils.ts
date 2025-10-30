@@ -88,15 +88,21 @@ export const getDayOrderStats = (calendarData: any[]): DayOrderStats => {
       try {
         const eventDate = parseDateLocal(event.date);
         
-        // Skip holidays and days off
+        // Skip holidays and days off - check both portal markers ("-", "DO -") and our calendar markers ("Holiday")
+        // This includes Sundays and other non-class days from the portal
         const isHoliday = event.day_order === "Holiday" || 
                          event.day_order === "-" || 
                          event.day_order === "DO -" ||
                          event.content?.toLowerCase().includes('holiday');
         
+        // Skip if it's a holiday (including Sundays and other non-class days)
+        if (isHoliday) {
+          return;
+        }
+        
         // Only count events from current date onwards and before/on end date
         // Only count if it's a valid day order (not a holiday)
-        if (eventDate >= currentDate && eventDate <= endDate && !isHoliday && event.day_order.startsWith('DO ')) {
+        if (eventDate >= currentDate && eventDate <= endDate && event.day_order.startsWith('DO ')) {
           const doNumber = parseInt(event.day_order.split(' ')[1]);
           if (doNumber >= 1 && doNumber <= 5) {
             stats[doNumber]++;

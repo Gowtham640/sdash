@@ -435,6 +435,76 @@ def extract_semester_from_html(html_content):
         return 1  # Default to semester 1
 
 
+def mark_saturdays_as_holidays(calendar_data, semester):
+    """
+    Mark holidays for students not in semester 1:
+    - Saturdays after 25/10/2025 are holidays (for semester != 1)
+    - All days after 10/11/2025 are holidays (last working day)
+    In semester 1, all days remain as normal
+    """
+    if semester == 1:
+        print("[CALENDAR] Semester 1 - keeping calendar as is (no modification)", file=sys.stderr)
+        return calendar_data
+    
+    print(f"[CALENDAR] Semester {semester} - marking holidays (Saturdays after 25/10, all days after 10/11)", file=sys.stderr)
+    
+    # Import datetime for date manipulation
+    from datetime import datetime, timedelta
+    
+    # Define cutoff dates
+    saturday_cutoff_date = datetime(2025, 10, 25)  # 25/10/2025 - Saturday cutoff
+    last_working_date = datetime(2025, 11, 10)  # 10/11/2025 - Last working day
+    
+    modified_events = []
+    
+    for event in calendar_data:
+        try:
+            # Parse date from DD/MM/YYYY format
+            event_date_str = event.get('date', '')
+            if not event_date_str:
+                modified_events.append(event)
+                continue
+            
+            # Parse the date
+            day, month, year = map(int, event_date_str.split('/'))
+            event_date = datetime(year, month, day)
+            
+            # Get day of week (0=Monday, 6=Sunday)
+            day_of_week = event_date.weekday()
+            
+            # Check if already marked as holiday
+            is_holiday = (event.get('day_order') == '-' or 
+                         event.get('day_order') == 'DO -' or 
+                         'holiday' in event.get('content', '').lower())
+            
+            # Check conditions for marking as holiday
+            # Note: Saturday is 5 in weekday() (0=Monday, 5=Saturday, 6=Sunday)
+            is_saturday = day_of_week == 5
+            is_saturday_after_cutoff = is_saturday and event_date >= saturday_cutoff_date
+            is_after_last_working_day = event_date > last_working_date
+            
+            # Mark as holiday if:
+            # 1. It's a Saturday after 25/10/2025, OR
+            # 2. It's any day after 10/11/2025 (last working day)
+            # 3. Not already marked as holiday
+            if not is_holiday and (is_saturday_after_cutoff or is_after_last_working_day):
+                reason = 'post-cutoff (after 10/11/2025)' if is_after_last_working_day else 'Saturday after 25/10/2025'
+                print(f"[CALENDAR] Marking {event_date_str} ({reason}) as holiday", file=sys.stderr)
+                modified_event = event.copy()
+                modified_event['content'] = "Holiday"
+                modified_event['day_order'] = "Holiday"
+                modified_events.append(modified_event)
+            else:
+                modified_events.append(event)
+                
+        except Exception as error:
+            # If date parsing fails, return event as-is
+            print(f"[CALENDAR] Error parsing date for event: {event.get('date', 'unknown')}, error: {error}", file=sys.stderr)
+            modified_events.append(event)
+    
+    return modified_events
+
+
 def create_attendance_json(attendance_data, semester=1):
     """Create JSON structure with attendance data"""
     
@@ -1501,6 +1571,30 @@ def api_get_all_data(email, password=None, force_refresh=False):
                 "count": 0
             }
         
+        # Extract semester from attendance data and apply holiday logic to calendar
+        semester = 1  # Default to semester 1
+        if results.get('attendance', {}).get('success', False):
+            attendance_data = results['attendance'].get('data', {})
+            if isinstance(attendance_data, dict):
+                semester = attendance_data.get('metadata', {}).get('semester', 1)
+            # Also check the direct semester field
+            if 'semester' in results.get('attendance', {}):
+                semester = results['attendance']['semester']
+        
+        print(f"[UNIFIED API] Extracted semester from attendance: {semester}", file=sys.stderr)
+        
+        # Apply semester-based holiday logic to calendar data
+        if results.get('calendar', {}).get('success', False) and semester != 1:
+            calendar_data = results['calendar'].get('data', [])
+            if calendar_data:
+                print(f"[UNIFIED API] Applying semester-based holiday logic to calendar...", file=sys.stderr)
+                modified_calendar_data = mark_saturdays_as_holidays(calendar_data, semester)
+                # Update the calendar result with modified data
+                results['calendar']['data'] = modified_calendar_data
+                results['calendar']['semester'] = semester
+                results['calendar']['holiday_logic_applied'] = True
+                print(f"[UNIFIED API] Calendar updated with semester-based holidays", file=sys.stderr)
+        
         # Calculate success rate
         success_rate = f"{(successful_data_types / total_data_types) * 100:.1f}%"
         
@@ -1520,6 +1614,7 @@ def api_get_all_data(email, password=None, force_refresh=False):
                 "generated_at": datetime.now().isoformat(),
                 "source": "SRM Academia Portal - Unified Data (Phase 1+ Optimized)",
                 "email": email,
+                "semester": semester,
                 "total_data_types": total_data_types,
                 "successful_data_types": successful_data_types,
                 "success_rate": success_rate,
