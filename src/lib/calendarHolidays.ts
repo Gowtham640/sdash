@@ -10,8 +10,8 @@ interface CalendarEvent {
 
 /**
  * Mark holidays for students not in semester 1:
- * - Saturdays after 25/10/2025 are holidays
- * - All days after 10/11/2025 are holidays (last working day)
+ * - Saturdays on or after 25/10/2025 are holidays
+ * - All days after 10/11/2025 are holidays (last working day is 10/11/2025)
  * In semester 1, all days remain as normal
  */
 export function markSaturdaysAsHolidays(
@@ -24,16 +24,21 @@ export function markSaturdaysAsHolidays(
     return calendarData;
   }
   
-  // Semester 2+: Mark Saturdays after 25/10/2025 AND all days after 10/11/2025 as holidays
-  console.log(`[Calendar] Semester ${semester} - marking holidays (Saturdays after 25/10, all days after 10/11)`);
+  // Semester 2+: Mark Saturdays on/after 25/10/2025 AND all days after 10/11/2025 as holidays
+  console.log(`[Calendar] Semester ${semester} - marking holidays (Saturdays on/after 25/10, all days after 10/11)`);
+  console.log(`[Calendar] Processing ${calendarData.length} calendar events`);
   
   // Define cutoff dates
-  const saturdayCutoffDate = new Date(2025, 9, 25); // 25/10/2025 - Saturday cutoff
+  // Note: JavaScript Date months are 0-indexed (9 = October, 10 = November)
+  const saturdayCutoffDate = new Date(2025, 9, 25); // 25/10/2025 - Saturday cutoff (inclusive)
   saturdayCutoffDate.setHours(0, 0, 0, 0);
   
-  const lastWorkingDate = new Date(2025, 10, 10); // 10/11/2025 - Last working day
+  const lastWorkingDate = new Date(2025, 10, 10); // 10/11/2025 - Last working day (inclusive, so days after this are holidays)
   lastWorkingDate.setHours(0, 0, 0, 0);
   
+  console.log(`[Calendar] Cutoff dates: Saturday cutoff = ${saturdayCutoffDate.toLocaleDateString('en-GB')}, Last working day = ${lastWorkingDate.toLocaleDateString('en-GB')}`);
+  
+  let holidaysMarked = 0;
   const modifiedEvents = calendarData.map(event => {
     try {
       // Parse date from DD/MM/YYYY format
@@ -57,8 +62,9 @@ export function markSaturdaysAsHolidays(
       // 2. It's any day after 10/11/2025 (last working day)
       // 3. Not already marked as holiday
       if (!isHoliday && (isSaturdayAfterCutoff || isAfterLastWorkingDay)) {
-        const reason = isAfterLastWorkingDay ? 'post-cutoff (after 10/11/2025)' : 'Saturday after 25/10/2025';
-        console.log(`[Calendar] Marking ${event.date} (${reason}) as holiday`);
+        const reason = isAfterLastWorkingDay ? 'post-cutoff (after 10/11/2025)' : 'Saturday on/after 25/10/2025';
+        console.log(`[Calendar] ✓ Marking ${event.date} as holiday (${reason})`);
+        holidaysMarked++;
         return {
           ...event,
           content: "Holiday",
@@ -74,6 +80,7 @@ export function markSaturdaysAsHolidays(
     }
   });
   
+  console.log(`[Calendar] Holiday marking complete: ${holidaysMarked} dates marked as holidays`);
   return modifiedEvents;
 }
 

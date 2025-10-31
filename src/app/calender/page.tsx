@@ -170,9 +170,44 @@ export default function CalendarPage() {
               if (result.data.calendar?.success && result.data.calendar.data) {
                 let calendarEvents = result.data.calendar.data;
                 
-                // Get semester from attendance data
-                const semester = result.data.attendance?.semester || 
-                                 result.data.attendance?.data?.metadata?.semester || 1;
+                // Extract semester from multiple sources with fallbacks
+                let extractedSemester: number | null = null;
+                
+                // 1. Try attendance data first
+                if (result.data.attendance?.semester) {
+                  extractedSemester = result.data.attendance.semester;
+                  console.log('[Calendar] Semester from attendance.semester:', extractedSemester);
+                } else if (result.data.attendance?.data?.metadata?.semester) {
+                  extractedSemester = result.data.attendance.data.metadata.semester;
+                  console.log('[Calendar] Semester from attendance.data.metadata.semester:', extractedSemester);
+                }
+                // 2. Try response metadata
+                else if (result.metadata?.semester) {
+                  extractedSemester = result.metadata.semester;
+                  console.log('[Calendar] Semester from metadata.semester:', extractedSemester);
+                }
+                // 3. Try response root
+                else if ((result as { semester?: number }).semester) {
+                  extractedSemester = (result as { semester?: number }).semester!;
+                  console.log('[Calendar] Semester from root.semester:', extractedSemester);
+                }
+                // 4. Try localStorage cache
+                else {
+                  const cachedSemester = localStorage.getItem('user_semester');
+                  if (cachedSemester) {
+                    extractedSemester = parseInt(cachedSemester, 10);
+                    console.log('[Calendar] Semester from localStorage cache:', extractedSemester);
+                  }
+                }
+                
+                // Default to 1 if no semester found
+                const semester = extractedSemester || 1;
+                
+                // Store semester in localStorage if found
+                if (extractedSemester) {
+                  localStorage.setItem('user_semester', extractedSemester.toString());
+                  console.log('[Calendar] 💾 Stored semester in localStorage:', extractedSemester);
+                }
                 
                 console.log(`[Calendar] User semester: ${semester} (from cache)`);
                 
@@ -227,9 +262,38 @@ export default function CalendarPage() {
           if (cachedResult.success && cachedResult.data.calendar?.success && cachedResult.data.calendar.data) {
             let calendarEvents = cachedResult.data.calendar.data;
             
-            // Get semester from cached attendance data
-            const semester = cachedResult.data.attendance?.semester || 
-                             cachedResult.data.attendance?.data?.metadata?.semester || 1;
+            // Extract semester from multiple sources with fallbacks
+            let extractedSemester: number | null = null;
+            
+            // 1. Try attendance data first
+            if (cachedResult.data.attendance?.semester) {
+              extractedSemester = cachedResult.data.attendance.semester;
+            } else if (cachedResult.data.attendance?.data?.metadata?.semester) {
+              extractedSemester = cachedResult.data.attendance.data.metadata.semester;
+            }
+            // 2. Try response metadata
+            else if (cachedResult.metadata?.semester) {
+              extractedSemester = cachedResult.metadata.semester;
+            }
+            // 3. Try response root
+            else if ((cachedResult as { semester?: number }).semester) {
+              extractedSemester = (cachedResult as { semester?: number }).semester!;
+            }
+            // 4. Try localStorage cache
+            else {
+              const cachedSemester = localStorage.getItem('user_semester');
+              if (cachedSemester) {
+                extractedSemester = parseInt(cachedSemester, 10);
+              }
+            }
+            
+            // Default to 1 if no semester found
+            const semester = extractedSemester || 1;
+            
+            // Store semester in localStorage if found
+            if (extractedSemester) {
+              localStorage.setItem('user_semester', extractedSemester.toString());
+            }
             
             // Mark Saturdays as holidays if not semester 1
             calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
@@ -264,9 +328,44 @@ export default function CalendarPage() {
       if (result.data.calendar?.success && result.data.calendar.data) {
         let calendarEvents = result.data.calendar.data;
         
-        // Get semester from attendance data
-        const semester = result.data.attendance?.semester || 
-                         result.data.attendance?.data?.metadata?.semester || 1;
+        // Extract semester from multiple sources with fallbacks
+        let extractedSemester: number | null = null;
+        
+        // 1. Try attendance data first
+        if (result.data.attendance?.semester) {
+          extractedSemester = result.data.attendance.semester;
+          console.log('[Calendar] Semester from attendance.semester:', extractedSemester);
+        } else if (result.data.attendance?.data?.metadata?.semester) {
+          extractedSemester = result.data.attendance.data.metadata.semester;
+          console.log('[Calendar] Semester from attendance.data.metadata.semester:', extractedSemester);
+        }
+        // 2. Try response metadata
+        else if (result.metadata?.semester) {
+          extractedSemester = result.metadata.semester;
+          console.log('[Calendar] Semester from metadata.semester:', extractedSemester);
+        }
+        // 3. Try response root
+        else if ((result as { semester?: number }).semester) {
+          extractedSemester = (result as { semester?: number }).semester!;
+          console.log('[Calendar] Semester from root.semester:', extractedSemester);
+        }
+        // 4. Try localStorage cache
+        else {
+          const cachedSemester = localStorage.getItem('user_semester');
+          if (cachedSemester) {
+            extractedSemester = parseInt(cachedSemester, 10);
+            console.log('[Calendar] Semester from localStorage cache:', extractedSemester);
+          }
+        }
+        
+        // Default to 1 if no semester found
+        const semester = extractedSemester || 1;
+        
+        // Store semester in localStorage if found
+        if (extractedSemester) {
+          localStorage.setItem('user_semester', extractedSemester.toString());
+          console.log('[Calendar] 💾 Stored semester in localStorage:', extractedSemester);
+        }
         
         console.log(`[Calendar] User semester: ${semester}`);
         
@@ -439,8 +538,8 @@ export default function CalendarPage() {
             className="relative overflow-y-auto p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-[90vw] sm:w-[85vw] md:w-[83vw] lg:w-[80vw] h-[55vh] sm:h-[58vh] md:h-[59vh] lg:h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-2 sm:gap-2.5 md:gap-3 lg:gap-3 justify-start items-center"
           >
             {sortedEvents.map((event, index) => {
-              // Check if it's a holiday based on DO value being "-" or "DO -"
-              const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.content.toLowerCase().includes('holiday');
+              // Check if it's a holiday based on DO value being "-", "DO -", or "Holiday", or content includes "holiday"
+              const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.day_order === "Holiday" || event.content.toLowerCase().includes('holiday');
               
               // Check if it's the current date
               const currentDateStr = getCurrentDateString();

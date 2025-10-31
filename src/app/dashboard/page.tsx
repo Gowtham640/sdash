@@ -7,6 +7,7 @@ import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
+import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { 
   getCachedTimetable, 
   getCachedCalendar, 
@@ -167,8 +168,7 @@ export default function Dashboard() {
     });
 
     // Sort by start time of the time slot
-    console.log('[DEBUG] Before sorting, timeSlots:', timeSlots.map(s => s.time));
-    const sorted = timeSlots.sort((a, b) => {
+    return timeSlots.sort((a, b) => {
       // Extract start time from "HH:MM-HH:MM" format
       const getStartTime = (timeStr: string): number => {
         const startTime = timeStr.split('-')[0]; // Get "HH:MM"
@@ -183,15 +183,10 @@ export default function Dashboard() {
         }
         
         const minutesValue = hours * 60 + minutes;
-        console.log(`[DEBUG] Parsing "${timeStr}" -> start="${startTime}" -> ${minutesValue} minutes (${hours}:${minutes} in 24h)`);
         return minutesValue;
       };
-      const result = getStartTime(a.time) - getStartTime(b.time);
-      console.log(`[DEBUG] Comparing "${a.time}" vs "${b.time}" -> ${result}`);
-      return result;
+      return getStartTime(a.time) - getStartTime(b.time);
     });
-    console.log('[DEBUG] After sorting, timeSlots:', sorted.map(s => s.time));
-    return sorted;
   };
 
   useEffect(() => {
@@ -406,10 +401,12 @@ export default function Dashboard() {
   const processUnifiedData = (result: {
     data: {
       calendar?: { data?: Array<unknown>; success?: { data?: Array<unknown> } } | null;
-      attendance?: { data?: { all_subjects: unknown[] }; success?: { data?: { all_subjects: unknown[] } } } | null;
+      attendance?: { data?: { all_subjects: unknown[]; metadata?: { semester?: number } }; success?: { data?: { all_subjects: unknown[]; metadata?: { semester?: number } } }; semester?: number } | null;
       marks?: { data?: { all_courses: unknown[] }; success?: { data?: { all_courses: unknown[] } } } | null;
       timetable?: { data?: unknown; success?: { data?: unknown } } | null;
     };
+    metadata?: { semester?: number; [key: string]: unknown };
+    semester?: number;
   }) => {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
@@ -418,8 +415,49 @@ export default function Dashboard() {
     // Process calendar data - handle both nested structures
     const calendar = result.data.calendar?.data || result.data.calendar?.success?.data;
     if (calendar && Array.isArray(calendar)) {
-      setCalendarData(calendar as CalendarEvent[]);
-      console.log('[Dashboard] ✅ Calendar data loaded:', calendar.length);
+      // Extract semester from multiple sources with fallbacks
+      let extractedSemester: number | null = null;
+      
+      // 1. Try attendance data first
+      if (result.data.attendance?.semester) {
+        extractedSemester = result.data.attendance.semester;
+        console.log('[Dashboard] Semester from attendance.semester:', extractedSemester);
+      } else if (result.data.attendance?.data?.metadata?.semester) {
+        extractedSemester = result.data.attendance.data.metadata.semester;
+        console.log('[Dashboard] Semester from attendance.data.metadata.semester:', extractedSemester);
+      } 
+      // 2. Try response metadata
+      else if (result.metadata?.semester) {
+        extractedSemester = result.metadata.semester;
+        console.log('[Dashboard] Semester from metadata.semester:', extractedSemester);
+      }
+      // 3. Try response root
+      else if ((result as { semester?: number }).semester) {
+        extractedSemester = (result as { semester?: number }).semester!;
+        console.log('[Dashboard] Semester from root.semester:', extractedSemester);
+      }
+      // 4. Try localStorage cache
+      else {
+        const cachedSemester = localStorage.getItem('user_semester');
+        if (cachedSemester) {
+          extractedSemester = parseInt(cachedSemester, 10);
+          console.log('[Dashboard] Semester from localStorage cache:', extractedSemester);
+        }
+      }
+      
+      // Default to 1 if no semester found
+      const finalSemester = extractedSemester || 1;
+      
+      // Store semester in localStorage if found
+      if (extractedSemester) {
+        localStorage.setItem('user_semester', extractedSemester.toString());
+        console.log('[Dashboard] 💾 Stored semester in localStorage:', extractedSemester);
+      }
+      
+      const modifiedCalendarData = markSaturdaysAsHolidays(calendar as CalendarEvent[], finalSemester);
+      console.log('[Dashboard] Applied holiday logic for semester:', finalSemester);
+      setCalendarData(modifiedCalendarData);
+      console.log('[Dashboard] ✅ Calendar data loaded:', modifiedCalendarData.length);
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
     }
@@ -458,10 +496,31 @@ export default function Dashboard() {
       console.warn('[Dashboard] ⚠️ No timetable data found');
     }
 
-    // Process day order stats
-    if (calendar && Array.isArray(calendar)) {
+    // Process day order stats using modified calendar data
+    const calendarForStats = result.data.calendar?.data || result.data.calendar?.success?.data;
+    if (calendarForStats && Array.isArray(calendarForStats)) {
       try {
-        const stats = getDayOrderStats(calendar);
+        // Extract semester using same logic as above
+        let extractedSemester: number | null = null;
+        
+        if (result.data.attendance?.semester) {
+          extractedSemester = result.data.attendance.semester;
+        } else if (result.data.attendance?.data?.metadata?.semester) {
+          extractedSemester = result.data.attendance.data.metadata.semester;
+        } else if (result.metadata?.semester) {
+          extractedSemester = result.metadata.semester;
+        } else if ((result as { semester?: number }).semester) {
+          extractedSemester = (result as { semester?: number }).semester!;
+        } else {
+          const cachedSemester = localStorage.getItem('user_semester');
+          if (cachedSemester) {
+            extractedSemester = parseInt(cachedSemester, 10);
+          }
+        }
+        
+        const finalSemester = extractedSemester || 1;
+        const modifiedCalendarForStats = markSaturdaysAsHolidays(calendarForStats as CalendarEvent[], finalSemester);
+        const stats = getDayOrderStats(modifiedCalendarForStats);
         setDayOrderStats(stats);
         console.log('[Dashboard] ✅ Day order stats loaded:', stats);
       } catch (err) {
@@ -520,7 +579,6 @@ export default function Dashboard() {
 
   const threeDayDates = getThreeDayDates();
   const todaysTimetable = getTodaysTimetable();
-  console.log('[DEBUG] TodaysTimetable to render:', todaysTimetable.map(s => s.time));
   const currentDayOrder = getCurrentDayOrder();
 
   return (
@@ -546,6 +604,29 @@ export default function Dashboard() {
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
         </div>
+        <button
+          onClick={() => fetchUnifiedData(true)}
+          disabled={isRefreshing || loading}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base flex items-center gap-2"
+          title="Refresh all data from server"
+        >
+          {isRefreshing ? (
+            <>
+              <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Refreshing...
+            </>
+          ) : (
+            <>
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh Cache
+            </>
+          )}
+        </button>
       </div>
 
       {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
