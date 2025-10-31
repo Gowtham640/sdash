@@ -166,7 +166,32 @@ export default function Dashboard() {
       }
     });
 
-    return timeSlots.sort((a, b) => a.time.localeCompare(b.time));
+    // Sort by start time of the time slot
+    console.log('[DEBUG] Before sorting, timeSlots:', timeSlots.map(s => s.time));
+    const sorted = timeSlots.sort((a, b) => {
+      // Extract start time from "HH:MM-HH:MM" format
+      const getStartTime = (timeStr: string): number => {
+        const startTime = timeStr.split('-')[0]; // Get "HH:MM"
+        let [hours, minutes] = startTime.split(':').map(Number);
+        
+        // Convert 12-hour format to 24-hour for proper sorting
+        // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
+        // Times 08:xx onwards are AM (keep as is)
+        // Times 12:xx stay as 12:xx (noon)
+        if (hours < 8 && hours !== 0) {
+          hours += 12; // Convert 1PM-7PM to 13-19
+        }
+        
+        const minutesValue = hours * 60 + minutes;
+        console.log(`[DEBUG] Parsing "${timeStr}" -> start="${startTime}" -> ${minutesValue} minutes (${hours}:${minutes} in 24h)`);
+        return minutesValue;
+      };
+      const result = getStartTime(a.time) - getStartTime(b.time);
+      console.log(`[DEBUG] Comparing "${a.time}" vs "${b.time}" -> ${result}`);
+      return result;
+    });
+    console.log('[DEBUG] After sorting, timeSlots:', sorted.map(s => s.time));
+    return sorted;
   };
 
   useEffect(() => {
@@ -495,6 +520,7 @@ export default function Dashboard() {
 
   const threeDayDates = getThreeDayDates();
   const todaysTimetable = getTodaysTimetable();
+  console.log('[DEBUG] TodaysTimetable to render:', todaysTimetable.map(s => s.time));
   const currentDayOrder = getCurrentDayOrder();
 
   return (
@@ -581,7 +607,7 @@ export default function Dashboard() {
                 key={index}
                 className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
               >
-                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px]">
+                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] whitespace-nowrap">
                   {slot.time}
                 </div>
                 <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold flex-1">
