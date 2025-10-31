@@ -94,6 +94,17 @@ export default function AuthPage() {
       }
       console.log('[Auth Page] Password stored and verified successfully');
 
+      // Clear old cache data on fresh login (Option 1)
+      localStorage.removeItem('unified_data_cache');
+      localStorage.removeItem('unified_data_cache_timestamp');
+      localStorage.removeItem('user_semester'); // Also clear semester cache
+      console.log('[Auth Page] ✅ Cleared previous cache data for fresh fetch');
+
+      // Store login timestamp to track when user logged in (Option 4)
+      const loginTimestamp = Date.now();
+      localStorage.setItem('login_timestamp', loginTimestamp.toString());
+      console.log('[Auth Page] ✅ Stored login timestamp:', loginTimestamp);
+
       setIsSuccess(true);
 
       // DISABLED: Trigger background data prefetch (don't wait for it)
