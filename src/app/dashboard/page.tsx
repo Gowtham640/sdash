@@ -271,12 +271,29 @@ export default function Dashboard() {
       const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
       const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
       
+      // Option 4: Check if cache is from before login (stale cache)
+      const loginTimestamp = localStorage.getItem('login_timestamp');
+      const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+      
+      if (loginTimestamp && cachedTimestamp) {
+        const loginTime = parseInt(loginTimestamp);
+        const cacheTime = parseInt(cachedTimestamp);
+        
+        if (cacheTime < loginTime) {
+          console.log('[Dashboard] 🔄 Cache is from before login, clearing stale cache');
+          console.log(`[Dashboard]   - Login time: ${new Date(loginTime).toISOString()}`);
+          console.log(`[Dashboard]   - Cache time: ${new Date(cacheTime).toISOString()}`);
+          localStorage.removeItem(cacheKey);
+          localStorage.removeItem(cachedTimestampKey);
+        }
+      }
+      
       if (!forceRefresh) {
         const cachedData = localStorage.getItem(cacheKey);
-        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        const updatedCachedTimestamp = localStorage.getItem(cachedTimestampKey);
         
-        if (cachedData && cachedTimestamp) {
-          const age = Date.now() - parseInt(cachedTimestamp);
+        if (cachedData && updatedCachedTimestamp) {
+          const age = Date.now() - parseInt(updatedCachedTimestamp);
           
           if (age < cacheMaxAge) {
             console.log('[Dashboard] ✅ Using browser cache');
