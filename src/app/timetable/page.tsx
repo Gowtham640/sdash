@@ -147,7 +147,7 @@ export default function TimetablePage() {
       console.log("[Timetable] 🔍 Checking long-term cache...");
       const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
       const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasLongTermCache = isLongTermCacheValid() && cachedTimetable && cachedCalendar;
+      const hasLongTermCache = !!(isLongTermCacheValid() && cachedTimetable && cachedCalendar);
 
       if (hasLongTermCache) {
         const daysLeft = getLongTermCacheDaysRemaining();
