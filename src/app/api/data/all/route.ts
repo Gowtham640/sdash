@@ -190,6 +190,24 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Try to get semester from attendance data, fallback to database
+      let semesterFromAttendance: number | null = null;
+      const attendanceDataInResult = resultTyped.data as { attendance?: { semester?: number; data?: { metadata?: { semester?: number } } } } | undefined;
+      if (attendanceDataInResult?.attendance?.semester) {
+        semesterFromAttendance = attendanceDataInResult.attendance.semester;
+      } else if (attendanceDataInResult?.attendance?.data?.metadata?.semester) {
+        semesterFromAttendance = attendanceDataInResult.attendance.data.metadata.semester;
+      }
+      
+      // If no semester from attendance, fetch from database
+      let semester: number | null = semesterFromAttendance;
+      if (!semester) {
+        console.log(`[API /data/all] 🔍 No semester from attendance (partial data), fetching from database...`);
+        semester = await getSemesterFromDatabase(user_id);
+      } else {
+        console.log(`[API /data/all] ✅ Semester from attendance (partial data): ${semester}`);
+      }
+      
       // Return only attendance/marks - client will merge with cached timetable/calendar
       const resultData = resultTyped.data as { attendance?: unknown; marks?: unknown } | undefined;
       const resultMetadata = (resultTyped.metadata && typeof resultTyped.metadata === 'object') 
@@ -208,8 +226,10 @@ export async function POST(request: NextRequest) {
           calendar_cached: true,
           attendance_fresh: true,
           marks_fresh: true,
-          partial_data: true // Indicates client needs to merge with cache
-        }
+          partial_data: true, // Indicates client needs to merge with cache
+          ...(semester ? { semester } : {})
+        },
+        ...(semester ? { semester } : {})
       };
 
       console.log(`[API /data/all] 📊 Partial data response prepared`);
@@ -319,10 +339,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Try to get semester from attendance data first, fallback to database
+    let semesterFromAttendance: number | null = null;
+    const attendanceData = (result.data as { attendance?: { semester?: number; data?: { metadata?: { semester?: number } } } })?.attendance;
+    if (attendanceData?.semester) {
+      semesterFromAttendance = attendanceData.semester;
+    } else if (attendanceData?.data?.metadata?.semester) {
+      semesterFromAttendance = attendanceData.data.metadata.semester;
+    }
+    
+    // If no semester from attendance and attendance failed, fetch from database
+    let semester: number | null = semesterFromAttendance;
+    if (!semester) {
+      console.log(`[API /data/all] 🔍 No semester from attendance, fetching from database...`);
+      semester = await getSemesterFromDatabase(user_id);
+    } else {
+      console.log(`[API /data/all] ✅ Semester from attendance: ${semester}`);
+    }
+    
+    // Include semester in response metadata
+    const resultTyped = result as { success?: boolean; metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number; semester?: number }; semester?: number };
+    if (resultTyped.metadata) {
+      if (semester) {
+        resultTyped.metadata.semester = semester;
+        console.log(`[API /data/all] 📝 Added semester to response metadata: ${semester}`);
+      }
+    } else if (semester) {
+      // Create metadata if it doesn't exist
+      resultTyped.metadata = { semester };
+    }
+    
+    // Also add semester at root level for easy access
+    if (semester) {
+      (result as { semester?: number }).semester = semester;
+    }
+
     // Store in short-term cache if successful
-    const resultTyped = result as { success?: boolean; metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
     if (resultTyped.success) {
-      const resultWithMetadata = resultTyped as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number } };
+      const resultWithMetadata = resultTyped as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number; semester?: number } };
       
       // Store everything in short-term cache (3 hours)
       if (resultWithMetadata.metadata) {
@@ -340,6 +394,7 @@ export async function POST(request: NextRequest) {
     const finalResultTyped = result as { success?: boolean };
     console.log(`[API /data/all] ✅ Response sent (${totalTime}ms total)`);
     console.log(`[API /data/all]   - Status: ${finalResultTyped.success ? 200 : 500}`);
+    console.log(`[API /data/all]   - Semester in response: ${semester || 'none'}`);
     console.log("===========================================");
 
     // Return the unified data
@@ -644,6 +699,42 @@ function mergeSplitDataResults(
   }
   
   return merged;
+}
+
+/**
+ * Get user's semester from database
+ */
+async function getSemesterFromDatabase(user_id: string): Promise<number | null> {
+  try {
+    console.log(`[API /data/all] 🔍 Fetching semester from database for user: ${user_id}`);
+    const dbStartTime = Date.now();
+    
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .select("semester")
+      .eq("id", user_id)
+      .single();
+    
+    const dbDuration = Date.now() - dbStartTime;
+    
+    if (error) {
+      console.warn(`[API /data/all] ⚠️  Database query failed (${dbDuration}ms)`);
+      console.warn(`[API /data/all]   - Error: ${error.message}`);
+      return null;
+    }
+    
+    if (data && data.semester) {
+      console.log(`[API /data/all] ✅ Semester fetched from database (${dbDuration}ms): ${data.semester}`);
+      return data.semester;
+    }
+    
+    console.log(`[API /data/all] ℹ️  No semester found in database for user`);
+    return null;
+  } catch (err) {
+    console.error(`[API /data/all] ❌ Error fetching semester from DB:`);
+    console.error(`[API /data/all]   - Error: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 /**

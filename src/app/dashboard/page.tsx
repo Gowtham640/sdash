@@ -7,6 +7,7 @@ import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
+import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { 
   getCachedTimetable, 
   getCachedCalendar, 
@@ -166,7 +167,28 @@ export default function Dashboard() {
       }
     });
 
-    return timeSlots.sort((a, b) => a.time.localeCompare(b.time));
+    // Sort by start time of the time slot
+    return timeSlots.sort((a, b) => {
+      // Extract start time from "HH:MM-HH:MM" format
+      const getStartTime = (timeStr: string): number => {
+        const startTime = timeStr.split('-')[0]; // Get "HH:MM"
+        const timeParts = startTime.split(':').map(Number);
+        let hours = timeParts[0];
+        const minutes = timeParts[1];
+        
+        // Convert 12-hour format to 24-hour for proper sorting
+        // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
+        // Times 08:xx onwards are AM (keep as is)
+        // Times 12:xx stay as 12:xx (noon)
+        if (hours < 8 && hours !== 0) {
+          hours += 12; // Convert 1PM-7PM to 13-19
+        }
+        
+        const minutesValue = hours * 60 + minutes;
+        return minutesValue;
+      };
+      return getStartTime(a.time) - getStartTime(b.time);
+    });
   };
 
   useEffect(() => {
@@ -381,10 +403,12 @@ export default function Dashboard() {
   const processUnifiedData = (result: {
     data: {
       calendar?: { data?: Array<unknown>; success?: { data?: Array<unknown> } } | null;
-      attendance?: { data?: { all_subjects: unknown[] }; success?: { data?: { all_subjects: unknown[] } } } | null;
+      attendance?: { data?: { all_subjects: unknown[]; metadata?: { semester?: number } }; success?: { data?: { all_subjects: unknown[]; metadata?: { semester?: number } } }; semester?: number } | null;
       marks?: { data?: { all_courses: unknown[] }; success?: { data?: { all_courses: unknown[] } } } | null;
       timetable?: { data?: unknown; success?: { data?: unknown } } | null;
     };
+    metadata?: { semester?: number; [key: string]: unknown };
+    semester?: number;
   }) => {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
@@ -393,8 +417,49 @@ export default function Dashboard() {
     // Process calendar data - handle both nested structures
     const calendar = result.data.calendar?.data || result.data.calendar?.success?.data;
     if (calendar && Array.isArray(calendar)) {
-      setCalendarData(calendar as CalendarEvent[]);
-      console.log('[Dashboard] ✅ Calendar data loaded:', calendar.length);
+      // Extract semester from multiple sources with fallbacks
+      let extractedSemester: number | null = null;
+      
+      // 1. Try attendance data first
+      if (result.data.attendance?.semester) {
+        extractedSemester = result.data.attendance.semester;
+        console.log('[Dashboard] Semester from attendance.semester:', extractedSemester);
+      } else if (result.data.attendance?.data?.metadata?.semester) {
+        extractedSemester = result.data.attendance.data.metadata.semester;
+        console.log('[Dashboard] Semester from attendance.data.metadata.semester:', extractedSemester);
+      } 
+      // 2. Try response metadata
+      else if (result.metadata?.semester) {
+        extractedSemester = result.metadata.semester;
+        console.log('[Dashboard] Semester from metadata.semester:', extractedSemester);
+      }
+      // 3. Try response root
+      else if ((result as { semester?: number }).semester) {
+        extractedSemester = (result as { semester?: number }).semester!;
+        console.log('[Dashboard] Semester from root.semester:', extractedSemester);
+      }
+      // 4. Try localStorage cache
+      else {
+        const cachedSemester = localStorage.getItem('user_semester');
+        if (cachedSemester) {
+          extractedSemester = parseInt(cachedSemester, 10);
+          console.log('[Dashboard] Semester from localStorage cache:', extractedSemester);
+        }
+      }
+      
+      // Default to 1 if no semester found
+      const finalSemester = extractedSemester || 1;
+      
+      // Store semester in localStorage if found
+      if (extractedSemester) {
+        localStorage.setItem('user_semester', extractedSemester.toString());
+        console.log('[Dashboard] 💾 Stored semester in localStorage:', extractedSemester);
+      }
+      
+      const modifiedCalendarData = markSaturdaysAsHolidays(calendar as CalendarEvent[], finalSemester);
+      console.log('[Dashboard] Applied holiday logic for semester:', finalSemester);
+      setCalendarData(modifiedCalendarData);
+      console.log('[Dashboard] ✅ Calendar data loaded:', modifiedCalendarData.length);
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
     }
@@ -433,10 +498,31 @@ export default function Dashboard() {
       console.warn('[Dashboard] ⚠️ No timetable data found');
     }
 
-    // Process day order stats
-    if (calendar && Array.isArray(calendar)) {
+    // Process day order stats using modified calendar data
+    const calendarForStats = result.data.calendar?.data || result.data.calendar?.success?.data;
+    if (calendarForStats && Array.isArray(calendarForStats)) {
       try {
-        const stats = getDayOrderStats(calendar);
+        // Extract semester using same logic as above
+        let extractedSemester: number | null = null;
+        
+        if (result.data.attendance?.semester) {
+          extractedSemester = result.data.attendance.semester;
+        } else if (result.data.attendance?.data?.metadata?.semester) {
+          extractedSemester = result.data.attendance.data.metadata.semester;
+        } else if (result.metadata?.semester) {
+          extractedSemester = result.metadata.semester;
+        } else if ((result as { semester?: number }).semester) {
+          extractedSemester = (result as { semester?: number }).semester!;
+        } else {
+          const cachedSemester = localStorage.getItem('user_semester');
+          if (cachedSemester) {
+            extractedSemester = parseInt(cachedSemester, 10);
+          }
+        }
+        
+        const finalSemester = extractedSemester || 1;
+        const modifiedCalendarForStats = markSaturdaysAsHolidays(calendarForStats as CalendarEvent[], finalSemester);
+        const stats = getDayOrderStats(modifiedCalendarForStats);
         setDayOrderStats(stats);
         console.log('[Dashboard] ✅ Day order stats loaded:', stats);
       } catch (err) {
@@ -473,22 +559,14 @@ export default function Dashboard() {
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
         <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
-        <div className="flex gap-3 sm:gap-4">
+        {error.includes('session') && (
           <button 
-            onClick={() => fetchUnifiedData()}
-            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm sm:text-base"
+            onClick={handleReAuthenticate}
+            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
           >
-            Retry
+            Sign In Again
           </button>
-          {error.includes('session') && (
-            <button 
-              onClick={handleReAuthenticate}
-              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
-            >
-              Sign In Again
-            </button>
-          )}
-        </div>
+        )}
       </div>
     );
   }
@@ -581,7 +659,7 @@ export default function Dashboard() {
                 key={index}
                 className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
               >
-                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px]">
+                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] whitespace-nowrap">
                   {slot.time}
                 </div>
                 <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold flex-1">
