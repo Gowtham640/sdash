@@ -172,7 +172,9 @@ export default function Dashboard() {
       // Extract start time from "HH:MM-HH:MM" format
       const getStartTime = (timeStr: string): number => {
         const startTime = timeStr.split('-')[0]; // Get "HH:MM"
-        let [hours, minutes] = startTime.split(':').map(Number);
+        const timeParts = startTime.split(':').map(Number);
+        let hours = timeParts[0];
+        const minutes = timeParts[1];
         
         // Convert 12-hour format to 24-hour for proper sorting
         // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
