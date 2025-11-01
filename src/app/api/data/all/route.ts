@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dataCache } from "@/lib/dataCache";
 import { callBackendScraper } from '@/lib/scraperClient';
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { requestQueueTracker } from "@/lib/requestQueue";
 
 /**
  * Unified data endpoint - Returns all data types in one call
@@ -56,6 +57,8 @@ export async function POST(request: NextRequest) {
   console.log("[API /data/all] 📥 POST request received");
   console.log("[API /data/all] Timestamp:", new Date().toISOString());
 
+  let user_email: string = '';
+  
   try {
     // Parse request body
     const body = await request.json();
@@ -77,7 +80,6 @@ export async function POST(request: NextRequest) {
 
     // Verify and decode JWT token
     console.log("[API /data/all] 🔐 Verifying access token...");
-    let user_email: string;
     let user_id: string;
 
     try {
@@ -110,6 +112,9 @@ export async function POST(request: NextRequest) {
 
     console.log(`[API /data/all] ✅ Session validated for user: ${user_email}`);
 
+    // Register request in queue tracker
+    requestQueueTracker.registerRequest(user_email);
+
     // Check cache FIRST (unless force_refresh is true)
     const cacheKey = `data:${user_email}`;
     
@@ -131,14 +136,22 @@ export async function POST(request: NextRequest) {
         console.log("===========================================");
         
         // Add cache metadata to response
-        const cachedResult = cachedData as { metadata?: { cached_at?: number } };
+        const cachedResult = cachedData as { metadata?: { cached_at?: number; queue_info?: unknown } };
+        
+        // Get current queue info
+        const queueInfo = requestQueueTracker.getQueueInfo(user_email);
+        
+        // Preserve existing queue_info from cache if present, otherwise use current
+        const existingQueueInfo = cachedResult.metadata?.queue_info;
+        
         return NextResponse.json({
           ...cachedData,
           metadata: {
             ...cachedData.metadata,
             cached: true,
             cache_age_seconds: cacheAge,
-            cache_ttl_seconds: Math.floor((3 * 60 * 60 * 1000) / 1000)
+            cache_ttl_seconds: Math.floor((6 * 60 * 60 * 1000) / 1000),
+            queue_info: existingQueueInfo || queueInfo // Use cached queue info or current
           }
         });
       } else {
@@ -208,6 +221,9 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ✅ Semester from attendance (partial data): ${semester}`);
       }
       
+      // Get queue info
+      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
+      
       // Return only attendance/marks - client will merge with cached timetable/calendar
       const resultData = resultTyped.data as { attendance?: unknown; marks?: unknown } | undefined;
       const resultMetadata = (resultTyped.metadata && typeof resultTyped.metadata === 'object') 
@@ -227,7 +243,8 @@ export async function POST(request: NextRequest) {
           attendance_fresh: true,
           marks_fresh: true,
           partial_data: true, // Indicates client needs to merge with cache
-          ...(semester ? { semester } : {})
+          ...(semester ? { semester } : {}),
+          queue_info: queueInfo
         },
         ...(semester ? { semester } : {})
       };
@@ -239,8 +256,8 @@ export async function POST(request: NextRequest) {
 
       // Store in short-term cache
       if (partialResult.success) {
-        dataCache.set(cacheKey, partialResult, 3 * 60 * 60 * 1000); // 3 hour TTL
-        console.log(`[API /data/all] 💾 Stored partial data in server cache (3hour TTL)`);
+        dataCache.set(cacheKey, partialResult, 6 * 60 * 60 * 1000); // 6 hour TTL
+        console.log(`[API /data/all] 💾 Stored partial data in server cache (6hour TTL)`);
       }
 
       const totalTime = Date.now() - requestStartTime;
@@ -376,17 +393,44 @@ export async function POST(request: NextRequest) {
 
     // Store in short-term cache if successful
     if (resultTyped.success) {
-      const resultWithMetadata = resultTyped as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number; semester?: number } };
+      // Get queue info before storing
+      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
       
-      // Store everything in short-term cache (3 hours)
+      const resultWithMetadata = resultTyped as { 
+        metadata?: { 
+          cached_at?: number; 
+          cached?: boolean; 
+          cache_age_seconds?: number; 
+          cache_ttl_seconds?: number; 
+          semester?: number;
+          queue_info?: {
+            pending_requests: number;
+            total_pending_requests: number;
+            recent_requests_last_minute: number;
+            backend_queue: {
+              pending_backend_requests: number;
+              total_pending_backend_requests: number;
+              recent_backend_requests_last_minute: number;
+            };
+          };
+        } 
+      };
+      
+      // Store everything in short-term cache (6 hours)
       if (resultWithMetadata.metadata) {
         resultWithMetadata.metadata.cached_at = Date.now();
         resultWithMetadata.metadata.cached = false; // First request (not from cache)
         resultWithMetadata.metadata.cache_age_seconds = 0;
-        resultWithMetadata.metadata.cache_ttl_seconds = 10800; // 3 hours in seconds
+        resultWithMetadata.metadata.cache_ttl_seconds = 21600; // 6 hours in seconds
+        resultWithMetadata.metadata.queue_info = queueInfo;
+      } else {
+        // Create metadata if it doesn't exist
+        resultWithMetadata.metadata = {
+          queue_info: queueInfo
+        };
       }
-      dataCache.set(cacheKey, result as Record<string, unknown>, 3 * 60 * 60 * 1000); // 3 hour TTL
-      console.log(`[API /data/all] 💾 Stored all data in server cache (3hour TTL)`);
+      dataCache.set(cacheKey, result as Record<string, unknown>, 6 * 60 * 60 * 1000); // 6 hour TTL
+      console.log(`[API /data/all] 💾 Stored all data in server cache (6hour TTL)`);
       console.log(`[API /data/all]   - Note: Long-term cache storage happens on client-side`);
     }
 
@@ -420,6 +464,11 @@ export async function POST(request: NextRequest) {
       },
       { status: 500 }
     );
+  } finally {
+    // Unregister request from queue tracker
+    if (user_email) {
+      requestQueueTracker.unregisterRequest(user_email);
+    }
   }
 }
 
