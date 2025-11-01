@@ -3,6 +3,8 @@
  * Replaces all Python spawn() calls with HTTP requests
  */
 
+import { requestQueueTracker } from "@/lib/requestQueue";
+
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 console.log('[Backend Client] BACKEND_URL:', BACKEND_URL);
 
@@ -31,6 +33,9 @@ export async function callBackendScraper<T = unknown>(
   const requestStartTime = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+  // Register backend request (waiting in Render queue)
+  requestQueueTracker.registerBackendRequest(data.email);
 
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`[Backend Client] 🚀 Calling backend API`);
@@ -128,6 +133,9 @@ export async function callBackendScraper<T = unknown>(
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
     };
+  } finally {
+    // Unregister backend request when done (success or failure)
+    requestQueueTracker.unregisterBackendRequest(data.email);
   }
 }
 

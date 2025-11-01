@@ -84,6 +84,46 @@ export default function MarksPage() {
     router.push('/auth');
   };
 
+  const refreshInBackground = async () => {
+    if (isRefreshing) {
+      return; // Already refreshing
+    }
+    
+    setIsRefreshing(true);
+    console.log('[Marks] Background refresh started');
+    
+    try {
+      const access_token = localStorage.getItem('access_token');
+      if (!access_token) {
+        console.error('[Marks] No access token for background refresh');
+        return;
+      }
+
+      const response = await fetch('/api/data/all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        const cacheKey = 'unified_data_cache';
+        const cachedTimestampKey = 'unified_data_cache_timestamp';
+        
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        console.log('[Marks] ✅ Cache refreshed in background');
+      } else {
+        console.error('[Marks] ❌ Background refresh failed:', result.error);
+      }
+    } catch (err) {
+      console.error('[Marks] Background refresh error:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
@@ -104,8 +144,52 @@ export default function MarksPage() {
       // ✅ STEP 1: Check browser cache first (unless force refresh)
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 3 * 60 * 60 * 1000; // 3 hours
-      const refreshTriggerAge = 2.5 * 60 * 60 * 1000; // 2.5 hours - start background refresh
+      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
+      
+      /**
+       * Calculate dynamic refresh trigger based on backend queue load (Render Python scraper)
+       * - Normal load: 5 minutes before expiration
+       * - Medium load: 20 minutes before expiration
+       * - High load: 40 minutes before expiration
+       */
+      const getDynamicRefreshTrigger = (queueInfo: { backend_queue?: { total_pending_backend_requests?: number } } | undefined): number => {
+        const cacheDuration = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
+        
+        if (!queueInfo?.backend_queue) {
+          // Normal load: 5 minutes before expiration
+          const normalTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
+          console.log('[Marks] Using normal refresh trigger: 5 minutes before expiration (no backend queue info)');
+          return normalTrigger;
+        }
+        
+        // Use backend queue to determine load (requests waiting in Render Python scraper)
+        const backendPending = queueInfo.backend_queue.total_pending_backend_requests || 0;
+        
+        // Determine load level based on backend queue
+        const MEDIUM_LOAD_THRESHOLD = 3; // 3+ requests waiting in backend
+        const HIGH_LOAD_THRESHOLD = 5; // 5+ requests waiting in backend
+        
+        // Calculate refresh trigger based on backend queue load
+        let refreshTrigger: number;
+        if (backendPending >= HIGH_LOAD_THRESHOLD) {
+          // High load: 40 minutes before expiration
+          refreshTrigger = cacheDuration - (40 * 60 * 1000); // 5 hours 20 minutes
+          console.log(`[Marks] 🔴 HIGH BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
+          console.log(`[Marks]   - Refresh trigger: 40 minutes before expiration`);
+        } else if (backendPending >= MEDIUM_LOAD_THRESHOLD) {
+          // Medium load: 20 minutes before expiration
+          refreshTrigger = cacheDuration - (20 * 60 * 1000); // 5 hours 40 minutes
+          console.log(`[Marks] 🟡 MEDIUM BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
+          console.log(`[Marks]   - Refresh trigger: 20 minutes before expiration`);
+        } else {
+          // Normal load: 5 minutes before expiration
+          refreshTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
+          console.log(`[Marks] 🟢 Normal backend load: ${backendPending} requests waiting in Render queue`);
+          console.log(`[Marks]   - Refresh trigger: 5 minutes before expiration`);
+        }
+        
+        return refreshTrigger;
+      };
       
       if (!forceRefresh) {
         const cachedData = localStorage.getItem(cacheKey);
@@ -131,6 +215,20 @@ export default function MarksPage() {
                 console.log('[Marks] Loaded marks with', result.data.marks.data.all_courses?.length, 'courses');
               } else {
                 throw new Error('Marks data unavailable');
+              }
+              
+              // Get queue info from cached result
+              const queueInfo = result.metadata?.queue_info;
+              
+              // Calculate dynamic refresh trigger based on queue load
+              const refreshTriggerAge = getDynamicRefreshTrigger(queueInfo);
+              
+              // Background refresh if cache is expiring soon
+              const isExpiringSoon = age > refreshTriggerAge;
+              if (isExpiringSoon && !isRefreshing) {
+                const minutesUntilExpiration = Math.floor((cacheMaxAge - age) / (60 * 1000));
+                console.log(`[Marks] ⏰ Cache expiring soon (${minutesUntilExpiration} min remaining), refreshing in background...`);
+                refreshInBackground();
               }
               
               setLoading(false);
