@@ -393,10 +393,28 @@ export async function POST(request: NextRequest) {
 
     // Store in short-term cache if successful
     if (resultTyped.success) {
-      const resultWithMetadata = resultTyped as { metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number; semester?: number } };
-      
       // Get queue info before storing
       const queueInfo = requestQueueTracker.getQueueInfo(user_email);
+      
+      const resultWithMetadata = resultTyped as { 
+        metadata?: { 
+          cached_at?: number; 
+          cached?: boolean; 
+          cache_age_seconds?: number; 
+          cache_ttl_seconds?: number; 
+          semester?: number;
+          queue_info?: {
+            pending_requests: number;
+            total_pending_requests: number;
+            recent_requests_last_minute: number;
+            backend_queue: {
+              pending_backend_requests: number;
+              total_pending_backend_requests: number;
+              recent_backend_requests_last_minute: number;
+            };
+          };
+        } 
+      };
       
       // Store everything in short-term cache (6 hours)
       if (resultWithMetadata.metadata) {
