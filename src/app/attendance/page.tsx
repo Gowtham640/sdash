@@ -15,6 +15,7 @@ import { DateRange } from 'react-day-picker';
 import ShinyText from '../../components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
+import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 
 interface AttendanceSubject {
   row_number: number;
@@ -316,7 +317,7 @@ export default function AttendancePage() {
     console.log('[Attendance] Background refresh started');
     
     try {
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       if (!access_token) {
         console.error('[Attendance] No access token for background refresh');
         return;
@@ -334,8 +335,8 @@ export default function AttendancePage() {
         const cacheKey = 'unified_data_cache';
         const cachedTimestampKey = 'unified_data_cache_timestamp';
         
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Attendance] ✅ Cache refreshed in background');
       } else {
         console.error('[Attendance] ❌ Background refresh failed:', result.error);
@@ -355,7 +356,7 @@ export default function AttendancePage() {
         setIsRefreshing(true);
       }
 
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       
       if (!access_token) {
         console.error('[Attendance] No access token found');
@@ -415,8 +416,8 @@ export default function AttendancePage() {
       };
       
       if (!forceRefresh) {
-        const cachedData = localStorage.getItem(cacheKey);
-        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        const cachedData = getStorageItem(cacheKey);
+        const cachedTimestamp = getStorageItem(cachedTimestampKey);
         
         if (cachedData && cachedTimestamp) {
           const age = Date.now() - parseInt(cachedTimestamp);
@@ -515,8 +516,8 @@ export default function AttendancePage() {
 
       // ✅ STEP 3: Store in browser cache for next time
       if (result.success) {
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Attendance] ✅ Stored in browser cache');
       }
 
@@ -525,7 +526,7 @@ export default function AttendancePage() {
         console.error('[Attendance] Session expired - checking for cached data...');
         
         // Check if we have cached data to fall back to
-        const cachedData = localStorage.getItem(cacheKey);
+        const cachedData = getStorageItem(cacheKey);
         if (cachedData) {
           console.log('[Attendance] Using cached data as fallback');
           const cachedResult = JSON.parse(cachedData);
