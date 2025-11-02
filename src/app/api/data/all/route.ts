@@ -514,17 +514,42 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
         }
       };
       
-      // Update user's semester in database if available (fire and forget)
-      const attendanceData = fullData.attendance as { semester?: number; name?: string } | undefined;
-      if (attendanceData?.semester) {
-        console.log(`[API /data/all] 📝 Semester found in response: ${attendanceData.semester}`);
-        updateSemesterInDatabase(user_id, attendanceData.semester);
+      // Update user's semester, name, registration number, and department in database if available (fire and forget)
+      const attendanceData = fullData.attendance as { 
+        semester?: number; 
+        data?: { 
+          metadata?: { 
+            semester?: number;
+            student_name?: string;
+            registration_number?: string;
+            department?: string;
+          } 
+        } 
+      } | undefined;
+      
+      // Extract from direct semester field or data.metadata
+      const semester = attendanceData?.semester || attendanceData?.data?.metadata?.semester;
+      if (semester) {
+        console.log(`[API /data/all] 📝 Semester found in response: ${semester}`);
+        updateSemesterInDatabase(user_id, semester);
       }
       
-      // Update user's name in database if available (fire and forget)
-      if (attendanceData?.name) {
-        console.log(`[API /data/all] 📝 Name found in response: ${attendanceData.name}`);
-        updateNameInDatabase(user_id, attendanceData.name);
+      const studentName = attendanceData?.data?.metadata?.student_name;
+      if (studentName) {
+        console.log(`[API /data/all] 📝 Name found in response: ${studentName}`);
+        updateNameInDatabase(user_id, studentName);
+      }
+      
+      const registrationNumber = attendanceData?.data?.metadata?.registration_number;
+      if (registrationNumber) {
+        console.log(`[API /data/all] 📝 Registration Number found in response: ${registrationNumber}`);
+        updateRegistrationNumberInDatabase(user_id, registrationNumber);
+      }
+      
+      const department = attendanceData?.data?.metadata?.department;
+      if (department) {
+        console.log(`[API /data/all] 📝 Department found in response: ${department}`);
+        updateDepartmentInDatabase(user_id, department);
       }
       
       return extractedResult as unknown as Record<string, unknown>;
@@ -675,21 +700,48 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     console.log(`[API /data/all]   - Attendance: ${dynamicResultData?.attendance ? "✓" : "✗"}`);
     console.log(`[API /data/all]   - Marks: ${dynamicResultData?.marks ? "✓" : "✗"}`);
     
-    // Update user's semester in database if训练 available (fire and forget)
-    const dynamicAttendanceData = finalResultTyped.data as { attendance?: { semester?: number; name?: string } } | undefined;
-    if (dynamicAttendanceData?.attendance?.semester) {
-      console.log(`[API /data/all] 📝 Semester found in response: ${dynamicAttendanceData.attendance.semester}`);
-      updateSemesterInDatabase(user_id, dynamicAttendanceData.attendance.semester);
+    // Update user's semester, name, registration number, and department in database if available (fire and forget)
+    const dynamicAttendanceData = finalResultTyped.data as { 
+      attendance?: { 
+        semester?: number;
+        data?: { 
+          metadata?: { 
+            semester?: number;
+            student_name?: string;
+            registration_number?: string;
+            department?: string;
+          } 
+        } 
+      } 
+    } | undefined;
+    
+    // Extract from direct semester field or data.metadata
+    const semester = dynamicAttendanceData?.attendance?.semester || dynamicAttendanceData?.attendance?.data?.metadata?.semester;
+    if (semester) {
+      console.log(`[API /data/all] 📝 Semester found in response: ${semester}`);
+      updateSemesterInDatabase(user_id, semester);
     } else {
       console.log(`[API /data/all] 📝 No semester data to update`);
       const checkAttendanceData = finalResultTyped.data as { attendance?: unknown } | undefined;
       console.log(`[API /data/all]   - Attendance data exists: ${checkAttendanceData?.attendance ? "✓" : "✗"}`);
     }
     
-    // Update user's name in database if available (fire and forget)
-    if (dynamicAttendanceData?.attendance?.name) {
-      console.log(`[API /data/all] 📝 Name found in response: ${dynamicAttendanceData.attendance.name}`);
-      updateNameInDatabase(user_id, dynamicAttendanceData.attendance.name);
+    const studentName = dynamicAttendanceData?.attendance?.data?.metadata?.student_name;
+    if (studentName) {
+      console.log(`[API /data/all] 📝 Name found in response: ${studentName}`);
+      updateNameInDatabase(user_id, studentName);
+    }
+    
+    const registrationNumber = dynamicAttendanceData?.attendance?.data?.metadata?.registration_number;
+    if (registrationNumber) {
+      console.log(`[API /data/all] 📝 Registration Number found in response: ${registrationNumber}`);
+      updateRegistrationNumberInDatabase(user_id, registrationNumber);
+    }
+    
+    const department = dynamicAttendanceData?.attendance?.data?.metadata?.department;
+    if (department) {
+      console.log(`[API /data/all] 📝 Department found in response: ${department}`);
+      updateDepartmentInDatabase(user_id, department);
     }
   }
 
@@ -837,12 +889,24 @@ async function updateSemesterInDatabase(user_id: string, semester: number): Prom
 }
 
 /**
+ * Capitalize name properly (first letter of each word)
+ */
+function capitalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
  * Update user's name in database (fire and forget)
  */
 async function updateNameInDatabase(user_id: string, name: string): Promise<void> {
+  const formattedName = capitalizeName(name);
   console.log(`[API /data/all] 💾 Database name update started (fire-and-forget)`);
   console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Name: ${name}`);
+  console.log(`[API /data/all]   - Name: ${name} -> ${formattedName}`);
     
     // Fire and forget - don't wait for DB update
     (async () => {
@@ -850,7 +914,7 @@ async function updateNameInDatabase(user_id: string, name: string): Promise<void
       const dbStartTime = Date.now();
         const { data, error } = await supabaseAdmin
           .from("users")
-          .update({ name })
+          .update({ name: formattedName })
           .eq("id", user_id)
           .select();
       const dbDuration = Date.now() - dbStartTime;
@@ -861,7 +925,7 @@ async function updateNameInDatabase(user_id: string, name: string): Promise<void
         console.error(`[API /data/all]   - Details: ${JSON.stringify(error)}`);
         } else {
         console.log(`[API /data/all] ✅ Database name update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated name to: ${name}`);
+        console.log(`[API /data/all]   - Updated name to: ${formattedName}`);
         console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
         }
       } catch (dbError) {
@@ -872,6 +936,70 @@ async function updateNameInDatabase(user_id: string, name: string): Promise<void
       }
       }
     })();
+}
+
+/**
+ * Update user's registration number in database (fire and forget)
+ */
+async function updateRegistrationNumberInDatabase(user_id: string, registration_number: string): Promise<void> {
+  console.log(`[API /data/all] 💾 Database registration_number update started (fire-and-forget)`);
+  console.log(`[API /data/all]   - User ID: ${user_id}`);
+  console.log(`[API /data/all]   - Registration Number: ${registration_number}`);
+    
+  (async () => {
+    try {
+      const dbStartTime = Date.now();
+      const { data, error } = await supabaseAdmin
+        .from("users")
+        .update({ registration_number })
+        .eq("id", user_id)
+        .select();
+      const dbDuration = Date.now() - dbStartTime;
+      
+      if (error) {
+        console.error(`[API /data/all] ❌ Database registration_number update failed (${dbDuration}ms)`);
+        console.error(`[API /data/all]   - Error: ${error.message}`);
+      } else {
+        console.log(`[API /data/all] ✅ Database registration_number update successful (${dbDuration}ms)`);
+        console.log(`[API /data/all]   - Updated registration_number to: ${registration_number}`);
+      }
+    } catch (dbError) {
+      console.error(`[API /data/all] ❌ Database exception:`);
+      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+    }
+  })();
+}
+
+/**
+ * Update user's department in database (fire and forget)
+ */
+async function updateDepartmentInDatabase(user_id: string, department: string): Promise<void> {
+  console.log(`[API /data/all] 💾 Database department update started (fire-and-forget)`);
+  console.log(`[API /data/all]   - User ID: ${user_id}`);
+  console.log(`[API /data/all]   - Department: ${department}`);
+    
+  (async () => {
+    try {
+      const dbStartTime = Date.now();
+      const { data, error } = await supabaseAdmin
+        .from("users")
+        .update({ department })
+        .eq("id", user_id)
+        .select();
+      const dbDuration = Date.now() - dbStartTime;
+      
+      if (error) {
+        console.error(`[API /data/all] ❌ Database department update failed (${dbDuration}ms)`);
+        console.error(`[API /data/all]   - Error: ${error.message}`);
+      } else {
+        console.log(`[API /data/all] ✅ Database department update successful (${dbDuration}ms)`);
+        console.log(`[API /data/all]   - Updated department to: ${department}`);
+      }
+    } catch (dbError) {
+      console.error(`[API /data/all] ❌ Database exception:`);
+      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+    }
+  })();
 }
 
 /**
