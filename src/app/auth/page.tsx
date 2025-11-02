@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import LiquidEther from "@/components/LiquidEther";
 import { Eye, EyeOff } from "lucide-react";
 import { storePortalPassword } from "@/lib/passwordStorage";
+import { setStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -14,6 +15,16 @@ export default function AuthPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const router = useRouter();
+
+  // Check for Private Browsing mode on mount
+  useEffect(() => {
+    if (isPrivateBrowsing()) {
+      setError(
+        'Private Browsing mode detected. Some features may not work properly. ' +
+        'Please use normal browsing mode for best experience.'
+      );
+    }
+  }, []);
 
   // Memoize LiquidEther to prevent re-renders on keystroke
   const liquidEtherComponent = useMemo(
@@ -71,15 +82,19 @@ export default function AuthPage() {
 
       // Store session and user info
       console.log("[Auth Page] Sign-in successful, storing session");
-      localStorage.setItem(
-        "access_token",
-        data.data.session.access_token
-      );
-      localStorage.setItem(
-        "refresh_token",
-        data.data.session.refresh_token
-      );
-      localStorage.setItem("user", JSON.stringify(data.data.user));
+      const tokenStored = setStorageItem("access_token", data.data.session.access_token);
+      const refreshStored = setStorageItem("refresh_token", data.data.session.refresh_token);
+      const userStored = setStorageItem("user", JSON.stringify(data.data.user));
+      
+      if (!tokenStored || !refreshStored || !userStored) {
+        console.error('[Auth Page] Failed to store session tokens!');
+        setError(
+          'Authentication successful, but failed to save session. ' +
+          'Please check if cookies/storage are enabled in your browser settings.'
+        );
+        setIsLoading(false);
+        return;
+      }
       
       // Store portal password securely for session renewal
       const passwordStored = storePortalPassword(password);
@@ -95,14 +110,14 @@ export default function AuthPage() {
       console.log('[Auth Page] Password stored and verified successfully');
 
       // Clear old cache data on fresh login (Option 1)
-      localStorage.removeItem('unified_data_cache');
-      localStorage.removeItem('unified_data_cache_timestamp');
-      localStorage.removeItem('user_semester'); // Also clear semester cache
+      removeStorageItem('unified_data_cache');
+      removeStorageItem('unified_data_cache_timestamp');
+      removeStorageItem('user_semester'); // Also clear semester cache
       console.log('[Auth Page] ✅ Cleared previous cache data for fresh fetch');
 
       // Store login timestamp to track when user logged in (Option 4)
       const loginTimestamp = Date.now();
-      localStorage.setItem('login_timestamp', loginTimestamp.toString());
+      setStorageItem('login_timestamp', loginTimestamp.toString());
       console.log('[Auth Page] ✅ Stored login timestamp:', loginTimestamp);
 
       setIsSuccess(true);

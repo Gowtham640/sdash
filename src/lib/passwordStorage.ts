@@ -6,6 +6,8 @@
  * For production, consider server-side encryption or more robust solutions.
  */
 
+import { setStorageItem, getStorageItem, removeStorageItem } from './browserStorage';
+
 const ENCRYPTION_KEY = "sdash_portal_encryption_key_2024"; // Simple key for obfuscation
 
 /**
@@ -44,22 +46,28 @@ export function storePortalPassword(password: string): boolean {
   try {
     const encrypted = xorEncrypt(password, ENCRYPTION_KEY);
     
-    // Store in localStorage
-    localStorage.setItem('portal_password_encrypted', encrypted);
-    
-    // Verify it was stored correctly
-    const verified = localStorage.getItem('portal_password_encrypted');
-    if (verified !== encrypted) {
-      console.error('[PasswordStorage] Verification failed - localStorage may be full or disabled');
+    // Store using browserStorage utility (handles Safari Private Browsing)
+    const stored = setStorageItem('portal_password_encrypted', encrypted);
+    if (!stored) {
+      console.error('[PasswordStorage] Storage failed - storage may be disabled');
       return false;
     }
     
-    // Also store backup in sessionStorage as fallback
+    // Verify it was stored correctly
+    const verified = getStorageItem('portal_password_encrypted');
+    if (verified !== encrypted) {
+      console.error('[PasswordStorage] Verification failed - storage may be full or disabled');
+      return false;
+    }
+    
+    // Also store backup in sessionStorage as additional fallback
     try {
-      sessionStorage.setItem('portal_password_backup', encrypted);
-      console.log('[PasswordStorage] Password stored in both localStorage and sessionStorage ✓');
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem('portal_password_backup', encrypted);
+        console.log('[PasswordStorage] Password stored in both browserStorage and sessionStorage ✓');
+      }
     } catch (sessionError) {
-      console.warn('[PasswordStorage] sessionStorage backup failed, but localStorage succeeded');
+      console.warn('[PasswordStorage] sessionStorage backup failed, but browserStorage succeeded');
     }
     
     console.log('[PasswordStorage] Password stored and verified ✓');
@@ -75,27 +83,27 @@ export function storePortalPassword(password: string): boolean {
  */
 export function getPortalPassword(): string | null {
   try {
-    // Try localStorage first
-    let encrypted = localStorage.getItem('portal_password_encrypted');
+    // Try browserStorage first (handles all fallbacks)
+    let encrypted = getStorageItem('portal_password_encrypted');
     
-    // Fallback to sessionStorage if localStorage is empty
-    if (!encrypted) {
-      console.warn('[PasswordStorage] localStorage empty, trying sessionStorage backup...');
-      encrypted = sessionStorage.getItem('portal_password_backup');
-      
-      if (encrypted) {
-        console.log('[PasswordStorage] Found backup in sessionStorage, restoring to localStorage');
-        // Restore to localStorage for next time
-        try {
-          localStorage.setItem('portal_password_encrypted', encrypted);
-        } catch (restoreError) {
-          console.warn('[PasswordStorage] Could not restore to localStorage:', restoreError);
+    // Fallback to sessionStorage backup if browserStorage is empty
+    if (!encrypted && typeof window !== 'undefined' && window.sessionStorage) {
+      console.warn('[PasswordStorage] browserStorage empty, trying sessionStorage backup...');
+      try {
+        encrypted = window.sessionStorage.getItem('portal_password_backup');
+        
+        if (encrypted) {
+          console.log('[PasswordStorage] Found backup in sessionStorage, restoring to browserStorage');
+          // Restore to browserStorage for next time
+          setStorageItem('portal_password_encrypted', encrypted);
         }
+      } catch {
+        // sessionStorage access failed
       }
     }
     
     if (!encrypted) {
-      console.warn('[PasswordStorage] No password found in any storage (localStorage or sessionStorage)');
+      console.warn('[PasswordStorage] No password found in any storage');
       return null;
     }
     
@@ -118,8 +126,14 @@ export function getPortalPassword(): string | null {
  */
 export function clearPortalPassword(): void {
   try {
-    localStorage.removeItem('portal_password_encrypted');
-    sessionStorage.removeItem('portal_password_backup');
+    removeStorageItem('portal_password_encrypted');
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        window.sessionStorage.removeItem('portal_password_backup');
+      } catch {
+        // Ignore sessionStorage errors
+      }
+    }
     console.log('[PasswordStorage] Password cleared from all storage locations');
   } catch (error) {
     console.error('[PasswordStorage] Error clearing password:', error);

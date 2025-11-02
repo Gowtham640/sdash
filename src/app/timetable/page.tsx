@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
+import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { 
   getCachedTimetable, 
   getCachedCalendar, 
@@ -83,7 +84,7 @@ export default function TimetablePage() {
         setIsRefreshing(true);
       }
 
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       
       if (!access_token) {
         console.error('[Timetable] No access token found');
@@ -99,8 +100,8 @@ export default function TimetablePage() {
       const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
       
       if (!forceRefresh) {
-        const cachedData = localStorage.getItem(cacheKey);
-        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        const cachedData = getStorageItem(cacheKey);
+        const cachedTimestamp = getStorageItem(cachedTimestampKey);
         
         if (cachedData && cachedTimestamp) {
           const age = Date.now() - parseInt(cachedTimestamp);
@@ -225,8 +226,8 @@ export default function TimetablePage() {
 
       // ✅ STEP 6: Store in short-term browser cache for next time
       if (result.success) {
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Timetable] ✅ Stored in browser cache');
       }
 
@@ -458,22 +459,7 @@ export default function TimetablePage() {
           {/* Day Order Statistics */}
           {dayOrderStats && (
             <div className="mb-6 sm:mb-7 md:mb-8 lg:mb-8">
-              <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-3 sm:mb-4">Day Order Remaining (Until Nov 21, 2025)</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-3 sm:gap-4">
-                {[1, 2, 3, 4, 5].map(doNumber => (
-                  <div key={doNumber} className="bg-white/20 rounded-2xl p-2.5 sm:p-2.5 md:p-3 lg:p-3 text-center">
-                    <div className="text-white text-xs sm:text-sm font-sora font-bold mb-1">
-                      DO {doNumber}
-                    </div>
-                    <div className="text-blue-400 text-lg sm:text-xl md:text-xl lg:text-xl font-sora font-bold">
-                      {dayOrderStats[doNumber]}
-                    </div>
-                    <div className="text-white/70 text-[10px] sm:text-xs font-sora">
-                      days left
-                    </div>
-                  </div>
-                ))}
-              </div>
+              
             </div>
           )}
 

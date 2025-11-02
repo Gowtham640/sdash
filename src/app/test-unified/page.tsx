@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react';
+import { getStorageItem } from '@/lib/browserStorage';
 
 interface UnifiedDataResponse {
   success: boolean;
@@ -28,10 +29,10 @@ export default function TestUnifiedPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, unknown> | null>(null);
-  // Get email and password from localStorage since UserContext is not available
-  const email = typeof window !== 'undefined' ? localStorage.getItem('user_email') || '' : '';
-  const password = typeof window !== 'undefined' ? localStorage.getItem('user_password') || '' : '';
-  const isAuthenticated = typeof window !== 'undefined' ? !!localStorage.getItem('user_email') : false;
+  // Get email and password from storage since UserContext is not available
+  const email = typeof window !== 'undefined' ? getStorageItem('user_email') || '' : '';
+  const password = typeof window !== 'undefined' ? getStorageItem('user_password') || '' : '';
+  const isAuthenticated = typeof window !== 'undefined' ? !!getStorageItem('user_email') : false;
 
   const testUnifiedEndpoint = async () => {
     if (!email || !password) {

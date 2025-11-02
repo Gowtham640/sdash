@@ -8,6 +8,7 @@ import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
+import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { 
   getCachedTimetable, 
   getCachedCalendar, 
@@ -76,6 +77,8 @@ export default function Dashboard() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+  const [factOpacity, setFactOpacity] = useState(1);
+  const [dots, setDots] = useState('.');
   const menuItems = [
     { label: 'Home', ariaLabel: 'Go to home page', link: '/' },
     { label: 'About', ariaLabel: 'Learn about us', link: '/about' },
@@ -195,12 +198,34 @@ export default function Dashboard() {
     fetchUnifiedData();
   }, []);
 
-  // Rotate facts every 8 seconds while loading
+  // Animate dots (. .. ... .. . .. ... .. .)
+  useEffect(() => {
+    if (!loading) return;
+    
+    const dotSequence = ['.', '..', '...', '..', '.', '..', '...', '..', '.'];
+    let dotIndex = 0;
+    
+    const dotInterval = setInterval(() => {
+      setDots(dotSequence[dotIndex]);
+      dotIndex = (dotIndex + 1) % dotSequence.length;
+    }, 300); // Change dots every 300ms
+    
+    return () => clearInterval(dotInterval);
+  }, [loading]);
+
+  // Rotate facts every 8 seconds while loading with smooth transitions
   useEffect(() => {
     if (!loading) return;
     
     const interval = setInterval(() => {
-      setCurrentFact(getRandomFact());
+      // Fade out
+      setFactOpacity(0);
+      
+      // Change fact and fade in after transition
+      setTimeout(() => {
+        setCurrentFact(getRandomFact());
+        setFactOpacity(1);
+      }, 300); // Half of transition duration
     }, 8000);
 
     return () => clearInterval(interval);
@@ -220,7 +245,7 @@ export default function Dashboard() {
     console.log('[Dashboard] Background refresh started');
     
     try {
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       if (!access_token) {
         console.error('[Dashboard] No access token for background refresh');
         return;
@@ -238,8 +263,8 @@ export default function Dashboard() {
         const cacheKey = 'unified_data_cache';
         const cachedTimestampKey = 'unified_data_cache_timestamp';
         
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Dashboard] ✅ Cache refreshed in background');
       } else {
         console.error('[Dashboard] ❌ Background refresh failed:', result.error);
@@ -256,7 +281,7 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       
       if (!access_token) {
         console.error('[Dashboard] No access token found');
@@ -272,8 +297,8 @@ export default function Dashboard() {
       const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
       
       // Option 4: Check if cache is from before login (stale cache)
-      const loginTimestamp = localStorage.getItem('login_timestamp');
-      const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+      const loginTimestamp = getStorageItem('login_timestamp');
+      const cachedTimestamp = getStorageItem(cachedTimestampKey);
       
       if (loginTimestamp && cachedTimestamp) {
         const loginTime = parseInt(loginTimestamp);
@@ -283,14 +308,14 @@ export default function Dashboard() {
           console.log('[Dashboard] 🔄 Cache is from before login, clearing stale cache');
           console.log(`[Dashboard]   - Login time: ${new Date(loginTime).toISOString()}`);
           console.log(`[Dashboard]   - Cache time: ${new Date(cacheTime).toISOString()}`);
-          localStorage.removeItem(cacheKey);
-          localStorage.removeItem(cachedTimestampKey);
+          removeStorageItem(cacheKey);
+          removeStorageItem(cachedTimestampKey);
         }
       }
       
       if (!forceRefresh) {
-        const cachedData = localStorage.getItem(cacheKey);
-        const updatedCachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        const cachedData = getStorageItem(cacheKey);
+        const updatedCachedTimestamp = getStorageItem(cachedTimestampKey);
         
         if (cachedData && updatedCachedTimestamp) {
           const age = Date.now() - parseInt(updatedCachedTimestamp);
@@ -392,8 +417,8 @@ export default function Dashboard() {
 
       // Store in browser cache
       if (result.success) {
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
       }
 
       if (!response.ok || (result.error === 'session_expired')) {
@@ -455,22 +480,22 @@ export default function Dashboard() {
         extractedSemester = (result as { semester?: number }).semester!;
         console.log('[Dashboard] Semester from root.semester:', extractedSemester);
       }
-      // 4. Try localStorage cache
+      // 4. Try storage cache
       else {
-        const cachedSemester = localStorage.getItem('user_semester');
+        const cachedSemester = getStorageItem('user_semester');
         if (cachedSemester) {
           extractedSemester = parseInt(cachedSemester, 10);
-          console.log('[Dashboard] Semester from localStorage cache:', extractedSemester);
+          console.log('[Dashboard] Semester from storage cache:', extractedSemester);
         }
       }
       
       // Default to 1 if no semester found
       const finalSemester = extractedSemester || 1;
       
-      // Store semester in localStorage if found
+      // Store semester in storage if found
       if (extractedSemester) {
-        localStorage.setItem('user_semester', extractedSemester.toString());
-        console.log('[Dashboard] 💾 Stored semester in localStorage:', extractedSemester);
+          setStorageItem('user_semester', extractedSemester.toString());
+        console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
       
       const modifiedCalendarData = markSaturdaysAsHolidays(calendar as CalendarEvent[], finalSemester);
@@ -531,7 +556,7 @@ export default function Dashboard() {
         } else if ((result as { semester?: number }).semester) {
           extractedSemester = (result as { semester?: number }).semester!;
         } else {
-          const cachedSemester = localStorage.getItem('user_semester');
+          const cachedSemester = getStorageItem('user_semester');
           if (cachedSemester) {
             extractedSemester = parseInt(cachedSemester, 10);
           }
@@ -558,13 +583,16 @@ export default function Dashboard() {
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
       <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
-          Loading your Dashboard...
+          Loading your Dashboard<span className="inline-block w-8 sm:w-12 md:w-16 lg:w-20 text-left">{dots}</span>
         </div>
         <div className="max-w-2xl px-6">
           <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
-            Meanwhile, here are some interesting facts:
+            This could take a minute or two so meanwhile here are some facts to keep you entertained:
           </div>
-          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+          <div 
+            className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic transition-opacity duration-500 ease-in-out"
+            style={{ opacity: factOpacity }}
+          >
             {currentFact}
           </div>
         </div>
@@ -642,20 +670,20 @@ export default function Dashboard() {
             return (
               <div 
                 key={dayInfo.dateStr}
-                className={`relative p-2.5 sm:p-2.5 md:p-3 lg:p-3 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-between items-center`}
+                className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
               >
-                <div className="flex gap-2 sm:gap-3 md:gap-4 lg:gap-4 items-center">
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[70px] sm:min-w-[80px] md:min-w-[90px] lg:min-w-[100px]`}>
+                <div className="flex gap-1.5 sm:gap-2 md:gap-3 lg:gap-3 items-center">
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[80px] lg:min-w-[85px]`}>
                     {dayInfo.dayName}
                   </p>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora`}>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora`}>
                     {dayInfo.dateStr}
                   </p>
                 </div>
-                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex-1 text-center`}>
+                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
                   {event?.content || 'No events'}
                 </p>
-                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[75px] lg:min-w-[80px] text-right`}>
+                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
                   {event?.day_order || '-'}
                 </p>
               </div>

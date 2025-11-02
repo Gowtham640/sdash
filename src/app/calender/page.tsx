@@ -8,6 +8,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
+import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 
 interface CalendarEvent {
   date: string;
@@ -133,7 +134,7 @@ export default function CalendarPage() {
         setIsRefreshing(true);
       }
 
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       
       if (!access_token) {
         console.error('[Calendar] No access token found');
@@ -149,8 +150,8 @@ export default function CalendarPage() {
       const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
       
       if (!forceRefresh) {
-        const cachedData = localStorage.getItem(cacheKey);
-        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        const cachedData = getStorageItem(cacheKey);
+        const cachedTimestamp = getStorageItem(cachedTimestampKey);
         
         if (cachedData && cachedTimestamp) {
           const age = Date.now() - parseInt(cachedTimestamp);
@@ -191,22 +192,22 @@ export default function CalendarPage() {
                   extractedSemester = (result as { semester?: number }).semester!;
                   console.log('[Calendar] Semester from root.semester:', extractedSemester);
                 }
-                // 4. Try localStorage cache
+                // 4. Try storage cache
                 else {
-                  const cachedSemester = localStorage.getItem('user_semester');
+                  const cachedSemester = getStorageItem('user_semester');
                   if (cachedSemester) {
                     extractedSemester = parseInt(cachedSemester, 10);
-                    console.log('[Calendar] Semester from localStorage cache:', extractedSemester);
+                    console.log('[Calendar] Semester from storage cache:', extractedSemester);
                   }
                 }
                 
                 // Default to 1 if no semester found
                 const semester = extractedSemester || 1;
                 
-                // Store semester in localStorage if found
+                // Store semester in storage if found
                 if (extractedSemester) {
-                  localStorage.setItem('user_semester', extractedSemester.toString());
-                  console.log('[Calendar] 💾 Stored semester in localStorage:', extractedSemester);
+                  setStorageItem('user_semester', extractedSemester.toString());
+                  console.log('[Calendar] 💾 Stored semester in storage:', extractedSemester);
                 }
                 
                 console.log(`[Calendar] User semester: ${semester} (from cache)`);
@@ -243,8 +244,8 @@ export default function CalendarPage() {
 
       // ✅ STEP 3: Store in browser cache for next time
       if (result.success) {
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Calendar] ✅ Stored in browser cache');
       }
 
@@ -254,7 +255,7 @@ export default function CalendarPage() {
         
         // Check if we have cached data to fall back to
         const cacheKey = 'unified_data_cache';
-        const cachedData = localStorage.getItem(cacheKey);
+        const cachedData = getStorageItem(cacheKey);
         if (cachedData) {
           console.log('[Calendar] Using cached data as fallback');
           const cachedResult = JSON.parse(cachedData);
@@ -279,9 +280,9 @@ export default function CalendarPage() {
             else if ((cachedResult as { semester?: number }).semester) {
               extractedSemester = (cachedResult as { semester?: number }).semester!;
             }
-            // 4. Try localStorage cache
+            // 4. Try storage cache
             else {
-              const cachedSemester = localStorage.getItem('user_semester');
+              const cachedSemester = getStorageItem('user_semester');
               if (cachedSemester) {
                 extractedSemester = parseInt(cachedSemester, 10);
               }
@@ -290,9 +291,9 @@ export default function CalendarPage() {
             // Default to 1 if no semester found
             const semester = extractedSemester || 1;
             
-            // Store semester in localStorage if found
+            // Store semester in storage if found
             if (extractedSemester) {
-              localStorage.setItem('user_semester', extractedSemester.toString());
+              setStorageItem('user_semester', extractedSemester.toString());
             }
             
             // Mark Saturdays as holidays if not semester 1
@@ -349,22 +350,22 @@ export default function CalendarPage() {
           extractedSemester = (result as { semester?: number }).semester!;
           console.log('[Calendar] Semester from root.semester:', extractedSemester);
         }
-        // 4. Try localStorage cache
+        // 4. Try storage cache
         else {
-          const cachedSemester = localStorage.getItem('user_semester');
+          const cachedSemester = getStorageItem('user_semester');
           if (cachedSemester) {
             extractedSemester = parseInt(cachedSemester, 10);
-            console.log('[Calendar] Semester from localStorage cache:', extractedSemester);
+            console.log('[Calendar] Semester from storage cache:', extractedSemester);
           }
         }
         
         // Default to 1 if no semester found
         const semester = extractedSemester || 1;
         
-        // Store semester in localStorage if found
+        // Store semester in storage if found
         if (extractedSemester) {
-          localStorage.setItem('user_semester', extractedSemester.toString());
-          console.log('[Calendar] 💾 Stored semester in localStorage:', extractedSemester);
+          setStorageItem('user_semester', extractedSemester.toString());
+          console.log('[Calendar] 💾 Stored semester in storage:', extractedSemester);
         }
         
         console.log(`[Calendar] User semester: ${semester}`);
@@ -472,7 +473,7 @@ export default function CalendarPage() {
           <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
             Meanwhile, here are some interesting facts:
           </div>
-          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
+          <div className="text-gray-200 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
             {currentFact}
           </div>
         </div>
@@ -562,7 +563,7 @@ export default function CalendarPage() {
                 textColor = 'text-white';
               }
               
-              const hoverColor = isCurrentDate ? 'bg-gray-200' : (isHoliday ? 'bg-green-500' : 'bg-white/20');
+              const hoverColor = isCurrentDate ? 'bg-gray-100' : (isHoliday ? 'bg-green-500' : 'bg-white/20');
               const doText = isHoliday ? 'Holiday' : event.day_order;
               
               return (
@@ -605,16 +606,16 @@ export default function CalendarPage() {
           </div> 
             ))}
           </div>
-          <div className="text-gray-300 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm"> Note: This is for all students. For specific course, please refer to the course calendar.</div>
+          <div className="text-gray-200 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm"> Note: This is specifically for your course. For general course, please refer to the course calendar.</div>
         </div>
 
 
         {/* Re-auth Modal */}
         {showPasswordModal && (
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-            <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
+            <div className="bg-gray-700 rounded-lg p-8 max-w-md w-full mx-4">
               <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
-              <p className="text-gray-300 mb-6">
+              <p className="text-gray-200 mb-6">
                 Your portal session has expired. Please sign in again to continue.
               </p>
               <button

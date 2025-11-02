@@ -3,6 +3,8 @@
  * These rarely change, so we cache them aggressively
  */
 
+import { setStorageItem, getStorageItem, removeStorageItem } from './browserStorage';
+
 const LONG_TERM_CACHE_DURATION = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
 const TIMETABLE_CACHE_KEY = 'tt_calendar_cache_timetable';
 const CALENDAR_CACHE_KEY = 'tt_calendar_cache_calendar';
@@ -13,7 +15,7 @@ const LONG_TERM_CACHE_TIMESTAMP_KEY = 'tt_calendar_cache_timestamp';
  */
 export function isLongTermCacheValid(): boolean {
   try {
-    const timestamp = localStorage.getItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
+    const timestamp = getStorageItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
     if (!timestamp) {
       console.log('[LongTermCache] 🔍 Validation: No timestamp found');
       return false;
@@ -46,7 +48,7 @@ export function getCachedTimetable(): any | null {
       return null;
     }
     
-    const cached = localStorage.getItem(TIMETABLE_CACHE_KEY);
+    const cached = getStorageItem(TIMETABLE_CACHE_KEY);
     if (cached) {
       const parsed = JSON.parse(cached);
       console.log('[LongTermCache] ✅ Retrieved timetable from cache');
@@ -71,7 +73,7 @@ export function getCachedCalendar(): any | null {
       return null;
     }
     
-    const cached = localStorage.getItem(CALENDAR_CACHE_KEY);
+    const cached = getStorageItem(CALENDAR_CACHE_KEY);
     if (cached) {
       const parsed = JSON.parse(cached);
       console.log('[LongTermCache] ✅ Retrieved calendar from cache');
@@ -100,13 +102,17 @@ export function storeLongTermCache(timetable: any, calendar: any): void {
     console.log(`[LongTermCache]   - Calendar size: ${(calendarSize / 1024).toFixed(2)} KB`);
     console.log(`[LongTermCache]   - Total size: ${(totalSize / 1024).toFixed(2)} KB`);
     
-    localStorage.setItem(TIMETABLE_CACHE_KEY, JSON.stringify(timetable));
-    localStorage.setItem(CALENDAR_CACHE_KEY, JSON.stringify(calendar));
-    localStorage.setItem(LONG_TERM_CACHE_TIMESTAMP_KEY, Date.now().toString());
+    const timetableStored = setStorageItem(TIMETABLE_CACHE_KEY, JSON.stringify(timetable));
+    const calendarStored = setStorageItem(CALENDAR_CACHE_KEY, JSON.stringify(calendar));
+    const timestampStored = setStorageItem(LONG_TERM_CACHE_TIMESTAMP_KEY, Date.now().toString());
+    
+    if (!timetableStored || !calendarStored || !timestampStored) {
+      throw new Error('Storage failed - one or more items could not be stored');
+    }
     
     // Verify storage
-    const storedTimetable = localStorage.getItem(TIMETABLE_CACHE_KEY);
-    const storedCalendar = localStorage.getItem(CALENDAR_CACHE_KEY);
+    const storedTimetable = getStorageItem(TIMETABLE_CACHE_KEY);
+    const storedCalendar = getStorageItem(CALENDAR_CACHE_KEY);
     
     if (storedTimetable && storedCalendar) {
       console.log('[LongTermCache] ✅ Storage verified successfully');
@@ -120,11 +126,11 @@ export function storeLongTermCache(timetable: any, calendar: any): void {
     console.error(`[LongTermCache]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
     
     // If quota exceeded, try to clear old caches
-    if (error instanceof Error && error.message.includes('quota')) {
-      console.warn('[LongTermCache] ⚠️  localStorage quota exceeded, attempting cleanup...');
+    if (error instanceof Error && (error.message.includes('quota') || error.message.includes('Storage failed'))) {
+      console.warn('[LongTermCache] ⚠️  Storage quota exceeded, attempting cleanup...');
       try {
-        localStorage.removeItem(TIMETABLE_CACHE_KEY + '_old');
-        localStorage.removeItem(CALENDAR_CACHE_KEY + '_old');
+        removeStorageItem(TIMETABLE_CACHE_KEY + '_old');
+        removeStorageItem(CALENDAR_CACHE_KEY + '_old');
       } catch {
         // Ignore cleanup errors
       }
@@ -137,9 +143,9 @@ export function storeLongTermCache(timetable: any, calendar: any): void {
  */
 export function clearLongTermCache(): void {
   try {
-    localStorage.removeItem(TIMETABLE_CACHE_KEY);
-    localStorage.removeItem(CALENDAR_CACHE_KEY);
-    localStorage.removeItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
+    removeStorageItem(TIMETABLE_CACHE_KEY);
+    removeStorageItem(CALENDAR_CACHE_KEY);
+    removeStorageItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
     console.log('[LongTermCache] Cleared ✓');
   } catch (error) {
     console.error('[LongTermCache] Failed to clear:', error);
@@ -151,7 +157,7 @@ export function clearLongTermCache(): void {
  */
 export function getLongTermCacheAge(): number {
   try {
-    const timestamp = localStorage.getItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
+    const timestamp = getStorageItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
     if (!timestamp) {
       return -1;
     }
@@ -172,7 +178,7 @@ export function getLongTermCacheDaysRemaining(): number {
       return 0;
     }
     
-    const timestamp = localStorage.getItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
+    const timestamp = getStorageItem(LONG_TERM_CACHE_TIMESTAMP_KEY);
     if (!timestamp) {
       return 0;
     }

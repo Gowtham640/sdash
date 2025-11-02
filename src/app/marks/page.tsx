@@ -7,6 +7,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import ShinyText from '../../components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
+import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 
 interface Assessment {
   assessment_name: string;
@@ -93,7 +94,7 @@ export default function MarksPage() {
     console.log('[Marks] Background refresh started');
     
     try {
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       if (!access_token) {
         console.error('[Marks] No access token for background refresh');
         return;
@@ -111,8 +112,8 @@ export default function MarksPage() {
         const cacheKey = 'unified_data_cache';
         const cachedTimestampKey = 'unified_data_cache_timestamp';
         
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Marks] ✅ Cache refreshed in background');
       } else {
         console.error('[Marks] ❌ Background refresh failed:', result.error);
@@ -132,7 +133,7 @@ export default function MarksPage() {
       }
       setError(null);
 
-      const access_token = localStorage.getItem('access_token');
+      const access_token = getStorageItem('access_token');
       
       if (!access_token) {
         console.error('[Marks] No access token found');
@@ -192,8 +193,8 @@ export default function MarksPage() {
       };
       
       if (!forceRefresh) {
-        const cachedData = localStorage.getItem(cacheKey);
-        const cachedTimestamp = localStorage.getItem(cachedTimestampKey);
+        const cachedData = getStorageItem(cacheKey);
+        const cachedTimestamp = getStorageItem(cachedTimestampKey);
         
         if (cachedData && cachedTimestamp) {
           const age = Date.now() - parseInt(cachedTimestamp);
@@ -254,8 +255,8 @@ export default function MarksPage() {
 
       // ✅ STEP 3: Store in browser cache for next time
       if (result.success) {
-        localStorage.setItem(cacheKey, JSON.stringify(result));
-        localStorage.setItem(cachedTimestampKey, Date.now().toString());
+        setStorageItem(cacheKey, JSON.stringify(result));
+        setStorageItem(cachedTimestampKey, Date.now().toString());
         console.log('[Marks] ✅ Stored in browser cache');
       }
 
@@ -494,80 +495,7 @@ export default function MarksPage() {
         })}
       </div>
 
-      {/* Marks Summary - Latest Courses First */}
-      <div className="w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6 mb-6 sm:mb-7 md:mb-8 lg:mb-8">
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 sm:mb-5 md:mb-6 lg:mb-6 text-center">
-          Marks Summary
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-auto-fit gap-3 sm:gap-4">
-          {[...marksData.all_courses]
-            .filter(course => course.assessments && course.assessments.length > 0)
-            .map(course => {
-              // Sort assessments within each course by assessment name (latest first)
-              const sortedAssessments = [...course.assessments].sort((a, b) => {
-                // Extract assessment type and number for comparison
-                const getAssessmentOrder = (name: string) => {
-                  if (name.includes('FT-')) return 1; // FT assessments first
-                  if (name.includes('FP-')) return 2; // FP assessments second  
-                  if (name.includes('LLJ-')) return 3; // LLJ assessments third
-                  return 4; // Other assessments last
-                };
-                
-                const orderA = getAssessmentOrder(a.assessment_name);
-                const orderB = getAssessmentOrder(b.assessment_name);
-                
-                if (orderA !== orderB) return orderA - orderB;
-                
-                // If same type, sort by name alphabetically (reverse for latest first)
-                return b.assessment_name.localeCompare(a.assessment_name);
-              });
-              
-              return { ...course, assessments: sortedAssessments };
-            })
-            .sort((a, b) => {
-              // Sort courses by their latest assessment
-              const latestAssessmentA = a.assessments[0]?.assessment_name || '';
-              const latestAssessmentB = b.assessments[0]?.assessment_name || '';
-              return latestAssessmentB.localeCompare(latestAssessmentA);
-            })
-            .map((course, index) => {
-              const avgPercentage = course.assessments.length > 0
-                ? (course.assessments.reduce((sum, a) => sum + parseFloat(a.percentage.replace('%', '') || '0'), 0) / course.assessments.length)
-                : 0;
-              
-              return (
-                <div 
-                  key={`summary-${index}`} 
-                  className="bg-white/5 border border-white/10 rounded-2xl p-3 sm:p-3.5 md:p-4 lg:p-4 hover:bg-white/10 transition-colors"
-                >
-                  <div className="text-white/80 text-[10px] sm:text-xs font-sora font-bold mb-2 truncate" title={getCourseTitle(course)}>
-                    {getCourseTitle(course)}
-                  </div>
-                  <div className="text-gray-400 text-[10px] sm:text-xs font-sora mb-2 sm:mb-3">
-                    {course.course_code}
-                  </div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-white/60 text-[10px] sm:text-xs">Avg:</span>
-                    <span className={`text-base sm:text-lg font-bold ${avgPercentage >= 75 ? 'text-green-400' : avgPercentage >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
-                      {avgPercentage.toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-white/10 rounded-full h-1.5 sm:h-2 overflow-hidden">
-                    <div 
-                      className={`h-full ${avgPercentage >= 75 ? 'bg-green-500' : avgPercentage >= 60 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                      style={{ width: `${Math.min(avgPercentage, 100)}%` }}
-                    />
-                  </div>
-                  <div className="text-white/50 text-[10px] sm:text-xs font-sora mt-2">
-                    {course.assessments.length} assessment{course.assessments.length > 1 ? 's' : ''}
-                  </div>
-                </div>
-              );
-            })}
-        </div>
-      </div>
-
-
+      
       {/* Re-auth Modal */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
