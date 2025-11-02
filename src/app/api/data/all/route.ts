@@ -515,10 +515,16 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
       };
       
       // Update user's semester in database if available (fire and forget)
-      const attendanceData = fullData.attendance as { semester?: number } | undefined;
+      const attendanceData = fullData.attendance as { semester?: number; name?: string } | undefined;
       if (attendanceData?.semester) {
         console.log(`[API /data/all] 📝 Semester found in response: ${attendanceData.semester}`);
         updateSemesterInDatabase(user_id, attendanceData.semester);
+      }
+      
+      // Update user's name in database if available (fire and forget)
+      if (attendanceData?.name) {
+        console.log(`[API /data/all] 📝 Name found in response: ${attendanceData.name}`);
+        updateNameInDatabase(user_id, attendanceData.name);
       }
       
       return extractedResult as unknown as Record<string, unknown>;
@@ -670,7 +676,7 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
     console.log(`[API /data/all]   - Marks: ${dynamicResultData?.marks ? "✓" : "✗"}`);
     
     // Update user's semester in database if训练 available (fire and forget)
-    const dynamicAttendanceData = finalResultTyped.data as { attendance?: { semester?: number } } | undefined;
+    const dynamicAttendanceData = finalResultTyped.data as { attendance?: { semester?: number; name?: string } } | undefined;
     if (dynamicAttendanceData?.attendance?.semester) {
       console.log(`[API /data/all] 📝 Semester found in response: ${dynamicAttendanceData.attendance.semester}`);
       updateSemesterInDatabase(user_id, dynamicAttendanceData.attendance.semester);
@@ -678,6 +684,12 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
       console.log(`[API /data/all] 📝 No semester data to update`);
       const checkAttendanceData = finalResultTyped.data as { attendance?: unknown } | undefined;
       console.log(`[API /data/all]   - Attendance data exists: ${checkAttendanceData?.attendance ? "✓" : "✗"}`);
+    }
+    
+    // Update user's name in database if available (fire and forget)
+    if (dynamicAttendanceData?.attendance?.name) {
+      console.log(`[API /data/all] 📝 Name found in response: ${dynamicAttendanceData.attendance.name}`);
+      updateNameInDatabase(user_id, dynamicAttendanceData.attendance.name);
     }
   }
 
@@ -812,6 +824,44 @@ async function updateSemesterInDatabase(user_id: string, semester: number): Prom
         } else {
         console.log(`[API /data/all] ✅ Database update successful (${dbDuration}ms)`);
         console.log(`[API /data/all]   - Updated semester to: ${semester}`);
+        console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
+        }
+      } catch (dbError) {
+      console.error(`[API /data/all] ❌ Database exception:`);
+      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+      if (dbError instanceof Error && dbError.stack) {
+        console.error(`[API /data/all]   - Stack: ${dbError.stack}`);
+      }
+      }
+    })();
+}
+
+/**
+ * Update user's name in database (fire and forget)
+ */
+async function updateNameInDatabase(user_id: string, name: string): Promise<void> {
+  console.log(`[API /data/all] 💾 Database name update started (fire-and-forget)`);
+  console.log(`[API /data/all]   - User ID: ${user_id}`);
+  console.log(`[API /data/all]   - Name: ${name}`);
+    
+    // Fire and forget - don't wait for DB update
+    (async () => {
+      try {
+      const dbStartTime = Date.now();
+        const { data, error } = await supabaseAdmin
+          .from("users")
+          .update({ name })
+          .eq("id", user_id)
+          .select();
+      const dbDuration = Date.now() - dbStartTime;
+        
+        if (error) {
+        console.error(`[API /data/all] ❌ Database name update failed (${dbDuration}ms)`);
+        console.error(`[API /data/all]   - Error: ${error.message}`);
+        console.error(`[API /data/all]   - Details: ${JSON.stringify(error)}`);
+        } else {
+        console.log(`[API /data/all] ✅ Database name update successful (${dbDuration}ms)`);
+        console.log(`[API /data/all]   - Updated name to: ${name}`);
         console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
         }
       } catch (dbError) {
