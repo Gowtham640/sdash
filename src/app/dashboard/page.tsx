@@ -223,7 +223,7 @@ export default function Dashboard() {
       
       // Change fact and fade in after transition
       setTimeout(() => {
-        setCurrentFact(getRandomFact());
+      setCurrentFact(getRandomFact());
         setFactOpacity(1);
       }, 300); // Half of transition duration
     }, 8000);
@@ -276,6 +276,38 @@ export default function Dashboard() {
     }
   };
 
+  /**
+   * Wait for password to be available in storage (handles race condition after login)
+   * Retries with exponential backoff up to 5 attempts
+   */
+  const waitForPassword = async (maxAttempts = 5): Promise<string | null> => {
+    const getPortalPassword = async () => {
+      const { getPortalPassword } = await import('@/lib/passwordStorage');
+      return getPortalPassword();
+    };
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const password = await getPortalPassword();
+      
+      if (password) {
+        if (attempt > 1) {
+          console.log(`[Dashboard] ✅ Password available after ${attempt} attempt(s)`);
+        }
+        return password;
+      }
+      
+      if (attempt < maxAttempts) {
+        // Exponential backoff: 200ms, 400ms, 800ms, 1600ms
+        const delay = 200 * Math.pow(2, attempt - 1);
+        console.log(`[Dashboard] ⏳ Password not available yet, retrying in ${delay}ms... (attempt ${attempt}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    console.error('[Dashboard] ❌ Password not available after all retry attempts');
+    return null;
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
@@ -290,11 +322,62 @@ export default function Dashboard() {
         return;
       }
 
+      // Ensure password is available (handles race condition after login redirect)
+      const password = await waitForPassword();
+      
+      if (!password) {
+        console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
+      }
+
       // Check browser cache first
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
-      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours (matching attendance/marks pages)
+      
+      /**
+       * Calculate dynamic refresh trigger based on backend queue load (Render Python scraper)
+       * - Normal load: 5 minutes before expiration
+       * - Medium load: 20 minutes before expiration
+       * - High load: 40 minutes before expiration
+       */
+      const getDynamicRefreshTrigger = (queueInfo: { backend_queue?: { total_pending_backend_requests?: number } } | undefined): number => {
+        const cacheDuration = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
+        
+        if (!queueInfo?.backend_queue) {
+          // Normal load: 5 minutes before expiration
+          const normalTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
+          console.log('[Dashboard] Using normal refresh trigger: 5 minutes before expiration (no backend queue info)');
+          return normalTrigger;
+        }
+        
+        // Use backend queue to determine load (requests waiting in Render Python scraper)
+        const backendPending = queueInfo.backend_queue.total_pending_backend_requests || 0;
+        
+        // Determine load level based on backend queue
+        const MEDIUM_LOAD_THRESHOLD = 3; // 3+ requests waiting in backend
+        const HIGH_LOAD_THRESHOLD = 5; // 5+ requests waiting in backend
+        
+        // Calculate refresh trigger based on backend queue load
+        let refreshTrigger: number;
+        if (backendPending >= HIGH_LOAD_THRESHOLD) {
+          // High load: 40 minutes before expiration
+          refreshTrigger = cacheDuration - (40 * 60 * 1000); // 5 hours 20 minutes
+          console.log(`[Dashboard] 🔴 HIGH BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
+          console.log(`[Dashboard]   - Refresh trigger: 40 minutes before expiration`);
+        } else if (backendPending >= MEDIUM_LOAD_THRESHOLD) {
+          // Medium load: 20 minutes before expiration
+          refreshTrigger = cacheDuration - (20 * 60 * 1000); // 5 hours 40 minutes
+          console.log(`[Dashboard] 🟡 MEDIUM BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
+          console.log(`[Dashboard]   - Refresh trigger: 20 minutes before expiration`);
+        } else {
+          // Normal load: 5 minutes before expiration
+          refreshTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
+          console.log(`[Dashboard] 🟢 Normal backend load: ${backendPending} requests waiting in Render queue`);
+          console.log(`[Dashboard]   - Refresh trigger: 5 minutes before expiration`);
+        }
+        
+        return refreshTrigger;
+      };
       
       // Option 4: Check if cache is from before login (stale cache)
       const loginTimestamp = getStorageItem('login_timestamp');
@@ -326,15 +409,22 @@ export default function Dashboard() {
             
             if (result.success) {
               processUnifiedData(result);
-              setLoading(false);
+              
+              // Get queue info from cached result for dynamic refresh trigger
+              const queueInfo = result.metadata?.queue_info;
+              
+              // Calculate dynamic refresh trigger based on queue load
+              const refreshTriggerAge = getDynamicRefreshTrigger(queueInfo);
               
               // Background refresh if cache is expiring soon
               const isExpiringSoon = age > refreshTriggerAge;
               if (isExpiringSoon && !isRefreshing) {
-                console.log('[Dashboard] ⏰ Cache expiring soon, refreshing in background...');
+                const minutesUntilExpiration = Math.floor((cacheMaxAge - age) / (60 * 1000));
+                console.log(`[Dashboard] ⏰ Cache expiring soon (${minutesUntilExpiration} min remaining), refreshing in background...`);
                 refreshInBackground();
               }
               
+              setLoading(false);
               return;
             }
           }
@@ -357,22 +447,66 @@ export default function Dashboard() {
         console.log(`[Dashboard] ❌ Long-term cache NOT FOUND or EXPIRED`);
       }
 
-      // Fetch from API
-      const apiStartTime = Date.now();
+      // Fetch from API with automatic retry on password-related session_expired
+      let response: Response | null = null;
+      let result: any = null;
+      let apiStartTime = Date.now();
       const fetchType = forceRefresh ? '(force refresh all)' : (hasLongTermCache ? '(fetching attendance/marks only - optimized)' : '(fetching all data)');
-      console.log(`[Dashboard] 🚀 Fetching from API ${fetchType}`);
-      const response = await fetch('/api/data/all', {
+      
+      // First attempt
+      let attempt = 1;
+      const maxRetries = 3;
+      let shouldRetry = true;
+      
+      while (shouldRetry && attempt <= maxRetries) {
+        console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
+        apiStartTime = Date.now();
+        
+        response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
       });
 
       const apiDuration = Date.now() - apiStartTime;
-      let result = await response.json();
+        result = await response.json();
       
       console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
       console.log(`[Dashboard]   - Success: ${result.success}`);
       console.log(`[Dashboard]   - Status: ${response.status}`);
+        console.log(`[Dashboard]   - Error: ${result.error || 'none'}`);
+        
+        // Check if session_expired is due to missing password (retryable)
+        const isSessionExpiredDueToPassword = 
+          (result.error === 'session_expired' || !response.ok) && 
+          attempt < maxRetries && 
+          !password; // Only retry if password wasn't available initially
+        
+        if (isSessionExpiredDueToPassword) {
+          console.log(`[Dashboard] 🔄 session_expired detected, waiting for password to be stored...`);
+          // Wait a bit longer for password storage to complete
+          const retryDelay = 500 * attempt; // 500ms, 1000ms, 1500ms
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          
+          // Check if password is now available
+          const retryPassword = await waitForPassword(3); // Quick check with fewer attempts
+          if (retryPassword) {
+            console.log(`[Dashboard] ✅ Password now available, retrying API call...`);
+            attempt++;
+            continue; // Retry the API call
+          } else {
+            console.warn(`[Dashboard] ⚠️ Password still not available after wait`);
+          }
+        }
+        
+        shouldRetry = false; // Exit retry loop
+      }
+      
+      // Ensure response and result are set
+      if (!response || !result) {
+        throw new Error('Failed to fetch data from API');
+      }
+      
       console.log(`[Dashboard]   - Partial data: ${result.metadata?.partial_data || false}`);
 
       // Merge long-term cache with API response if needed
@@ -421,11 +555,36 @@ export default function Dashboard() {
         setStorageItem(cachedTimestampKey, Date.now().toString());
       }
 
+      // Only show session_expired error if all retries failed and password is confirmed unavailable
       if (!response.ok || (result.error === 'session_expired')) {
+        const finalPasswordCheck = await waitForPassword(2); // Quick final check
+        if (!finalPasswordCheck) {
+          // Password is definitely not available - legitimate session expired
+          console.error('[Dashboard] ❌ Session expired - password not available after all retries');
+          setError('Your session has expired. Please re-enter your password.');
+          setShowPasswordModal(true);
+          setLoading(false);
+          return;
+        } else {
+          // Password became available - retry one more time
+          console.log('[Dashboard] 🔄 Password available on final check, retrying...');
+          const finalResponse = await fetch('/api/data/all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
+          });
+          const finalResult = await finalResponse.json();
+          
+          if (!finalResponse.ok || (finalResult.error === 'session_expired')) {
         setError('Your session has expired. Please re-enter your password.');
         setShowPasswordModal(true);
         setLoading(false);
         return;
+          }
+          // Success on final retry - update result and continue processing
+          response = finalResponse;
+          result = finalResult;
+        }
       }
 
       if (!result.success) {
@@ -604,14 +763,14 @@ export default function Dashboard() {
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
         <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
-        {error.includes('session') && (
-          <button 
-            onClick={handleReAuthenticate}
-            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
-          >
-            Sign In Again
-          </button>
-        )}
+          {error.includes('session') && (
+            <button 
+              onClick={handleReAuthenticate}
+              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
+            >
+              Sign In Again
+            </button>
+          )}
       </div>
     );
   }

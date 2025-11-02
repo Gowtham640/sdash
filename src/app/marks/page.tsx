@@ -380,17 +380,51 @@ export default function MarksPage() {
       
       {/* Individual Course Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
-        {marksData.all_courses.map((course, index) => {
-          const lineChartData = createLineChartData(course);
-          const courseTitle = getCourseTitle(course);
+        {(() => {
+          // Deduplicate courses based on course_code + subject_type combination
+          // If same course_code + subject_type appears multiple times, keep the one with more assessments
+          const deduplicatedCourses = marksData.all_courses.reduce((acc, course) => {
+            const existing = acc.find(c => 
+              c.course_code === course.course_code && 
+              c.subject_type === course.subject_type
+            );
+            
+            // If duplicate found, keep the one with more assessments (or first one if equal)
+            if (existing) {
+              const existingAssessments = existing.assessments?.length || 0;
+              const currentAssessments = course.assessments?.length || 0;
+              
+              if (currentAssessments > existingAssessments) {
+                // Replace with the one with more assessments
+                const index = acc.indexOf(existing);
+                acc[index] = course;
+              }
+              // Otherwise keep existing (don't add duplicate)
+            } else {
+              // New unique course, add it
+              acc.push(course);
+            }
+            
+            return acc;
+          }, [] as MarksCourse[]);
           
-          // Skip courses with no assessments
-          if (!course.assessments || course.assessments.length === 0) {
-            return null;
-          }
+          console.log('[Marks] Deduplication:', {
+            original: marksData.all_courses.length,
+            deduplicated: deduplicatedCourses.length,
+            removed: marksData.all_courses.length - deduplicatedCourses.length
+          });
           
-  return (
-            <div key={`${course.course_code}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
+          return deduplicatedCourses.map((course, index) => {
+            const lineChartData = createLineChartData(course);
+            const courseTitle = getCourseTitle(course);
+            
+            // Skip courses with no assessments
+            if (!course.assessments || course.assessments.length === 0) {
+              return null;
+            }
+            
+            return (
+              <div key={`${course.course_code}-${course.subject_type}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
               {/* Main Card Content */}
               <div className="flex flex-col justify-start items-start p-4 sm:p-5 md:p-6 lg:p-6 gap-4 sm:gap-4 md:gap-5 lg:gap-6 min-h-[400px]">
                 {/* Course Details - UPDATED to show course title from mapping */}
@@ -491,8 +525,9 @@ export default function MarksPage() {
             </div>
           </div>
         </div>
-          );
-        })}
+            );
+          });
+        })()}
       </div>
 
       

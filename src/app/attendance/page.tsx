@@ -772,6 +772,45 @@ export default function AttendancePage() {
     }
   };
 
+  // Calculate predicted margin: simply subtract absent hours during leave from current margin
+  const getPredictedMargin = (
+    subject: AttendanceSubject, 
+    prediction: PredictionResult, 
+    requiredMargin: { type: string; value: number; text: string }
+  ) => {
+    // Get current margin value (positive for margin, negative for required)
+    const currentMarginValue = requiredMargin.type === 'margin' ? requiredMargin.value : -requiredMargin.value;
+    
+    // Get absent hours during leave period
+    const absentHoursDuringLeave = prediction.absentHoursDuringLeave || 0;
+    
+    // For OD/ML mode, we might have reduction hours (absences reduced), so adjust accordingly
+    let adjustment = absentHoursDuringLeave;
+    if (isOdmlMode && prediction.odmlReductionHours) {
+      // OD/ML reduces absences, so margin should increase
+      adjustment = -prediction.odmlReductionHours;
+    }
+    
+    // Calculate new margin: current margin minus absent hours
+    const newMargin = currentMarginValue - adjustment;
+    
+    if (newMargin < 0) {
+      // Margin went negative, now it's required hours
+      return {
+        type: 'required',
+        value: Math.abs(newMargin),
+        text: ` ${Math.abs(newMargin)} hours`
+      };
+    } else {
+      // Still has margin
+      return {
+        type: 'margin',
+        value: newMargin,
+        text: `${newMargin} hours`
+      };
+    }
+  };
+
 
   const toggleExpanded = (subjectCode: string) => {
     const newExpanded = new Set(expandedSubjects);
@@ -917,6 +956,7 @@ export default function AttendancePage() {
           const attendancePercentage = prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance);
           const currentAttendance = prediction ? prediction.currentAttendance : getAttendancePercentage(subject.attendance);
           const requiredMargin = calculateRequiredMargin(subject);
+          const predictedMargin = prediction ? getPredictedMargin(subject, prediction, requiredMargin) : null;
           const isExpanded = expandedSubjects.has(subject.subject_code);
 
           // Debug: Log attendance subject data
@@ -1015,38 +1055,31 @@ export default function AttendancePage() {
                       )}
                     </div>
                     <div className={`bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora p-2 sm:p-3 ${
-                      prediction ? 
-                        (prediction.predictedAttendance >= 75 ? 'border-green-400/50 bg-green-500/10' : 'border-red-400/50 bg-red-500/10') :
+                      predictedMargin ? 
+                        (predictedMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10') :
                         (requiredMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10')
                     }`}>
-                      <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${
-                        prediction ?
-                          (prediction.predictedAttendance >= 75 ? 'text-green-400' : 'text-red-400') :
-                          (requiredMargin.type === 'required' ? 'text-red-400' : 'text-green-400')
-                      }`}>
-                        {prediction ? 
-                          (prediction.predictedAttendance >= 75 ? 'Margin: ' : 'Required: ') :
-                          (requiredMargin.type === 'required' ? 'Required: ' : 'Margin: ')
-                        }
-                      </span>
-                      {prediction ? 
-                        (prediction.predictedAttendance >= 75 ? 
-                          (isOdmlMode ? 
-                            `${Math.floor((prediction.predictedAttendance - 75) / 100 * parseInt(subject.hours_conducted))} hours` : // OD/ML: use original total
-                            `${Math.floor((prediction.predictedAttendance - 75) / 100 * (parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate))} hours` // Prediction: use future total
-                          ) :
-                          (isOdmlMode ? 
-                            `${Math.ceil((75 - prediction.predictedAttendance) / 100 * parseInt(subject.hours_conducted))} hours` : // OD/ML: use original total
-                            `${Math.ceil((75 - prediction.predictedAttendance) / 100 * (parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate))} hours` // Prediction: use future total
-                          )
-                        ) :
-                        requiredMargin.text
+                      {predictedMargin ? 
+                        <>
+                          <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${
+                            predictedMargin.type === 'required' ? 'text-red-400' : 'text-green-400'
+                          }`}>
+                            {predictedMargin.type === 'required' ? 'Required: ' : 'Margin: '}
+                          </span>
+                          {predictedMargin.text}
+                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
+                            Current: {requiredMargin.text}
+                          </div>
+                        </> :
+                        <>
+                          <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${
+                            requiredMargin.type === 'required' ? 'text-red-400' : 'text-green-400'
+                          }`}>
+                            {requiredMargin.type === 'required' ? 'Required: ' : 'Margin: '}
+                          </span>
+                          {requiredMargin.text}
+                        </>
                       }
-                      {prediction && (
-                        <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                          Current: {requiredMargin.text}
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
