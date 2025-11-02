@@ -16,6 +16,7 @@ import ShinyText from '../../components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
+import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 
 interface AttendanceSubject {
   row_number: number;
@@ -229,7 +230,6 @@ export default function AttendancePage() {
   const [showODMLModal, setShowODMLModal] = useState(false);
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
 
   useEffect(() => {
@@ -308,53 +308,10 @@ export default function AttendancePage() {
     router.push('/auth');
   };
 
-  const refreshInBackground = async () => {
-    if (isRefreshing) {
-      return; // Already refreshing
-    }
-    
-    setIsRefreshing(true);
-    console.log('[Attendance] Background refresh started');
-    
-    try {
-      const access_token = getStorageItem('access_token');
-      if (!access_token) {
-        console.error('[Attendance] No access token for background refresh');
-        return;
-      }
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        const cacheKey = 'unified_data_cache';
-        const cachedTimestampKey = 'unified_data_cache_timestamp';
-        
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-        console.log('[Attendance] ✅ Cache refreshed in background');
-      } else {
-        console.error('[Attendance] ❌ Background refresh failed:', result.error);
-      }
-    } catch (err) {
-      console.error('[Attendance] Background refresh error:', err);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
-      if (forceRefresh) {
-        setIsRefreshing(true);
-      }
 
       const access_token = getStorageItem('access_token');
       
@@ -369,51 +326,6 @@ export default function AttendancePage() {
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
       const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
-      
-      /**
-       * Calculate dynamic refresh trigger based on backend queue load (Render Python scraper)
-       * - Normal load: 5 minutes before expiration
-       * - Medium load: 20 minutes before expiration
-       * - High load: 40 minutes before expiration
-       */
-      const getDynamicRefreshTrigger = (queueInfo: { backend_queue?: { total_pending_backend_requests?: number } } | undefined): number => {
-        const cacheDuration = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
-        
-        if (!queueInfo?.backend_queue) {
-          // Normal load: 5 minutes before expiration
-          const normalTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
-          console.log('[Attendance] Using normal refresh trigger: 5 minutes before expiration (no backend queue info)');
-          return normalTrigger;
-        }
-        
-        // Use backend queue to determine load (requests waiting in Render Python scraper)
-        const backendPending = queueInfo.backend_queue.total_pending_backend_requests || 0;
-        
-        // Determine load level based on backend queue
-        const MEDIUM_LOAD_THRESHOLD = 3; // 3+ requests waiting in backend
-        const HIGH_LOAD_THRESHOLD = 5; // 5+ requests waiting in backend
-        
-        // Calculate refresh trigger based on backend queue load
-        let refreshTrigger: number;
-        if (backendPending >= HIGH_LOAD_THRESHOLD) {
-          // High load: 40 minutes before expiration
-          refreshTrigger = cacheDuration - (40 * 60 * 1000); // 5 hours 20 minutes
-          console.log(`[Attendance] 🔴 HIGH BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
-          console.log(`[Attendance]   - Refresh trigger: 40 minutes before expiration`);
-        } else if (backendPending >= MEDIUM_LOAD_THRESHOLD) {
-          // Medium load: 20 minutes before expiration
-          refreshTrigger = cacheDuration - (20 * 60 * 1000); // 5 hours 40 minutes
-          console.log(`[Attendance] 🟡 MEDIUM BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
-          console.log(`[Attendance]   - Refresh trigger: 20 minutes before expiration`);
-        } else {
-          // Normal load: 5 minutes before expiration
-          refreshTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
-          console.log(`[Attendance] 🟢 Normal backend load: ${backendPending} requests waiting in Render queue`);
-          console.log(`[Attendance]   - Refresh trigger: 5 minutes before expiration`);
-        }
-        
-        return refreshTrigger;
-      };
       
       if (!forceRefresh) {
         const cachedData = getStorageItem(cacheKey);
@@ -477,20 +389,6 @@ export default function AttendancePage() {
                     console.error('[Attendance] Error processing timetable from cache:', err);
                   }
                 }
-              }
-              
-              // Get queue info from cached result
-              const queueInfo = result.metadata?.queue_info;
-              
-              // Calculate dynamic refresh trigger based on queue load
-              const refreshTriggerAge = getDynamicRefreshTrigger(queueInfo);
-              
-              // Background refresh if cache is expiring soon
-              const isExpiringSoon = age > refreshTriggerAge;
-              if (isExpiringSoon && !isRefreshing) {
-                const minutesUntilExpiration = Math.floor((cacheMaxAge - age) / (60 * 1000));
-                console.log(`[Attendance] ⏰ Cache expiring soon (${minutesUntilExpiration} min remaining), refreshing in background...`);
-                refreshInBackground();
               }
               
               setLoading(false);
@@ -697,13 +595,17 @@ export default function AttendancePage() {
         setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
         setCalendarData(modifiedCalendarData);
       }
+      
+      // Register attendance/marks fetch for smart prefetch scheduling
+      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
+        registerAttendanceFetch();
+      }
 
     } catch (err) {
       console.error('[Attendance] Error fetching data:', err);
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
-      setIsRefreshing(false);
     }
   };
 

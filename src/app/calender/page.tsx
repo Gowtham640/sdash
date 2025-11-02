@@ -9,6 +9,14 @@ import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
+import {
+  getCachedCalendar,
+  isCalendarCacheValid,
+  storeCalendarCache,
+  getCalendarCacheAge,
+  getCalendarCacheDaysRemaining
+} from '@/lib/calendarCache';
+import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 
 interface CalendarEvent {
   date: string;
@@ -146,8 +154,7 @@ export default function CalendarPage() {
       // ✅ STEP 1: Check browser cache first (unless force refresh)
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
-      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
       
       if (!forceRefresh) {
         const cachedData = getStorageItem(cacheKey);
@@ -230,19 +237,58 @@ export default function CalendarPage() {
         }
       }
 
-      // ✅ STEP 2: Fetch from API (will use server cache if available)
-      console.log('[Calendar] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+      // ✅ STEP 2: Check long-term cache for calendar (7 days)
+      console.log("[Calendar] 🔍 Checking long-term cache...");
+      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
+      const hasValidCalendar = isCalendarCacheValid() && cachedCalendar;
+
+      if (hasValidCalendar) {
+        const calendarDaysLeft = getCalendarCacheDaysRemaining();
+        const calendarCacheAge = getCalendarCacheAge();
+        console.log(`[Calendar] ✅ Long-term cache FOUND`);
+        console.log(`[Calendar]   - Calendar: ${calendarCacheAge} days old, ${calendarDaysLeft} days remaining`);
+      } else {
+        console.log(`[Calendar] ❌ Long-term cache NOT FOUND or EXPIRED`);
+      }
+
+      // ✅ STEP 3: Fetch from API (will use server cache if available)
+      const fetchType = forceRefresh ? '(force refresh)' : (hasValidCalendar ? '(checking server cache with long-term calendar cache)' : '(checking server cache)');
+      console.log(`[Calendar] 🚀 Fetching from API ${fetchType}`);
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasValidCalendar))
       });
 
-      const result = await response.json();
+      let result = await response.json();
       console.log('[Calendar] Unified API response:', result);
+      console.log(`[Calendar]   - Partial data: ${result.metadata?.partial_data || false}`);
 
-      // ✅ STEP 3: Store in browser cache for next time
+      // Merge long-term cache with API response if needed
+      if (hasValidCalendar && result.metadata?.partial_data && !forceRefresh) {
+        console.log('[Calendar] 🔗 Merging long-term calendar cache with fresh attendance/marks');
+        const resultWithCache = {
+          ...result,
+          data: {
+            ...result.data,
+            calendar: {
+              success: true,
+              data: cachedCalendar,
+              cached: true,
+              age_days: getCalendarCacheAge()
+            }
+          },
+          metadata: {
+            ...result.metadata,
+            calendar_cached: hasValidCalendar,
+            calendar_cache_days_remaining: getCalendarCacheDaysRemaining()
+          }
+        };
+        result = resultWithCache;
+      }
+
+      // ✅ STEP 4: Store in browser cache for next time
       if (result.success) {
         setStorageItem(cacheKey, JSON.stringify(result));
         setStorageItem(cachedTimestampKey, Date.now().toString());
@@ -254,7 +300,6 @@ export default function CalendarPage() {
         console.error('[Calendar] Session expired - checking for cached data...');
         
         // Check if we have cached data to fall back to
-        const cacheKey = 'unified_data_cache';
         const cachedData = getStorageItem(cacheKey);
         if (cachedData) {
           console.log('[Calendar] Using cached data as fallback');
@@ -375,8 +420,17 @@ export default function CalendarPage() {
         
         setCalendarData(calendarEvents);
         console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events');
+        
+        // Store calendar in long-term cache (7-day cache)
+        storeCalendarCache(calendarEvents);
+        console.log('[Calendar] ✅ Stored calendar (valid for 7 days)');
       } else {
         throw new Error('Calendar data unavailable');
+      }
+      
+      // Register attendance/marks fetch for smart prefetch scheduling
+      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
+        registerAttendanceFetch();
       }
 
     } catch (err) {

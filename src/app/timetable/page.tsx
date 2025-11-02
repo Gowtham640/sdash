@@ -7,13 +7,17 @@ import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { 
-  getCachedTimetable, 
-  getCachedCalendar, 
-  isLongTermCacheValid, 
-  storeLongTermCache,
-  getLongTermCacheAge,
-  getLongTermCacheDaysRemaining 
-} from '@/lib/longTermCache';
+  getCachedTimetable,
+  isTimetableCacheValid,
+  storeTimetableCache,
+  getTimetableCacheAge,
+  getTimetableCacheDaysRemaining 
+} from '@/lib/timetableCache';
+import {
+  getCachedCalendar,
+  isCalendarCacheValid
+} from '@/lib/calendarCache';
+import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 
 interface TimeSlot {
   time: string;
@@ -96,8 +100,7 @@ export default function TimetablePage() {
       // ✅ STEP 1: Check browser cache first (unless force refresh)
       const cacheKey = 'unified_data_cache';
       const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 10 * 60 * 1000; // 10 minutes
-      const refreshTriggerAge = 9 * 60 * 1000; // 9 minutes - start background refresh
+      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
       
       if (!forceRefresh) {
         const cachedData = getStorageItem(cacheKey);
@@ -144,25 +147,24 @@ export default function TimetablePage() {
         }
       }
 
-      // ✅ STEP 2: Check long-term cache for timetable/calendar
-      console.log("[Timetable] 🔍 Checking long-term cache...");
+      // ✅ STEP 2: Check static cache for timetable/calendar
+      console.log("[Timetable] 🔍 Checking static cache...");
       const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
       const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasLongTermCache = !!(isLongTermCacheValid() && cachedTimetable && cachedCalendar);
+      const hasValidTimetable = isTimetableCacheValid() && cachedTimetable;
+      const hasValidCalendar = isCalendarCacheValid() && cachedCalendar;
+      const hasLongTermCache = hasValidTimetable && hasValidCalendar;
 
       if (hasLongTermCache) {
-        const daysLeft = getLongTermCacheDaysRemaining();
-        const cacheAge = getLongTermCacheAge();
-        console.log(`[Timetable] ✅ Long-term cache FOUND`);
-        console.log(`[Timetable]   - Cache age: ${cacheAge} days`);
-        console.log(`[Timetable]   - Days remaining: ${daysLeft} days`);
-        console.log(`[Timetable]   - Timetable: ✓ Cached`);
-        console.log(`[Timetable]   - Calendar: ✓ Cached`);
+        const timetableDaysLeft = getTimetableCacheDaysRemaining();
+        const timetableCacheAge = getTimetableCacheAge();
+        console.log(`[Timetable] ✅ Static cache FOUND`);
+        console.log(`[Timetable]   - Timetable: ${timetableCacheAge} days old, ${timetableDaysLeft} days remaining`);
+        console.log(`[Timetable]   - Calendar: cached`);
       } else {
-        console.log(`[Timetable] ❌ Long-term cache NOT FOUND or EXPIRED`);
-        if (!isLongTermCacheValid()) {
-          console.log(`[Timetable]   - Reason: Cache expired (${getLongTermCacheAge()} days old)`);
-        }
+        console.log(`[Timetable] ❌ Static cache NOT FOUND or EXPIRED`);
+        if (!hasValidTimetable) console.log(`[Timetable]   - Timetable: missing or expired`);
+        if (!hasValidCalendar) console.log(`[Timetable]   - Calendar: missing or expired`);
       }
 
       // ✅ STEP 3: Fetch from API
@@ -184,44 +186,47 @@ export default function TimetablePage() {
       console.log(`[Timetable]   - Status: ${response.status}`);
       console.log(`[Timetable]   - Partial data: ${result.metadata?.partial_data || false}`);
 
-      // ✅ STEP 4: Merge long-term cache with API response if needed
+      // ✅ STEP 4: Merge split cache with API response if needed
       if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
-        console.log('[Timetable] 🔗 Merging long-term cache with fresh attendance/marks');
-        result = {
+        console.log('[Timetable] 🔗 Merging static cache with fresh attendance/marks');
+        const resultWithCache = {
           ...result,
           data: {
             ...result.data,
-            timetable: {
+            timetable: hasValidTimetable ? {
               success: true,
               data: cachedTimetable,
               cached: true,
-              age_days: getLongTermCacheAge()
-            },
-            calendar: {
+              age_days: getTimetableCacheAge()
+            } : result.data.timetable,
+            calendar: hasValidCalendar ? {
               success: true,
               data: cachedCalendar,
-              cached: true,
-              age_days: getLongTermCacheAge()
-            }
+              cached: true
+            } : result.data.calendar
           },
           metadata: {
             ...result.metadata,
-            timetable_cached: true,
-            calendar_cached: true,
-            cache_days_remaining: getLongTermCacheDaysRemaining()
+            timetable_cached: hasValidTimetable,
+            calendar_cached: hasValidCalendar
           }
         };
+        result = resultWithCache;
       }
 
-      // ✅ STEP 5: Store timetable/calendar in long-term cache if fresh data received
-      if (result.success && !hasLongTermCache && result.data?.timetable?.success && result.data?.timetable?.data &&
-          result.data?.calendar?.success && result.data?.calendar?.data) {
-        console.log('[Timetable] 💾 Storing timetable & calendar in long-term cache...');
-        storeLongTermCache(
-          result.data.timetable.data,
-          result.data.calendar.data
-        );
-        console.log('[Timetable] ✅ Stored in long-term cache (valid for 30 days)');
+      // ✅ STEP 5: Store timetable/calendar in split cache if fresh data received
+      if (result.success) {
+        // Store timetable separately (30-day cache)
+        if (result.data?.timetable?.success && result.data?.timetable?.data &&
+            (!hasValidTimetable || forceRefresh)) {
+          console.log('[Timetable] 💾 Storing timetable in cache...');
+          storeTimetableCache(result.data.timetable.data);
+          console.log('[Timetable] ✅ Stored timetable (valid for 30 days)');
+        }
+        
+        // Store calendar separately (7-day cache) - only if we also got calendar data  
+        // Note: Calendar storage not implemented here as this is timetable page
+        // Calendar should be stored on calendar page
       }
 
       // ✅ STEP 6: Store in short-term browser cache for next time
@@ -276,6 +281,11 @@ export default function TimetablePage() {
         const stats = getDayOrderStats(result.data.calendar.data);
         setDayOrderStats(stats);
         console.log('[Timetable] Day order stats calculated');
+      }
+      
+      // Register attendance/marks fetch for smart prefetch scheduling
+      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
+        registerAttendanceFetch();
       }
 
     } catch (err) {

@@ -10,13 +10,20 @@ import { getRandomFact } from "@/lib/randomFacts";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { 
-  getCachedTimetable, 
-  getCachedCalendar, 
-  isLongTermCacheValid, 
-  storeLongTermCache,
-  getLongTermCacheAge,
-  getLongTermCacheDaysRemaining 
-} from '@/lib/longTermCache';
+  getCachedTimetable,
+  isTimetableCacheValid,
+  storeTimetableCache,
+  getTimetableCacheAge,
+  getTimetableCacheDaysRemaining 
+} from '@/lib/timetableCache';
+import {
+  getCachedCalendar,
+  isCalendarCacheValid,
+  storeCalendarCache,
+  getCalendarCacheAge,
+  getCalendarCacheDaysRemaining
+} from '@/lib/calendarCache';
+import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 
 // Import types
 interface CalendarEvent {
@@ -75,7 +82,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [factOpacity, setFactOpacity] = useState(1);
   const [dots, setDots] = useState('.');
@@ -236,46 +242,6 @@ export default function Dashboard() {
     router.push('/auth');
   };
 
-  const refreshInBackground = async () => {
-    if (isRefreshing) {
-      return; // Already refreshing
-    }
-    
-    setIsRefreshing(true);
-    console.log('[Dashboard] Background refresh started');
-    
-    try {
-      const access_token = getStorageItem('access_token');
-      if (!access_token) {
-        console.error('[Dashboard] No access token for background refresh');
-        return;
-      }
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        const cacheKey = 'unified_data_cache';
-        const cachedTimestampKey = 'unified_data_cache_timestamp';
-        
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-        console.log('[Dashboard] ✅ Cache refreshed in background');
-      } else {
-        console.error('[Dashboard] ❌ Background refresh failed:', result.error);
-      }
-    } catch (err) {
-      console.error('[Dashboard] Background refresh error:', err);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
   /**
    * Wait for password to be available in storage (handles race condition after login)
    * Retries with exponential backoff up to 5 attempts
@@ -334,52 +300,7 @@ export default function Dashboard() {
       const cachedTimestampKey = 'unified_data_cache_timestamp';
       const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours (matching attendance/marks pages)
       
-      /**
-       * Calculate dynamic refresh trigger based on backend queue load (Render Python scraper)
-       * - Normal load: 5 minutes before expiration
-       * - Medium load: 20 minutes before expiration
-       * - High load: 40 minutes before expiration
-       */
-      const getDynamicRefreshTrigger = (queueInfo: { backend_queue?: { total_pending_backend_requests?: number } } | undefined): number => {
-        const cacheDuration = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
-        
-        if (!queueInfo?.backend_queue) {
-          // Normal load: 5 minutes before expiration
-          const normalTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
-          console.log('[Dashboard] Using normal refresh trigger: 5 minutes before expiration (no backend queue info)');
-          return normalTrigger;
-        }
-        
-        // Use backend queue to determine load (requests waiting in Render Python scraper)
-        const backendPending = queueInfo.backend_queue.total_pending_backend_requests || 0;
-        
-        // Determine load level based on backend queue
-        const MEDIUM_LOAD_THRESHOLD = 3; // 3+ requests waiting in backend
-        const HIGH_LOAD_THRESHOLD = 5; // 5+ requests waiting in backend
-        
-        // Calculate refresh trigger based on backend queue load
-        let refreshTrigger: number;
-        if (backendPending >= HIGH_LOAD_THRESHOLD) {
-          // High load: 40 minutes before expiration
-          refreshTrigger = cacheDuration - (40 * 60 * 1000); // 5 hours 20 minutes
-          console.log(`[Dashboard] 🔴 HIGH BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
-          console.log(`[Dashboard]   - Refresh trigger: 40 minutes before expiration`);
-        } else if (backendPending >= MEDIUM_LOAD_THRESHOLD) {
-          // Medium load: 20 minutes before expiration
-          refreshTrigger = cacheDuration - (20 * 60 * 1000); // 5 hours 40 minutes
-          console.log(`[Dashboard] 🟡 MEDIUM BACKEND LOAD detected: ${backendPending} requests waiting in Render queue`);
-          console.log(`[Dashboard]   - Refresh trigger: 20 minutes before expiration`);
-        } else {
-          // Normal load: 5 minutes before expiration
-          refreshTrigger = cacheDuration - (5 * 60 * 1000); // 5 hours 55 minutes
-          console.log(`[Dashboard] 🟢 Normal backend load: ${backendPending} requests waiting in Render queue`);
-          console.log(`[Dashboard]   - Refresh trigger: 5 minutes before expiration`);
-        }
-        
-        return refreshTrigger;
-      };
-      
-      // Option 4: Check if cache is from before login (stale cache)
+      // Check if cache is from before login (stale cache)
       const loginTimestamp = getStorageItem('login_timestamp');
       const cachedTimestamp = getStorageItem(cachedTimestampKey);
       
@@ -410,18 +331,9 @@ export default function Dashboard() {
             if (result.success) {
               processUnifiedData(result);
               
-              // Get queue info from cached result for dynamic refresh trigger
-              const queueInfo = result.metadata?.queue_info;
-              
-              // Calculate dynamic refresh trigger based on queue load
-              const refreshTriggerAge = getDynamicRefreshTrigger(queueInfo);
-              
-              // Background refresh if cache is expiring soon
-              const isExpiringSoon = age > refreshTriggerAge;
-              if (isExpiringSoon && !isRefreshing) {
-                const minutesUntilExpiration = Math.floor((cacheMaxAge - age) / (60 * 1000));
-                console.log(`[Dashboard] ⏰ Cache expiring soon (${minutesUntilExpiration} min remaining), refreshing in background...`);
-                refreshInBackground();
+              // Register attendance/marks fetch for smart prefetch scheduling
+              if (result.data?.attendance?.success || result.data?.marks?.success) {
+                registerAttendanceFetch();
               }
               
               setLoading(false);
@@ -431,20 +343,26 @@ export default function Dashboard() {
         }
       }
 
-      // Check long-term cache for timetable/calendar
-      console.log("[Dashboard] 🔍 Checking long-term cache...");
+      // Check split cache for timetable/calendar
+      console.log("[Dashboard] 🔍 Checking static cache...");
       const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
       const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasLongTermCache = !!(isLongTermCacheValid() && cachedTimetable && cachedCalendar);
+      const hasValidTimetable = isTimetableCacheValid() && cachedTimetable;
+      const hasValidCalendar = isCalendarCacheValid() && cachedCalendar;
+      const hasLongTermCache = hasValidTimetable && hasValidCalendar;
 
       if (hasLongTermCache) {
-        const daysLeft = getLongTermCacheDaysRemaining();
-        const cacheAge = getLongTermCacheAge();
-        console.log(`[Dashboard] ✅ Long-term cache FOUND`);
-        console.log(`[Dashboard]   - Cache age: ${cacheAge} days`);
-        console.log(`[Dashboard]   - Days remaining: ${daysLeft} days`);
+        const timetableDaysLeft = getTimetableCacheDaysRemaining();
+        const timetableCacheAge = getTimetableCacheAge();
+        const calendarDaysLeft = getCalendarCacheDaysRemaining();
+        const calendarCacheAge = getCalendarCacheAge();
+        console.log(`[Dashboard] ✅ Static cache FOUND`);
+        console.log(`[Dashboard]   - Timetable: ${timetableCacheAge} days old, ${timetableDaysLeft} days remaining`);
+        console.log(`[Dashboard]   - Calendar: ${calendarCacheAge} days old, ${calendarDaysLeft} days remaining`);
       } else {
-        console.log(`[Dashboard] ❌ Long-term cache NOT FOUND or EXPIRED`);
+        console.log(`[Dashboard] ❌ Static cache NOT FOUND or EXPIRED`);
+        if (!hasValidTimetable) console.log(`[Dashboard]   - Timetable: missing or expired`);
+        if (!hasValidCalendar) console.log(`[Dashboard]   - Calendar: missing or expired`);
       }
 
       // Fetch from API with automatic retry on password-related session_expired
@@ -509,44 +427,54 @@ export default function Dashboard() {
       
       console.log(`[Dashboard]   - Partial data: ${result.metadata?.partial_data || false}`);
 
-      // Merge long-term cache with API response if needed
+      // Merge split cache with API response if needed
       if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
-        console.log('[Dashboard] 🔗 Merging long-term cache with fresh attendance/marks');
-        result = {
+        console.log('[Dashboard] 🔗 Merging static cache with fresh attendance/marks');
+        const resultWithCache = {
           ...result,
           data: {
             ...result.data,
-            timetable: {
+            timetable: hasValidTimetable ? {
               success: true,
               data: cachedTimetable,
               cached: true,
-              age_days: getLongTermCacheAge()
-            },
-            calendar: {
+              age_days: getTimetableCacheAge()
+            } : result.data.timetable,
+            calendar: hasValidCalendar ? {
               success: true,
               data: cachedCalendar,
               cached: true,
-              age_days: getLongTermCacheAge()
-            }
+              age_days: getCalendarCacheAge()
+            } : result.data.calendar
           },
           metadata: {
             ...result.metadata,
-            timetable_cached: true,
-            calendar_cached: true,
-            cache_days_remaining: getLongTermCacheDaysRemaining()
+            timetable_cached: hasValidTimetable,
+            calendar_cached: hasValidCalendar,
+            timetable_cache_days_remaining: hasValidTimetable ? getTimetableCacheDaysRemaining() : 0,
+            calendar_cache_days_remaining: hasValidCalendar ? getCalendarCacheDaysRemaining() : 0
           }
         };
+        result = resultWithCache;
       }
 
-      // Store timetable/calendar in long-term cache if fresh data received
-      if (result.success && !hasLongTermCache && result.data?.timetable?.success && result.data?.timetable?.data &&
-          result.data?.calendar?.success && result.data?.calendar?.data) {
-        console.log('[Dashboard] 💾 Storing timetable & calendar in long-term cache...');
-        storeLongTermCache(
-          result.data.timetable.data,
-          result.data.calendar.data
-        );
-        console.log('[Dashboard] ✅ Stored in long-term cache (valid for 30 days)');
+      // Store timetable/calendar in split cache if fresh data received
+      if (result.success) {
+        // Store timetable separately (30-day cache)
+        if (result.data?.timetable?.success && result.data?.timetable?.data &&
+            (!hasValidTimetable || forceRefresh)) {
+          console.log('[Dashboard] 💾 Storing timetable in cache...');
+          storeTimetableCache(result.data.timetable.data);
+          console.log('[Dashboard] ✅ Stored timetable (valid for 30 days)');
+        }
+        
+        // Store calendar separately (7-day cache)
+        if (result.data?.calendar?.success && result.data?.calendar?.data &&
+            (!hasValidCalendar || forceRefresh)) {
+          console.log('[Dashboard] 💾 Storing calendar in cache...');
+          storeCalendarCache(result.data.calendar.data);
+          console.log('[Dashboard] ✅ Stored calendar (valid for 7 days)');
+        }
       }
 
       // Store in browser cache
@@ -592,6 +520,11 @@ export default function Dashboard() {
       }
 
       processUnifiedData(result);
+      
+      // Register attendance/marks fetch for smart prefetch scheduling
+      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
+        registerAttendanceFetch();
+      }
 
     } catch (err) {
       console.error('[Dashboard] Error fetching data:', err);
