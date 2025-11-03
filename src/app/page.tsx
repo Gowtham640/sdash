@@ -2,10 +2,9 @@
 import Image from "next/image";
 import ShinyText from '../components/ShinyText';
 import LiquidEther from '../components/LiquidEther';
-import { useRouter } from 'next/navigation';
+import NavigationButton from '../components/NavigationButton';
 
 export default function Home() {
-  const router=useRouter();
   return (
     <div className="relative  bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
       {/* LiquidEther Background - Behind everything */}
@@ -33,13 +32,17 @@ export default function Home() {
       <div className="relative z-10 flex flex-col items-center justify-center gap-6">
         <div className="text-white text-4xl font-sora font-bold">Informed Decisions are Right decisions</div>
         <div className="text-gray-200 text-xl font-sora font-light">Make the best decisions with the right context</div>
-        <div onClick={()=>router.push('/auth')} className="w-auto h-[4vh] bg-gray-950 rounded-2xl p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold hover:p-5.5 hover:text-lg  transition-all duration-300">
-        <ShinyText 
-          text="Enter" 
-          disabled={false} 
-          speed={3} 
-          className='custom-class' 
-        /></div>
+        <NavigationButton
+          path="/auth"
+          className="w-auto h-[4vh] bg-gray-950 rounded-2xl p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold hover:p-5.5 hover:text-lg transition-all duration-300"
+        >
+          <ShinyText 
+            text="Enter" 
+            disabled={false} 
+            speed={3} 
+            className='custom-class' 
+          />
+        </NavigationButton>
       </div>
 
       {/* Arcs - Above LiquidEther but below content */}

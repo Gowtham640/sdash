@@ -24,6 +24,7 @@ import {
   getCalendarCacheDaysRemaining
 } from '@/lib/calendarCache';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
+import NavigationButton from "@/components/NavigationButton";
 
 // Import types
 interface CalendarEvent {
@@ -239,7 +240,6 @@ export default function Dashboard() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
-    router.push('/auth');
   };
 
   /**
@@ -697,12 +697,13 @@ export default function Dashboard() {
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
         <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
           {error.includes('session') && (
-            <button 
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
             >
               Sign In Again
-            </button>
+            </NavigationButton>
           )}
       </div>
     );
@@ -926,12 +927,13 @@ export default function Dashboard() {
             <p className="text-gray-300 mb-6">
               Your portal session has expired. Please sign in again to continue.
             </p>
-            <button
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
             >
               Sign In
-            </button>
+            </NavigationButton>
       </div>
       </div>
       )}

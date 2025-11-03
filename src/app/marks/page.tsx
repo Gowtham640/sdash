@@ -9,6 +9,7 @@ import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
+import NavigationButton from "@/components/NavigationButton";
 
 interface Assessment {
   assessment_name: string;
@@ -82,7 +83,6 @@ export default function MarksPage() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
-    router.push('/auth');
   };
 
   const fetchUnifiedData = async (forceRefresh = false) => {
@@ -244,12 +244,13 @@ export default function MarksPage() {
             Retry
           </button>
           {error && error.includes('session') && (
-            <button 
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
             >
               Sign In Again
-            </button>
+            </NavigationButton>
           )}
         </div>
       </div>
@@ -441,12 +442,13 @@ export default function MarksPage() {
             <p className="text-gray-300 mb-6">
               Your portal session has expired. Please sign in again to continue.
             </p>
-            <button
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
             >
               Sign In
-            </button>
+            </NavigationButton>
           </div>
         </div>
       )}
