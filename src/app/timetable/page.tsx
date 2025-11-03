@@ -1,6 +1,5 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
@@ -18,6 +17,7 @@ import {
   isCalendarCacheValid
 } from '@/lib/calendarCache';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
+import NavigationButton from "@/components/NavigationButton";
 
 interface TimeSlot {
   time: string;
@@ -53,7 +53,6 @@ interface TimetableData {
 }
 
 export default function TimetablePage() {
-  const router = useRouter();
   const [timetableData, setTimetableData] = useState<TimeSlot[]>([]);
   const [rawTimetableData, setRawTimetableData] = useState<TimetableData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -314,7 +313,6 @@ export default function TimetablePage() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
-    router.push('/auth');
   };
 
   const convertTimetableDataToTimeSlots = (data: TimetableData): TimeSlot[] => {
@@ -388,12 +386,13 @@ export default function TimetablePage() {
               Retry
             </button>
             {error.includes('session') && (
-              <button 
+              <NavigationButton
+                path="/auth"
                 onClick={handleReAuthenticate}
                 className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
               >
                 Sign In Again
-              </button>
+              </NavigationButton>
             )}
           </div>
         </div>
@@ -520,12 +519,13 @@ export default function TimetablePage() {
             <p className="text-gray-300 mb-6">
               Your portal session has expired. Please sign in again to continue.
             </p>
-            <button
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
             >
               Sign In
-            </button>
+            </NavigationButton>
           </div>
         </div>
       )}

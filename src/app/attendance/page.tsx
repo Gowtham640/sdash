@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
@@ -17,6 +16,7 @@ import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
+import NavigationButton from "@/components/NavigationButton";
 
 interface AttendanceSubject {
   row_number: number;
@@ -210,7 +210,6 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
 };
 
 export default function AttendancePage() {
-  const router = useRouter();
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -305,7 +304,6 @@ export default function AttendancePage() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
-    router.push('/auth');
   };
 
   const fetchUnifiedData = async (forceRefresh = false) => {
@@ -754,12 +752,13 @@ export default function AttendancePage() {
           Retry
         </button>
           {error && error.includes('session') && (
-            <button 
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
             >
               Sign In Again
-            </button>
+            </NavigationButton>
           )}
         </div>
       </div>
@@ -1209,12 +1208,13 @@ export default function AttendancePage() {
             <p className="text-gray-300 mb-6">
               Your portal session has expired. Please sign in again to continue.
             </p>
-            <button
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
             >
               Sign In
-            </button>
+            </NavigationButton>
           </div>
         </div>
       )}

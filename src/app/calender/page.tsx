@@ -1,9 +1,7 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import Link from 'next/link';
-import LiquidEther from "@/components/LiquidEther";
 import { Calendar } from "@/components/ui/calendar";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
@@ -17,6 +15,7 @@ import {
   getCalendarCacheDaysRemaining
 } from '@/lib/calendarCache';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
+import NavigationButton from "@/components/NavigationButton";
 
 interface CalendarEvent {
   date: string;
@@ -29,7 +28,6 @@ interface CalendarEvent {
 }
 
 export default function CalendarPage() {
-  const router = useRouter();
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,7 +129,6 @@ export default function CalendarPage() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
-    router.push('/auth');
   };
 
   const fetchUnifiedData = async (forceRefresh = false) => {
@@ -548,12 +545,13 @@ export default function CalendarPage() {
             Retry
           </button>
           {error.includes('session') && (
-            <button 
+            <NavigationButton
+              path="/auth"
               onClick={handleReAuthenticate}
               className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
             >
               Sign In Again
-            </button>
+            </NavigationButton>
           )}
         </div>
       </div>
@@ -672,12 +670,13 @@ export default function CalendarPage() {
               <p className="text-gray-200 mb-6">
                 Your portal session has expired. Please sign in again to continue.
               </p>
-              <button
+              <NavigationButton
+                path="/auth"
                 onClick={handleReAuthenticate}
                 className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
               >
                 Sign In
-              </button>
+              </NavigationButton>
             </div>
           </div>
         )}
