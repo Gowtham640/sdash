@@ -1,6 +1,5 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats } from "@/lib/timetableUtils";
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
@@ -70,7 +69,6 @@ interface TimeSlot {
 }
 
 export default function Dashboard() {
-  const router = useRouter();
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [marksData, setMarksData] = useState<MarksData | null>(null);

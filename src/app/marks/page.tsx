@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import ShinyText from '../../components/ShinyText';
@@ -58,7 +57,6 @@ interface MarksApiResponse {
 }
 
 export default function MarksPage() {
-  const router = useRouter();
   const [marksData, setMarksData] = useState<MarksData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

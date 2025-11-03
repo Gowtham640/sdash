@@ -1,32 +1,49 @@
 'use client';
 import Image from "next/image";
+import { useState, useEffect, lazy, Suspense } from "react";
 import ShinyText from '../components/ShinyText';
-import LiquidEther from '../components/LiquidEther';
 import NavigationButton from '../components/NavigationButton';
 
+// Lazy load LiquidEther to improve initial page load performance
+const LiquidEther = lazy(() => import('../components/LiquidEther'));
+
 export default function Home() {
+  const [showLiquidEther, setShowLiquidEther] = useState(false);
+
+  // Load LiquidEther after initial render to prioritize content loading
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowLiquidEther(true);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className="relative  bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
       {/* LiquidEther Background - Behind everything */}
-      <div className="absolute inset-0 z-0">
-        <LiquidEther
-          colors={[ '#FFFFFF', '#FFFFFF', '#000000' ]}
-          mouseForce={20}
-          cursorSize={100}
-          isViscous={false}
-          viscous={30}
-          iterationsViscous={32}
-          iterationsPoisson={32}
-          resolution={0.5}
-          isBounce={false}
-          autoDemo={true}
-          autoSpeed={0.5}
-          autoIntensity={2.2}
-          takeoverDuration={0.25}
-          autoResumeDelay={3000}
-          autoRampDuration={0.6}
-        />
-      </div>
+      {showLiquidEther && (
+        <div className="absolute inset-0 z-0">
+          <Suspense fallback={null}>
+            <LiquidEther
+              colors={[ '#FFFFFF', '#FFFFFF', '#000000' ]}
+              mouseForce={20}
+              cursorSize={100}
+              isViscous={false}
+              viscous={30}
+              iterationsViscous={32}
+              iterationsPoisson={32}
+              resolution={0.5}
+              isBounce={false}
+              autoDemo={true}
+              autoSpeed={0.5}
+              autoIntensity={2.2}
+              takeoverDuration={0.25}
+              autoResumeDelay={3000}
+              autoRampDuration={0.6}
+            />
+          </Suspense>
+        </div>
+      )}
 
       {/* Content - Above LiquidEther */}
       <div className="relative z-10 flex flex-col items-center justify-center gap-6">

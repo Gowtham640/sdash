@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
@@ -211,7 +210,6 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
 };
 
 export default function AttendancePage() {
-  const router = useRouter();
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

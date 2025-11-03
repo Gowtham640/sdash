@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
-import LiquidEther from "@/components/LiquidEther";
 import { Eye, EyeOff } from "lucide-react";
 import { storePortalPassword } from "@/lib/passwordStorage";
 import { setStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
+
+// Lazy load LiquidEther to improve initial page load performance
+const LiquidEther = lazy(() => import("@/components/LiquidEther"));
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -14,6 +16,7 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [showLiquidEther, setShowLiquidEther] = useState(false);
   const router = useRouter();
 
   // Check for Private Browsing mode on mount
@@ -26,29 +29,13 @@ export default function AuthPage() {
     }
   }, []);
 
-  // Memoize LiquidEther to prevent re-renders on keystroke
-  const liquidEtherComponent = useMemo(
-    () => (
-      <LiquidEther
-        colors={["#FFFFFF", "#FFFFFF", "#000000"]}
-        mouseForce={20}
-        cursorSize={100}
-        isViscous={false}
-        viscous={30}
-        iterationsViscous={32}
-        iterationsPoisson={32}
-        resolution={0.5}
-        isBounce={false}
-        autoDemo={true}
-        autoSpeed={0.5}
-        autoIntensity={2.2}
-        takeoverDuration={0.25}
-        autoResumeDelay={3000}
-        autoRampDuration={0.6}
-      />
-    ),
-    []
-  );
+  // Load LiquidEther after initial render to prioritize content loading
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowLiquidEther(true);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleSignIn = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -156,7 +143,29 @@ export default function AuthPage() {
 
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
-      <div className="absolute inset-0 z-0">{liquidEtherComponent}</div>
+      {showLiquidEther && (
+        <div className="absolute inset-0 z-0">
+          <Suspense fallback={null}>
+            <LiquidEther
+              colors={["#FFFFFF", "#FFFFFF", "#000000"]}
+              mouseForce={20}
+              cursorSize={100}
+              isViscous={false}
+              viscous={30}
+              iterationsViscous={32}
+              iterationsPoisson={32}
+              resolution={0.5}
+              isBounce={false}
+              autoDemo={true}
+              autoSpeed={0.5}
+              autoIntensity={2.2}
+              takeoverDuration={0.25}
+              autoResumeDelay={3000}
+              autoRampDuration={0.6}
+            />
+          </Suspense>
+        </div>
+      )}
 
       <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[80vw] md:w-[60vw] lg:w-[40vw] xl:w-[20vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-lg sm:text-xl md:text-2xl lg:text-3xl font-sora flex flex-col gap-6 sm:gap-8 md:gap-10 lg:gap-10 justify-center items-center">
         <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-sora font-bold">Sign In</div>

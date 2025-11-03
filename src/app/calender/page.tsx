@@ -1,9 +1,7 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import Link from 'next/link';
-import LiquidEther from "@/components/LiquidEther";
 import { Calendar } from "@/components/ui/calendar";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
@@ -30,7 +28,6 @@ interface CalendarEvent {
 }
 
 export default function CalendarPage() {
-  const router = useRouter();
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
