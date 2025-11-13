@@ -160,7 +160,7 @@ export default function TimetablePage() {
       });
 
       const apiDuration = Date.now() - apiStartTime;
-      let result = await response.json();
+      const result = await response.json();
       
       console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
       console.log(`[Timetable]   - Success: ${result.success}`);

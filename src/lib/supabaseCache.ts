@@ -267,7 +267,7 @@ export async function isSupabaseCacheValid(
 
     // Check if expired
     return now <= expiresAt;
-  } catch (error) {
+  } catch {
     return false;
   }
 }

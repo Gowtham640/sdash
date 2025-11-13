@@ -40,6 +40,7 @@ interface AttendanceData {
     institution: string;
     college: string;
     scraped_at: string;
+    semester?: number;
   };
   summary: {
     total_subjects: number;

@@ -18,6 +18,44 @@ export interface TimetableStats {
   dayOrderStats: DayOrderStats;
 }
 
+export interface CalendarEvent {
+  date: string;
+  day_name: string;
+  content: string;
+  day_order: string;
+  month?: string;
+  month_name?: string;
+  year?: string;
+}
+
+export interface SlotInfo {
+  slot_code: string;
+  course_title: string;
+  slot_type: string;
+  is_alternate: boolean;
+}
+
+export interface TimetableDayOrder {
+  do_name: string;
+  time_slots: {
+    [timeSlot: string]: SlotInfo;
+  };
+}
+
+export interface TimetableData {
+  metadata?: {
+    generated_at?: string;
+    source?: string;
+    academic_year?: string;
+    format?: string;
+  };
+  time_slots?: string[];
+  slot_mapping?: { [key: string]: string };
+  timetable: {
+    [doName: string]: TimetableDayOrder;
+  };
+}
+
 // Get current date string in DD/MM/YYYY format
 export const getCurrentDateString = () => {
   const now = new Date();
@@ -66,7 +104,7 @@ export const parseDate = (dateStr: string): Date => {
 };
 
 // Calculate day order statistics from calendar data
-export const getDayOrderStats = (calendarData: any[]): DayOrderStats => {
+export const getDayOrderStats = (calendarData: CalendarEvent[]): DayOrderStats => {
   const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   
   const currentDateStr = getCurrentDateString();
@@ -83,7 +121,7 @@ export const getDayOrderStats = (calendarData: any[]): DayOrderStats => {
   const currentDate = parseDateLocal(currentDateStr);
   const endDate = parseDateLocal(endDateStr);
 
-  calendarData.forEach((event: any) => {
+  calendarData.forEach((event: CalendarEvent) => {
     if (event.date && event.day_order) {
       try {
         const eventDate = parseDateLocal(event.date);
@@ -120,7 +158,7 @@ export const getDayOrderStats = (calendarData: any[]): DayOrderStats => {
 };
 
 // Get slot occurrences from timetable data, grouped by course title and category
-export const getSlotOccurrences = (timetableData: any): SlotOccurrence[] => {
+export const getSlotOccurrences = (timetableData: TimetableData): SlotOccurrence[] => {
   const courseMap = new Map<string, SlotOccurrence>();
   const slotMap = new Map<string, Set<string>>(); // Track slots per course
 
@@ -178,7 +216,7 @@ export const getSlotOccurrences = (timetableData: any): SlotOccurrence[] => {
     const doNumber = parseInt(doName.split(' ')[1]);
     
     if (doData && doData.time_slots) {
-      Object.values(doData.time_slots).forEach((slotInfo: any) => {
+      Object.values(doData.time_slots).forEach((slotInfo: SlotInfo) => {
         if (slotInfo.slot_code && slotInfo.course_title && slotInfo.course_title.trim() !== '') {
           const slot = slotInfo.slot_code;
           const courseTitle = slotInfo.course_title.trim();
@@ -263,7 +301,7 @@ export const fetchTimetableData = async (email: string, password: string) => {
 export const calculateRemainingHours = (
   slot: string, 
   dayOrderStats: DayOrderStats, 
-  timetableData: any
+  timetableData: TimetableData
 ): number => {
   let totalHours = 0;
   
@@ -274,7 +312,7 @@ export const calculateRemainingHours = (
   ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach(doName => {
     const doData = timetableData.timetable[doName];
     if (doData && doData.time_slots) {
-      Object.values(doData.time_slots).forEach((slotInfo: any) => {
+      Object.values(doData.time_slots).forEach((slotInfo: SlotInfo) => {
         if (slotInfo.slot_code) {
           const slotCode = slotInfo.slot_code.toUpperCase();
           
@@ -282,7 +320,7 @@ export const calculateRemainingHours = (
           const matchingSlot = slots.find(s => slotCode.includes(s));
           if (matchingSlot) {
             // Count how many time slots this specific slot appears in this day order
-            const slotCount = Object.values(doData.time_slots).filter((s: any) => 
+            const slotCount = Object.values(doData.time_slots).filter((s: SlotInfo) => 
               s.slot_code && s.slot_code.toUpperCase().includes(matchingSlot)
             ).length;
             
@@ -299,7 +337,7 @@ export const calculateRemainingHours = (
 
 // Calculate total hours remaining for all subjects (fast calculation using existing data)
 export const calculateAllSubjectRemainingHours = (
-  timetableData: any,
+  timetableData: TimetableData,
   dayOrderStats: DayOrderStats
 ): Array<{
   courseTitle: string;

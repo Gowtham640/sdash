@@ -7,50 +7,8 @@ import { getRequestBodyWithPassword } from './passwordStorage';
 
 // Scheduler state
 let scheduledTimeout: NodeJS.Timeout | null = null;
-let isRefreshing = false;
+const isRefreshing = false; // Never changes since prefetch is disabled
 
-/**
- * Execute the background prefetch
- */
-async function executePrefetch(): Promise<void> {
-  if (isRefreshing) {
-    console.log('[PrefetchScheduler] ⏸️  Already refreshing, skipping duplicate prefetch');
-    return;
-  }
-  
-  isRefreshing = true;
-  console.log('[PrefetchScheduler] 🔄 Starting background prefetch for attendance/marks...');
-  
-  try {
-    // Note: Prefetch scheduler requires access_token from storage
-    // This is a utility function, not part of the caching system
-    const access_token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-    if (!access_token) {
-      console.error('[PrefetchScheduler] ❌ No access token for prefetch');
-      return;
-    }
-    
-    // Call API to fetch fresh data
-    console.log(`[PrefetchScheduler] 🔄 Fetching fresh data from backend...`);
-    const response = await fetch('/api/data/all', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(getRequestBodyWithPassword(access_token, true))
-    });
-
-    const result = await response.json();
-
-    if (result.success) {
-      console.log('[PrefetchScheduler] ✅ Background prefetch completed');
-    } else {
-      console.error('[PrefetchScheduler] ❌ Background prefetch failed:', result.error);
-    }
-  } catch (error) {
-    console.error('[PrefetchScheduler] ❌ Prefetch error:', error);
-  } finally {
-    isRefreshing = false;
-  }
-}
 
 /**
  * Register a successful attendance/marks fetch

@@ -216,7 +216,7 @@ export default function CalendarPage() {
         body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
-      let result = await response.json();
+      const result = await response.json();
       console.log('[Calendar] Unified API response:', result);
 
       // Handle session expiry
@@ -242,7 +242,7 @@ export default function CalendarPage() {
         console.log('[Calendar] Calendar data is direct array format');
       } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
         // Wrapped format: {success: true, data: [...]}
-        const calendarWrapper = result.data.calendar as { success: boolean; data?: CalendarEvent[] };
+        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
         if (calendarWrapper.success && Array.isArray(calendarWrapper.data)) {
           calendarEvents = calendarWrapper.data;
           console.log('[Calendar] Calendar data is wrapped format');

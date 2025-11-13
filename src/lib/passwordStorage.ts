@@ -66,7 +66,7 @@ export function storePortalPassword(password: string): boolean {
         window.sessionStorage.setItem('portal_password_backup', encrypted);
         console.log('[PasswordStorage] Password stored in both browserStorage and sessionStorage ✓');
       }
-    } catch (sessionError) {
+    } catch {
       console.warn('[PasswordStorage] sessionStorage backup failed, but browserStorage succeeded');
     }
     

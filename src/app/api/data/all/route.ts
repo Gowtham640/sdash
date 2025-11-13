@@ -611,7 +611,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Include semester in response metadata
-    const resultTyped = result as { success?: boolean; metadata?: { semester?: number }; semester?: number };
+    const resultTyped = result as { success?: boolean; metadata?: { semester?: number; queue_info?: unknown; [key: string]: unknown }; semester?: number };
     if (resultTyped.metadata) {
       if (semester) {
         resultTyped.metadata.semester = semester;
