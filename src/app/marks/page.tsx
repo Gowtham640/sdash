@@ -188,8 +188,10 @@ export default function MarksPage() {
         } 
         // Check if it's wrapped format: {success: true, data: {...}}
         else if ('success' in result.data.marks && 'data' in result.data.marks) {
-          const marksWrapper = result.data.marks as { success: boolean; data?: MarksData };
-          if (marksWrapper.success && marksWrapper.data) {
+          const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
+          const successValue = marksWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && marksWrapper.data) {
             marksDataObj = marksWrapper.data;
             console.log('[Marks] Marks data is wrapped format');
           }

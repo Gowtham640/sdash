@@ -243,7 +243,9 @@ export default function CalendarPage() {
       } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
         // Wrapped format: {success: true, data: [...]}
         const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
-        if (calendarWrapper.success && Array.isArray(calendarWrapper.data)) {
+        const successValue = calendarWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && Array.isArray(calendarWrapper.data)) {
           calendarEvents = calendarWrapper.data;
           console.log('[Calendar] Calendar data is wrapped format');
         }

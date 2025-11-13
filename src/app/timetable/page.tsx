@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Link from 'next/link';
-import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats, type CalendarEvent } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
@@ -193,8 +193,10 @@ export default function TimetablePage() {
         } 
         // Check if it's wrapped format: {success: true, data: {...}}
         else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
-          const timetableWrapper = result.data.timetable as { success: boolean; data?: TimetableData };
-          if (timetableWrapper.success && timetableWrapper.data) {
+          const timetableWrapper = result.data.timetable as { success?: boolean | { data?: TimetableData }; data?: TimetableData };
+          const successValue = timetableWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && timetableWrapper.data) {
             timetableDataObj = timetableWrapper.data;
             console.log('[Timetable] Timetable data is wrapped format');
           }
@@ -236,14 +238,16 @@ export default function TimetablePage() {
         calendarEvents = result.data.calendar;
       } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
         // Wrapped format
-        const calendarWrapper = result.data.calendar as { success: boolean; data?: unknown[] };
-        if (calendarWrapper.success && Array.isArray(calendarWrapper.data)) {
+        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
+        const successValue = calendarWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && Array.isArray(calendarWrapper.data)) {
           calendarEvents = calendarWrapper.data;
         }
       }
       
       if (calendarEvents && calendarEvents.length > 0) {
-        const stats = getDayOrderStats(calendarEvents);
+        const stats = getDayOrderStats(calendarEvents as CalendarEvent[]);
         setDayOrderStats(stats);
         console.log('[Timetable] Day order stats calculated');
       }

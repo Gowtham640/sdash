@@ -416,8 +416,10 @@ export default function AttendancePage() {
         } 
         // Check if it's wrapped format: {success: true, data: {...}}
         else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
-          const attendanceWrapper = result.data.attendance as { success: boolean; data?: AttendanceData; semester?: number };
-          if (attendanceWrapper.success && attendanceWrapper.data) {
+          const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData; semester?: number };
+          const successValue = attendanceWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && attendanceWrapper.data) {
             attendanceDataObj = attendanceWrapper.data;
             extractedSemester = attendanceWrapper.semester || attendanceWrapper.data.metadata?.semester || 1;
             console.log('[Attendance] Attendance data is wrapped format');

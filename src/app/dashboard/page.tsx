@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
@@ -537,8 +537,10 @@ export default function Dashboard() {
       } 
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
-        const attendanceWrapper = result.data.attendance as { success: boolean; data?: AttendanceData };
-        if (attendanceWrapper.success && attendanceWrapper.data) {
+        const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
+        const successValue = attendanceWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && attendanceWrapper.data) {
           attendanceDataObj = attendanceWrapper.data;
           console.log('[Dashboard] Attendance data is wrapped format');
         }
@@ -575,8 +577,10 @@ export default function Dashboard() {
       } 
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.marks && 'data' in result.data.marks) {
-        const marksWrapper = result.data.marks as { success: boolean; data?: MarksData };
-        if (marksWrapper.success && marksWrapper.data) {
+        const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
+        const successValue = marksWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && marksWrapper.data) {
           marksDataObj = marksWrapper.data;
           console.log('[Dashboard] Marks data is wrapped format');
         }
@@ -608,22 +612,27 @@ export default function Dashboard() {
       // Check if it's direct format (has timetable, time_slots, metadata at root)
       if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
         // Direct format
-        timetableDataObj = result.data.timetable;
+        timetableDataObj = result.data.timetable as typeof timetableData;
         console.log('[Dashboard] Timetable data is direct format');
       } 
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
-        const timetableWrapper = result.data.timetable as { success: boolean; data?: typeof timetableData };
-        if (timetableWrapper.success && timetableWrapper.data) {
-          timetableDataObj = timetableWrapper.data;
-          console.log('[Dashboard] Timetable data is wrapped format');
+        const timetableWrapper = result.data.timetable as { success?: boolean | { data?: unknown }; data?: unknown };
+        const successValue = timetableWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && timetableWrapper.data && typeof timetableWrapper.data === 'object' && timetableWrapper.data !== null) {
+          const wrappedData = timetableWrapper.data as Record<string, unknown>;
+          if (wrappedData && ('timetable' in wrappedData || 'time_slots' in wrappedData)) {
+            timetableDataObj = wrappedData as typeof timetableData;
+            console.log('[Dashboard] Timetable data is wrapped format');
+          }
         }
       }
       // Check legacy nested format: {data: {...}}
       else if ('data' in result.data.timetable) {
-        const legacyData = (result.data.timetable as { data?: typeof timetableData }).data;
-        if (legacyData && ('timetable' in legacyData || 'time_slots' in legacyData)) {
-          timetableDataObj = legacyData;
+        const legacyData = (result.data.timetable as { data?: unknown }).data;
+        if (legacyData && typeof legacyData === 'object' && legacyData !== null && ('timetable' in legacyData || 'time_slots' in legacyData)) {
+          timetableDataObj = legacyData as typeof timetableData;
           console.log('[Dashboard] Timetable data is legacy nested format');
         }
       }
@@ -633,7 +642,12 @@ export default function Dashboard() {
       setTimetableData(timetableDataObj);
       
       try {
-        const occurrences = getSlotOccurrences(timetableDataObj);
+        // Convert to TimetableData format for getSlotOccurrences
+        const timetableForUtils = {
+          timetable: (timetableDataObj.timetable || {}) as TimetableData['timetable'],
+          slot_mapping: timetableDataObj.slot_mapping,
+        } as TimetableData;
+        const occurrences = getSlotOccurrences(timetableForUtils);
         setSlotOccurrences(occurrences);
         console.log('[Dashboard] ✅ Timetable data loaded:', occurrences.length);
       } catch (err) {
