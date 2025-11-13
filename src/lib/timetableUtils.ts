@@ -323,80 +323,25 @@ export const calculateAllSubjectRemainingHours = (
   }));
 };
 
-// Global data cache
-interface GlobalDataCache {
-  calendarData: any[];
-  timetableData: any;
-  dayOrderStats: DayOrderStats;
-  slotOccurrences: SlotOccurrence[];
-  subjectRemainingHours: any[];
-  lastUpdated: number;
-}
-
-let globalCache: GlobalDataCache | null = null;
-let cachePromise: Promise<GlobalDataCache> | null = null;
-const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
-
-// Get global cached data
-export const getGlobalData = async (email: string, password: string): Promise<GlobalDataCache> => {
-  // Return cached data if valid
-  if (globalCache && Date.now() - globalCache.lastUpdated < CACHE_DURATION) {
-    console.log('[CACHE] Using global cached data');
-    return globalCache;
-  }
-  
-  // If there's already a fetch in progress, wait for it
-  if (cachePromise) {
-    console.log('[CACHE] Waiting for ongoing fetch');
-    return cachePromise;
-  }
-  
-  console.log('[CACHE] Cache miss or expired - fetching fresh data');
-  
-  // Create a new fetch promise
-  cachePromise = (async () => {
-    try {
-      // Fetch and cache all data
-      const [calendarData, timetableData] = await Promise.all([
-        fetchCalendarData(email, password),
-        fetchTimetableData(email, password)
-      ]);
-      
-      const dayOrderStats = getDayOrderStats(calendarData);
-      const slotOccurrences = getSlotOccurrences(timetableData);
-      const subjectRemainingHours = calculateAllSubjectRemainingHours(timetableData, dayOrderStats);
-      
-      globalCache = {
-        calendarData,
-        timetableData,
-        dayOrderStats,
-        slotOccurrences,
-        subjectRemainingHours,
-        lastUpdated: Date.now()
-      };
-      
-      console.log('[CACHE] Global data cached successfully');
-      return globalCache;
-    } finally {
-      // Clear the promise so future calls can create a new one
-      cachePromise = null;
-    }
-  })();
-  
-  return cachePromise;
-};
-
 // Get comprehensive timetable data in a clean format for use across pages
 export const getTimetableSummary = async (email: string, password: string) => {
   try {
-    const globalData = await getGlobalData(email, password);
+    // Fetch all data
+    const [calendarData, timetableData] = await Promise.all([
+      fetchCalendarData(email, password),
+      fetchTimetableData(email, password)
+    ]);
+    
+    const dayOrderStats = getDayOrderStats(calendarData);
+    const slotOccurrences = getSlotOccurrences(timetableData);
+    const subjectRemainingHours = calculateAllSubjectRemainingHours(timetableData, dayOrderStats);
     
     return {
-      dayOrderStats: globalData.dayOrderStats,
-      slotOccurrences: globalData.slotOccurrences,
-      subjectRemainingHours: globalData.subjectRemainingHours,
-      timetableData: globalData.timetableData,
-      calendarData: globalData.calendarData
+      dayOrderStats,
+      slotOccurrences,
+      subjectRemainingHours,
+      timetableData,
+      calendarData
     };
   } catch (error) {
     console.error('Error getting timetable summary:', error);

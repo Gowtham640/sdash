@@ -7,13 +7,6 @@ import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
-import {
-  getCachedCalendar,
-  isCalendarCacheValid,
-  storeCalendarCache,
-  getCalendarCacheAge,
-  getCalendarCacheDaysRemaining
-} from '@/lib/calendarCache';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 
@@ -131,6 +124,71 @@ export default function CalendarPage() {
     setShowPasswordModal(false);
   };
 
+  const refreshCalendarData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setIsRefreshing(true);
+
+      const access_token = getStorageItem('access_token');
+      
+      if (!access_token) {
+        console.error('[Calendar] No access token found');
+        setError('Please sign in to view calendar');
+        setLoading(false);
+        setIsRefreshing(false);
+        return;
+      }
+
+      console.log('[Calendar] 🔄 Force refreshing calendar data...');
+
+      const response = await fetch('/api/data/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...getRequestBodyWithPassword(access_token, false),
+          data_type: 'calendar'
+        })
+      });
+
+      const result = await response.json();
+      console.log('[Calendar] Refresh API response:', result);
+      console.log('[Calendar] Refresh API response data:', result.data);
+      console.log('[Calendar] Refresh API response data type:', typeof result.data);
+      console.log('[Calendar] Refresh API response data is array:', Array.isArray(result.data));
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to refresh calendar data');
+      }
+
+      // If refresh endpoint returns data directly, set it immediately
+      if (result.data && Array.isArray(result.data)) {
+        console.log('[Calendar] Setting calendar data directly from refresh response');
+        let calendarEvents = result.data as CalendarEvent[];
+        
+        // Extract semester (try to get from storage or default to 1)
+        const cachedSemester = getStorageItem('user_semester');
+        const semester = cachedSemester ? parseInt(cachedSemester, 10) : 1;
+        
+        // Mark Saturdays as holidays if not semester 1
+        calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
+        
+        setCalendarData(calendarEvents);
+        setLoading(false);
+        setIsRefreshing(false);
+        console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events from refresh');
+      } else {
+        // After refresh, fetch unified data to get updated calendar
+        await fetchUnifiedData(false);
+      }
+    } catch (err) {
+      console.error('[Calendar] Error refreshing data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to refresh calendar data');
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
@@ -148,209 +206,22 @@ export default function CalendarPage() {
         return;
       }
 
-      // ✅ STEP 1: Check browser cache first (unless force refresh)
-      const cacheKey = 'unified_data_cache';
-      const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
-      
-      if (!forceRefresh) {
-        const cachedData = getStorageItem(cacheKey);
-        const cachedTimestamp = getStorageItem(cachedTimestampKey);
-        
-        if (cachedData && cachedTimestamp) {
-          const age = Date.now() - parseInt(cachedTimestamp);
-          
-          if (age < cacheMaxAge) {
-            console.log('[Calendar] ✅ Using browser cache');
-            const result = JSON.parse(cachedData);
-            
-              // Process the cached data
-            if (result.success) {
-              setCacheInfo({
-                cached: true,
-                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
-              });
-
-              // Process calendar data
-              if (result.data.calendar?.success && result.data.calendar.data) {
-                let calendarEvents = result.data.calendar.data;
-                
-                // Extract semester from multiple sources with fallbacks
-                let extractedSemester: number | null = null;
-                
-                // 1. Try attendance data first
-                if (result.data.attendance?.semester) {
-                  extractedSemester = result.data.attendance.semester;
-                  console.log('[Calendar] Semester from attendance.semester:', extractedSemester);
-                } else if (result.data.attendance?.data?.metadata?.semester) {
-                  extractedSemester = result.data.attendance.data.metadata.semester;
-                  console.log('[Calendar] Semester from attendance.data.metadata.semester:', extractedSemester);
-                }
-                // 2. Try response metadata
-                else if (result.metadata?.semester) {
-                  extractedSemester = result.metadata.semester;
-                  console.log('[Calendar] Semester from metadata.semester:', extractedSemester);
-                }
-                // 3. Try response root
-                else if ((result as { semester?: number }).semester) {
-                  extractedSemester = (result as { semester?: number }).semester!;
-                  console.log('[Calendar] Semester from root.semester:', extractedSemester);
-                }
-                // 4. Try storage cache
-                else {
-                  const cachedSemester = getStorageItem('user_semester');
-                  if (cachedSemester) {
-                    extractedSemester = parseInt(cachedSemester, 10);
-                    console.log('[Calendar] Semester from storage cache:', extractedSemester);
-                  }
-                }
-                
-                // Default to 1 if no semester found
-                const semester = extractedSemester || 1;
-                
-                // Store semester in storage if found
-                if (extractedSemester) {
-                  setStorageItem('user_semester', extractedSemester.toString());
-                  console.log('[Calendar] 💾 Stored semester in storage:', extractedSemester);
-                }
-                
-                console.log(`[Calendar] User semester: ${semester} (from cache)`);
-                
-                // Mark Saturdays as holidays if not semester 1
-                calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
-                
-                setCalendarData(calendarEvents);
-                console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events');
-              } else {
-                throw new Error('Calendar data unavailable');
-              }
-              
-              setLoading(false);
-              return;
-            }
-          } else {
-            console.log('[Calendar] Browser cache expired');
-          }
-        }
-      }
-
-      // ✅ STEP 2: Check long-term cache for calendar (7 days)
-      console.log("[Calendar] 🔍 Checking long-term cache...");
-      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasValidCalendar = isCalendarCacheValid() && cachedCalendar;
-
-      if (hasValidCalendar) {
-        const calendarDaysLeft = getCalendarCacheDaysRemaining();
-        const calendarCacheAge = getCalendarCacheAge();
-        console.log(`[Calendar] ✅ Long-term cache FOUND`);
-        console.log(`[Calendar]   - Calendar: ${calendarCacheAge} days old, ${calendarDaysLeft} days remaining`);
-      } else {
-        console.log(`[Calendar] ❌ Long-term cache NOT FOUND or EXPIRED`);
-      }
-
-      // ✅ STEP 3: Fetch from API (will use server cache if available)
-      const fetchType = forceRefresh ? '(force refresh)' : (hasValidCalendar ? '(checking server cache with long-term calendar cache)' : '(checking server cache)');
+      // ✅ STEP 1: Fetch from API
+      const fetchType = forceRefresh ? '(force refresh)' : '(fetching all data)';
       console.log(`[Calendar] 🚀 Fetching from API ${fetchType}`);
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasValidCalendar))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       let result = await response.json();
       console.log('[Calendar] Unified API response:', result);
-      console.log(`[Calendar]   - Partial data: ${result.metadata?.partial_data || false}`);
 
-      // Merge long-term cache with API response if needed
-      if (hasValidCalendar && result.metadata?.partial_data && !forceRefresh) {
-        console.log('[Calendar] 🔗 Merging long-term calendar cache with fresh attendance/marks');
-        const resultWithCache = {
-          ...result,
-          data: {
-            ...result.data,
-            calendar: {
-              success: true,
-              data: cachedCalendar,
-              cached: true,
-              age_days: getCalendarCacheAge()
-            }
-          },
-          metadata: {
-            ...result.metadata,
-            calendar_cached: hasValidCalendar,
-            calendar_cache_days_remaining: getCalendarCacheDaysRemaining()
-          }
-        };
-        result = resultWithCache;
-      }
-
-      // ✅ STEP 4: Store in browser cache for next time
-      if (result.success) {
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-        console.log('[Calendar] ✅ Stored in browser cache');
-      }
-
-      // Handle session expiry - use cached data if available
+      // Handle session expiry
       if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Calendar] Session expired - checking for cached data...');
-        
-        // Check if we have cached data to fall back to
-        const cachedData = getStorageItem(cacheKey);
-        if (cachedData) {
-          console.log('[Calendar] Using cached data as fallback');
-          const cachedResult = JSON.parse(cachedData);
-          
-          if (cachedResult.success && cachedResult.data.calendar?.success && cachedResult.data.calendar.data) {
-            let calendarEvents = cachedResult.data.calendar.data;
-            
-            // Extract semester from multiple sources with fallbacks
-            let extractedSemester: number | null = null;
-            
-            // 1. Try attendance data first
-            if (cachedResult.data.attendance?.semester) {
-              extractedSemester = cachedResult.data.attendance.semester;
-            } else if (cachedResult.data.attendance?.data?.metadata?.semester) {
-              extractedSemester = cachedResult.data.attendance.data.metadata.semester;
-            }
-            // 2. Try response metadata
-            else if (cachedResult.metadata?.semester) {
-              extractedSemester = cachedResult.metadata.semester;
-            }
-            // 3. Try response root
-            else if ((cachedResult as { semester?: number }).semester) {
-              extractedSemester = (cachedResult as { semester?: number }).semester!;
-            }
-            // 4. Try storage cache
-            else {
-              const cachedSemester = getStorageItem('user_semester');
-              if (cachedSemester) {
-                extractedSemester = parseInt(cachedSemester, 10);
-              }
-            }
-            
-            // Default to 1 if no semester found
-            const semester = extractedSemester || 1;
-            
-            // Store semester in storage if found
-            if (extractedSemester) {
-              setStorageItem('user_semester', extractedSemester.toString());
-            }
-            
-            // Mark Saturdays as holidays if not semester 1
-            calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
-            
-            setCalendarData(calendarEvents);
-            setCacheInfo({ cached: true, age: 9999 });
-            setError('Showing cached data (session expired). Refresh to get latest data.');
-            setLoading(false);
-            return;
-          }
-        }
-        
-        // No cached data - show password modal
-        console.error('[Calendar] No cached data, prompting for re-authentication');
+        console.error('[Calendar] Session expired');
         setError('Your session has expired. Please re-enter your password.');
         setShowPasswordModal(true);
         setLoading(false);
@@ -361,15 +232,24 @@ export default function CalendarPage() {
         throw new Error(result.error || 'Failed to fetch data');
       }
 
-      // Extract cache info
-      setCacheInfo({
-        cached: result.metadata?.cached || false,
-        age: result.metadata?.cache_age_seconds || 0
-      });
-
       // Process calendar data
-      if (result.data.calendar?.success && result.data.calendar.data) {
-        let calendarEvents = result.data.calendar.data;
+      // Handle both formats: direct array or wrapped in {success, data}
+      let calendarEvents: CalendarEvent[] | null = null;
+      
+      if (Array.isArray(result.data.calendar)) {
+        // Direct array format
+        calendarEvents = result.data.calendar;
+        console.log('[Calendar] Calendar data is direct array format');
+      } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
+        // Wrapped format: {success: true, data: [...]}
+        const calendarWrapper = result.data.calendar as { success: boolean; data?: CalendarEvent[] };
+        if (calendarWrapper.success && Array.isArray(calendarWrapper.data)) {
+          calendarEvents = calendarWrapper.data;
+          console.log('[Calendar] Calendar data is wrapped format');
+        }
+      }
+      
+      if (calendarEvents && calendarEvents.length > 0) {
         
         // Extract semester from multiple sources with fallbacks
         let extractedSemester: number | null = null;
@@ -417,12 +297,15 @@ export default function CalendarPage() {
         
         setCalendarData(calendarEvents);
         console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events');
-        
-        // Store calendar in long-term cache (7-day cache)
-        storeCalendarCache(calendarEvents);
-        console.log('[Calendar] ✅ Stored calendar (valid for 7 days)');
       } else {
-        throw new Error('Calendar data unavailable');
+        // Keep page visible even when calendar data is unavailable
+        // User can use refresh button to fetch data
+        console.warn('[Calendar] Calendar data unavailable - keeping page visible for refresh');
+        console.warn('[Calendar] Calendar data type:', typeof result.data.calendar);
+        console.warn('[Calendar] Calendar data is array:', Array.isArray(result.data.calendar));
+        console.warn('[Calendar] Calendar data value:', result.data.calendar);
+        setCalendarData([]);
+        // Don't set error, just log it so page remains visible
       }
       
       // Register attendance/marks fetch for smart prefetch scheduling
@@ -579,7 +462,27 @@ export default function CalendarPage() {
       </Link>
       
       <div className="flex flex-col items-center gap-4">
-        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
+          <button
+            onClick={refreshCalendarData}
+            disabled={loading}
+            className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Refresh calendar data"
+            title="Refresh calendar data"
+          >
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={2} 
+              stroke="currentColor" 
+              className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+          </button>
+        </div>
         <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
           Today&apos;s Date: {getCurrentDateString()} 
         </div>
@@ -590,7 +493,17 @@ export default function CalendarPage() {
             ref={setScrollContainerRef}
             className="relative overflow-y-auto p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-[90vw] sm:w-[85vw] md:w-[83vw] lg:w-[80vw] h-[55vh] sm:h-[58vh] md:h-[59vh] lg:h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-2 sm:gap-2.5 md:gap-3 lg:gap-3 justify-start items-center"
           >
-            {sortedEvents.map((event, index) => {
+            {sortedEvents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-4 h-full">
+                <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
+                  No calendar data available
+                </div>
+                <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
+                  Click the refresh button above to fetch calendar data
+                </div>
+              </div>
+            ) : (
+              sortedEvents.map((event, index) => {
               // Check if it's a holiday based on DO value being "-", "DO -", or "Holiday", or content includes "holiday"
               const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.day_order === "Holiday" || event.content.toLowerCase().includes('holiday');
               
@@ -631,9 +544,10 @@ export default function CalendarPage() {
                   <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[75px] lg:min-w-[80px] text-right`}>{doText}</p>
                 </div>
               );
-            })}
-            </div>
-            </div>
+              })
+            )}
+          </div>
+        </div>
         
         {/* Day Order Statistics */}
         <div className="w-[95vw] sm:w-[92vw] md:w-[91vw] lg:w-[90vw] bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-5.5 lg:p-6 items-center justify-center gap-3 sm:gap-4 md:gap-4.5 lg:gap-5">

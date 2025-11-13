@@ -306,6 +306,61 @@ export default function AttendancePage() {
     setShowPasswordModal(false);
   };
 
+  const refreshAttendanceData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const access_token = getStorageItem('access_token');
+      
+      if (!access_token) {
+        console.error('[Attendance] No access token found');
+        setError('Please sign in to view attendance');
+        setLoading(false);
+        return;
+      }
+
+      console.log('[Attendance] 🔄 Force refreshing attendance data...');
+
+      const response = await fetch('/api/data/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...getRequestBodyWithPassword(access_token, false),
+          data_type: 'attendance'
+        })
+      });
+
+      const result = await response.json();
+      console.log('[Attendance] Refresh API response:', result);
+      console.log('[Attendance] Refresh API response data:', result.data);
+      console.log('[Attendance] Refresh API response data type:', typeof result.data);
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to refresh attendance data');
+      }
+
+      // If refresh endpoint returns data directly, set it immediately
+      if (result.data && typeof result.data === 'object' && ('all_subjects' in result.data || 'summary' in result.data)) {
+        console.log('[Attendance] Setting attendance data directly from refresh response');
+        const attendanceDataObj = result.data as AttendanceData;
+        const extractedSemester = attendanceDataObj.metadata?.semester || 1;
+        
+        setAttendanceData(attendanceDataObj);
+        setSemester(extractedSemester);
+        setLoading(false);
+        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects from refresh');
+      } else {
+        // After refresh, fetch unified data to get updated attendance
+        await fetchUnifiedData(false);
+      }
+    } catch (err) {
+      console.error('[Attendance] Error refreshing data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');
+      setLoading(false);
+    }
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
@@ -320,86 +375,8 @@ export default function AttendancePage() {
         return;
       }
 
-      // ✅ STEP 1: Check browser cache first (unless force refresh)
-      const cacheKey = 'unified_data_cache';
-      const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
-      
-      if (!forceRefresh) {
-        const cachedData = getStorageItem(cacheKey);
-        const cachedTimestamp = getStorageItem(cachedTimestampKey);
-        
-        if (cachedData && cachedTimestamp) {
-          const age = Date.now() - parseInt(cachedTimestamp);
-          
-          if (age < cacheMaxAge) {
-            console.log('[Attendance] ✅ Using browser cache');
-            const result = JSON.parse(cachedData);
-            
-              // Process the cached data (same as API response processing)
-            if (result.success) {
-              // Extract cache info - mark as browser cache
-              setCacheInfo({
-                cached: true,
-                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
-              });
-
-              // Process attendance data
-              if (result.data.attendance?.success && result.data.attendance.data) {
-                setAttendanceData(result.data.attendance.data);
-                console.log('[Attendance] Loaded attendance with', result.data.attendance.data.all_subjects?.length, 'subjects');
-                
-                // Extract semester from attendance metadata
-                const extractedSemester = result.data.attendance?.semester || 
-                                         result.data.attendance?.data?.metadata?.semester || 
-                                         1;
-                console.log('[Attendance] Extracted semester from cache:', extractedSemester);
-                setSemester(extractedSemester);
-              } else {
-                throw new Error('Attendance data unavailable');
-              }
-
-              // Process timetable data
-              if (result.data.timetable?.success && result.data.timetable.data) {
-                const timetableData = result.data.timetable.data;
-                const calendarData = result.data.calendar?.data || [];
-                
-                // Handle empty timetable data gracefully
-                if (timetableData && 
-                    !Array.isArray(timetableData) && 
-                    Object.keys(timetableData).length > 0 &&
-                    timetableData.timetable &&
-                    Object.keys(timetableData.timetable).length > 0) {
-                  try {
-                    const occurrences = getSlotOccurrences(timetableData);
-                    setSlotOccurrences(occurrences);
-                    
-                    // Apply holiday logic from cached semester
-                    const extractedSemester = result.data.attendance?.semester || 
-                                             result.data.attendance?.data?.metadata?.semester || 
-                                             1;
-                    const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-                    
-                    const stats = getDayOrderStats(modifiedCalendarData);
-                    setDayOrderStats(stats);
-                    setCalendarData(modifiedCalendarData);
-                  } catch (err) {
-                    console.error('[Attendance] Error processing timetable from cache:', err);
-                  }
-                }
-              }
-              
-              setLoading(false);
-              return;
-            }
-          } else {
-            console.log('[Attendance] Browser cache expired');
-          }
-        }
-      }
-
-      // ✅ STEP 2: Fetch from API (will use server cache if available)
-      console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+      // ✅ STEP 1: Fetch from API
+      console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
@@ -410,64 +387,9 @@ export default function AttendancePage() {
       const result = await response.json();
       console.log('[Attendance] Unified API response:', result);
 
-      // ✅ STEP 3: Store in browser cache for next time
-      if (result.success) {
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-        console.log('[Attendance] ✅ Stored in browser cache');
-      }
-
-      // Handle session expiry - use cached data if available
+      // Handle session expiry
       if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Attendance] Session expired - checking for cached data...');
-        
-        // Check if we have cached data to fall back to
-        const cachedData = getStorageItem(cacheKey);
-        if (cachedData) {
-          console.log('[Attendance] Using cached data as fallback');
-          const cachedResult = JSON.parse(cachedData);
-          
-          if (cachedResult.success) {
-            setCacheInfo({ cached: true, age: 9999 }); // Mark as stale cache
-            
-            // Process cached attendance data
-            if (cachedResult.data.attendance?.success && cachedResult.data.attendance.data) {
-              setAttendanceData(cachedResult.data.attendance.data);
-            }
-            
-            // Process cached timetable data
-            if (cachedResult.data.timetable?.success && cachedResult.data.timetable.data) {
-              const timetableData = cachedResult.data.timetable.data;
-              const calendarData = cachedResult.data.calendar?.data || [];
-              
-              if (timetableData && !Array.isArray(timetableData) && Object.keys(timetableData).length > 0) {
-                try {
-                  setSlotOccurrences(getSlotOccurrences(timetableData));
-                  
-                  // Apply holiday logic from cached semester
-                  const extractedSemester = cachedResult.data.attendance?.semester || 
-                                           cachedResult.data.attendance?.data?.metadata?.semester || 
-                                           1;
-                  const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-                  
-                  const stats = getDayOrderStats(modifiedCalendarData);
-                  setDayOrderStats(stats);
-                  setCalendarData(modifiedCalendarData);
-                } catch (err) {
-                  console.error('[Attendance] Error processing cached data:', err);
-                }
-              }
-            }
-            
-            // Show non-blocking notification instead of modal
-            setError('Your session has expired, but showing cached data. Please refresh to get latest data.');
-            setLoading(false);
-            return;
-          }
-        }
-        
-        // No cached data available - show password modal
-        console.error('[Attendance] No cached data available, prompting for re-authentication');
+        console.error('[Attendance] Session expired');
         setError('Your session has expired. Please re-enter your password.');
         setShowPasswordModal(true);
         setLoading(false);
@@ -478,25 +400,43 @@ export default function AttendancePage() {
         throw new Error(result.error || 'Failed to fetch data');
       }
 
-      // Extract cache info
-      setCacheInfo({
-        cached: result.metadata?.cached || false,
-        age: result.metadata?.cache_age_seconds || 0
-      });
-
       // Process attendance data
-      if (result.data.attendance?.success && result.data.attendance.data) {
-        setAttendanceData(result.data.attendance.data);
-        console.log('[Attendance] Loaded attendance with', result.data.attendance.data.all_subjects?.length, 'subjects');
-        
-        // Extract semester from attendance metadata
-        const extractedSemester = result.data.attendance?.semester || 
-                                 result.data.attendance?.data?.metadata?.semester || 
-                                 1;
+      // Handle both formats: direct object or wrapped in {success, data}
+      let attendanceDataObj: AttendanceData | null = null;
+      let extractedSemester: number = 1;
+      
+      if (result.data.attendance && typeof result.data.attendance === 'object') {
+        // Check if it's direct format (has all_subjects, summary, metadata at root)
+        if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
+          // Direct format
+          attendanceDataObj = result.data.attendance as AttendanceData;
+          extractedSemester = (result.data.attendance as { metadata?: { semester?: number } }).metadata?.semester || 1;
+          console.log('[Attendance] Attendance data is direct format');
+        } 
+        // Check if it's wrapped format: {success: true, data: {...}}
+        else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
+          const attendanceWrapper = result.data.attendance as { success: boolean; data?: AttendanceData; semester?: number };
+          if (attendanceWrapper.success && attendanceWrapper.data) {
+            attendanceDataObj = attendanceWrapper.data;
+            extractedSemester = attendanceWrapper.semester || attendanceWrapper.data.metadata?.semester || 1;
+            console.log('[Attendance] Attendance data is wrapped format');
+          }
+        }
+      }
+      
+      if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
+        setAttendanceData(attendanceDataObj);
+        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
         console.log('[Attendance] Extracted semester:', extractedSemester);
         setSemester(extractedSemester);
       } else {
-        throw new Error('Attendance data unavailable');
+        // Keep page visible even when attendance data is unavailable
+        // User can use refresh button to fetch data
+        console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
+        console.warn('[Attendance] Attendance data type:', typeof result.data.attendance);
+        console.warn('[Attendance] Attendance data value:', result.data.attendance);
+        setAttendanceData(null);
+        // Don't throw error, just log it so page remains visible
       }
 
       // Also process timetable data from unified endpoint
@@ -739,13 +679,13 @@ export default function AttendancePage() {
     );
   }
 
-  if (error || !attendanceData) {
+  if (error) {
     return (
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
         <div className="text-red-400 font-sora text-base sm:text-lg md:text-xl lg:text-xl text-center px-4">{error}</div>
         <div className="flex gap-3 sm:gap-4">
-        <button 
+          <button 
             onClick={() => fetchUnifiedData()}
             className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
         >
@@ -760,6 +700,64 @@ export default function AttendancePage() {
               Sign In Again
             </NavigationButton>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // Show empty state if no attendance data but no error (allows refresh button to work)
+  if (!attendanceData) {
+    return (
+      <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
+        {/* Home Icon */}
+        <Link 
+          href="/dashboard"
+          className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
+          aria-label="Go to Dashboard"
+        >
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            strokeWidth={2} 
+            stroke="currentColor" 
+            className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+          </svg>
+        </Link>
+        
+        <div className="flex flex-col items-center gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
+            <button
+              onClick={refreshAttendanceData}
+              disabled={loading}
+              className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Refresh attendance data"
+              title="Refresh attendance data"
+            >
+              <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                fill="none" 
+                viewBox="0 0 24 24" 
+                strokeWidth={2} 
+                stroke="currentColor" 
+                className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        <div className="flex flex-col items-center justify-center gap-4 h-full">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
+            No attendance data available
+          </div>
+          <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
+            Click the refresh button above to fetch attendance data
+          </div>
         </div>
       </div>
     );
@@ -794,7 +792,27 @@ export default function AttendancePage() {
       </Link>
       
       <div className="flex flex-col items-center gap-4">
-        <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
+          <button
+            onClick={refreshAttendanceData}
+            disabled={loading}
+            className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Refresh attendance data"
+            title="Refresh attendance data"
+          >
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={2} 
+              stroke="currentColor" 
+              className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+          </button>
+        </div>
       </div>
       
       {/* Prediction Controls */}

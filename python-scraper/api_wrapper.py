@@ -17,94 +17,14 @@ import re
 from bs4 import BeautifulSoup
 
 # ============================================================================
-# CACHING CONFIGURATION
-# ============================================================================
-
-CACHE_FILE = "calendar_cache.json"
-CACHE_DURATION_HOURS = 24 * 30  # Cache for 1 month (30 days)
-
-
-def is_cache_valid():
-    """Check if cached calendar data is still valid"""
-    if not os.path.exists(CACHE_FILE):
-        print("[CACHE] No cache file found", file=sys.stderr)
-        return False
-
-    try:
-        with open(CACHE_FILE, 'r') as f:
-            cache_data = json.load(f)
-
-        cache_time_str = cache_data.get('timestamp', '')
-        if not cache_time_str:
-            print("[CACHE] No timestamp in cache", file=sys.stderr)
-            return False
-
-        cache_time = datetime.fromisoformat(cache_time_str)
-        if datetime.now() - cache_time > timedelta(hours=CACHE_DURATION_HOURS):
-            print("[CACHE] Cache expired", file=sys.stderr)
-            return False
-
-        print("[CACHE] Cache is valid", file=sys.stderr)
-        return True
-    except Exception as e:
-        print(f"[CACHE] Error reading cache: {e}", file=sys.stderr)
-        return False
-
-
-def get_cached_calendar_data():
-    """Get calendar data from cache"""
-    try:
-        with open(CACHE_FILE, 'r') as f:
-            cache_data = json.load(f)
-        data = cache_data.get('data', [])
-        print(f"[CACHE] Retrieved {len(data)} entries from cache", file=sys.stderr)
-        return data
-    except Exception as e:
-        print(f"[CACHE] Error reading cached data: {e}", file=sys.stderr)
-        return []
-
-
-def save_calendar_cache(calendar_data):
-    """Save calendar data to cache"""
-    try:
-        cache_data = {
-            'data': calendar_data,
-            'timestamp': datetime.now().isoformat(),
-            'count': len(calendar_data),
-            'cache_duration_hours': CACHE_DURATION_HOURS
-        }
-        with open(CACHE_FILE, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-        print(f"[CACHE] Saved {len(calendar_data)} entries to cache", file=sys.stderr)
-    except Exception as e:
-        print(f"[CACHE] Error saving cache: {e}", file=sys.stderr)
-
-
-# ============================================================================
 # API FUNCTIONS FOR NEXT.JS INTEGRATION
 # ============================================================================
 
 def api_get_calendar_data(email, password, force_refresh=False):
-    """API function to get calendar data with smart caching"""
+    """API function to get calendar data"""
     scraper = None
     try:
         print(f"[API] Getting calendar data for: {email}", file=sys.stderr)
-
-        # Check cache first (unless force refresh)
-        if not force_refresh and is_cache_valid():
-            cached_data = get_cached_calendar_data()
-            if cached_data:
-                print(f"[CACHE] Using cached data ({len(cached_data)} entries)", file=sys.stderr)
-                return {
-                    "success": True,
-                    "data": cached_data,
-                    "type": "calendar",
-                    "count": len(cached_data),
-                    "cached": True,
-                    "cache_timestamp": datetime.now().isoformat()
-                }
-
-        print("[CACHE] Cache expired or empty - fetching fresh data", file=sys.stderr)
 
         # Initialize scraper with session management
         scraper = SRMAcademiaScraperSelenium(headless=True, use_session=True)
@@ -133,13 +53,11 @@ def api_get_calendar_data(email, password, force_refresh=False):
 
         if calendar_data:
             print(f"[API] Successfully extracted {len(calendar_data)} calendar entries", file=sys.stderr)
-            save_calendar_cache(calendar_data)
             return {
                 "success": True,
                 "data": calendar_data,
                 "type": "calendar",
                 "count": len(calendar_data),
-                "cached": False,
                 "fresh_data": True
             }
         else:
@@ -157,19 +75,6 @@ def api_get_calendar_data(email, password, force_refresh=False):
         import traceback
         traceback.print_exc(file=sys.stderr)
 
-        if not force_refresh:
-            cached_data = get_cached_calendar_data()
-            if cached_data:
-                print("[CACHE] Scraping failed, using stale cache as fallback", file=sys.stderr)
-                return {
-                    "success": True,
-                    "data": cached_data,
-                    "type": "calendar",
-                    "count": len(cached_data),
-                    "cached": True,
-                    "stale": True,
-                    "fallback": True
-                }
         return {"success": False, "error": f"API Error: {str(e)}"}
     
     finally:
@@ -212,7 +117,7 @@ def get_attendance_page_html(scraper):
 def extract_attendance_data_from_html(html_content):
     """
     Extract attendance data from HTML content using BeautifulSoup.
-    Based on the HTML structure: table with tr rows containing subject data.
+    Attendance data is in the 3rd tbody element (index 2).
     """
     attendance_data = []
     
@@ -225,56 +130,21 @@ def extract_attendance_data_from_html(html_content):
             print("[ERROR] Access denied to attendance page", file=sys.stderr)
             return attendance_data
         
-        # Find all tables
-        tables = soup.find_all('table')
-        print(f"Found {len(tables)} tables on the page", file=sys.stderr)
+        # Find all tbody elements
+        tbody_elements = soup.find_all('tbody')
+        print(f"Found {len(tbody_elements)} tbody elements on the page", file=sys.stderr)
         
-        # Also look for divs that might contain table-like data
-        divs_with_tables = soup.find_all('div', class_=lambda x: x and 'table' in x.lower())
-        print(f"Found {len(divs_with_tables)} divs with table classes", file=sys.stderr)
-        
-        # Look for the main attendance table
-        main_table = None
-        
-        # First, try to find table with attendance-related content
-        for i, table in enumerate(tables):
-            table_text = table.get_text().lower()
-            if any(keyword in table_text for keyword in ['attendance', 'hours conducted', 'absent', 'theory', 'lab', 'subject', 'course']):
-                print(f"Found potential attendance table {i}", file=sys.stderr)
-                main_table = table
-                break
-        
-        # If no table found, look for divs that might contain table data
-        if not main_table:
-            for i, div in enumerate(divs_with_tables):
-                div_text = div.get_text().lower()
-                if any(keyword in div_text for keyword in ['attendance', 'hours conducted', 'absent', 'theory', 'lab']):
-                    print(f"Found potential attendance div {i}", file=sys.stderr)
-                    # Look for table inside this div
-                    inner_table = div.find('table')
-                    if inner_table:
-                        main_table = inner_table
-                        break
-        
-        # If still no table found, try to find any table with multiple rows
-        if not main_table:
-            print("No attendance-specific table found, trying any table with data", file=sys.stderr)
-            for table in tables:
-                rows = table.find_all('tr')
-                if len(rows) > 1:  # More than just header
-                    print(f"Found table with {len(rows)} rows", file=sys.stderr)
-                    main_table = table
-                    break
-        
-        if not main_table:
-            print("No suitable table found", file=sys.stderr)
+        # Get the 3rd tbody (index 2)
+        if len(tbody_elements) < 3:
+            print(f"[ERROR] Expected at least 3 tbody elements, found {len(tbody_elements)}", file=sys.stderr)
             return attendance_data
         
-        print("Processing attendance table...", file=sys.stderr)
+        attendance_tbody = tbody_elements[2]
+        print("[ATTENDANCE] ✓ Targeting 3rd tbody (index 2) for attendance data", file=sys.stderr)
         
-        # Get all rows from the table
-        rows = main_table.find_all('tr')
-        print(f"Found {len(rows)} rows in attendance table", file=sys.stderr)
+        # Get all rows from the tbody
+        rows = attendance_tbody.find_all('tr')
+        print(f"Found {len(rows)} rows in attendance tbody", file=sys.stderr)
         
         # Process each row (skip first empty row if it exists)
         for i, row in enumerate(rows):
@@ -1147,22 +1017,6 @@ def get_calendar_data_with_scraper(scraper, email, password, force_refresh=False
     try:
         print(f"[UNIFIED API] Getting calendar data for: {email}", file=sys.stderr)
 
-        # Check cache first (unless force refresh)
-        if not force_refresh and is_cache_valid():
-            cached_data = get_cached_calendar_data()
-            if cached_data:
-                print(f"[UNIFIED API] Using cached calendar data ({len(cached_data)} entries)", file=sys.stderr)
-                return {
-                    "success": True,
-                    "data": cached_data,
-                    "type": "calendar",
-                    "count": len(cached_data),
-                    "cached": True,
-                    "cache_timestamp": datetime.now().isoformat()
-                }
-
-        print("[UNIFIED API] Cache expired or empty - fetching fresh calendar data", file=sys.stderr)
-
         html_content = None
         # Try to get data with existing session first
         if scraper.is_session_valid():
@@ -1187,13 +1041,11 @@ def get_calendar_data_with_scraper(scraper, email, password, force_refresh=False
 
         if calendar_data:
             print(f"[UNIFIED API] Successfully extracted {len(calendar_data)} calendar entries", file=sys.stderr)
-            save_calendar_cache(calendar_data)
             return {
                 "success": True,
                 "data": calendar_data,
                 "type": "calendar",
                 "count": len(calendar_data),
-                "cached": False,
                 "fresh_data": True
             }
         else:
@@ -1211,19 +1063,6 @@ def get_calendar_data_with_scraper(scraper, email, password, force_refresh=False
         import traceback
         traceback.print_exc(file=sys.stderr)
 
-        if not force_refresh:
-            cached_data = get_cached_calendar_data()
-            if cached_data:
-                print("[UNIFIED API] Scraping failed, using stale cache as fallback", file=sys.stderr)
-                return {
-                    "success": True,
-                    "data": cached_data,
-                    "type": "calendar",
-                    "count": len(cached_data),
-                    "cached": True,
-                    "stale": True,
-                    "fallback": True
-                }
         return {"success": False, "error": f"API Error: {str(e)}"}
 
 
