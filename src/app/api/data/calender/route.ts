@@ -1,46 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callBackendScraper } from '@/lib/scraperClient';
 
-// ============================================================================
-// MEMORY CACHE CONFIGURATION
-// ============================================================================
-
-interface CacheEntry {
-  data: Record<string, unknown>;
-  timestamp: number;
-  expires: number;
-}
-
-const memoryCache = new Map<string, CacheEntry>();
-const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
-
-function getCachedResponse(email: string): Record<string, unknown> | null {
-  const cacheKey = `calendar_${email}`;
-  const cached = memoryCache.get(cacheKey);
-  
-  if (cached && Date.now() < cached.expires) {
-    console.log('[CACHE] Using memory cache');
-    return cached.data;
-  }
-  
-  // Clean up expired cache
-  if (cached) {
-    memoryCache.delete(cacheKey);
-  }
-  
-  return null;
-}
-
-function setCachedResponse(email: string, data: Record<string, unknown>): void {
-  const cacheKey = `calendar_${email}`;
-  memoryCache.set(cacheKey, {
-    data,
-    timestamp: Date.now(),
-    expires: Date.now() + CACHE_DURATION_MS
-  });
-  console.log(`[CACHE] Cached response for ${email}`);
-}
-
 export async function GET(request: NextRequest) {
   try {
     console.log('[API] Calendar API called');
@@ -49,7 +9,6 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const email = searchParams.get('email');
     const password = searchParams.get('password');
-    const forceRefresh = searchParams.get('refresh') === 'true';
     
     // Validate input
     if (!email || !password) {
@@ -79,24 +38,10 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    // Check memory cache first (unless force refresh)
-    if (!forceRefresh) {
-      const cached = getCachedResponse(email);
-      if (cached) {
-        console.log('[API] Returning cached response');
-        return NextResponse.json(cached);
-      }
-    }
-    
-    console.log(`[API] Cache miss or force refresh - calling Python scraper for: ${email}`);
+    console.log(`[API] Calling Python scraper for: ${email}`);
     
     // Call Python scraper
-    const result = await callPythonCalendarFunction(email, password, forceRefresh);
-    
-    // Cache the result if successful
-    if (result && typeof result === 'object' && 'success' in result && result.success) {
-      setCachedResponse(email, result as unknown as Record<string, unknown>);
-    }
+    const result = await callPythonCalendarFunction(email, password);
     
     console.log('[API] Python scraper completed');
     console.log('[API] Result:', result);
@@ -115,10 +60,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function callPythonCalendarFunction(email: string, password: string, forceRefresh: boolean = false) {
+async function callPythonCalendarFunction(email: string, password: string) {
   return await callBackendScraper('get_calendar_data', {
     email,
     password,
-    force_refresh: forceRefresh,
   });
 }

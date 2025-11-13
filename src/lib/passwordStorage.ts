@@ -66,7 +66,7 @@ export function storePortalPassword(password: string): boolean {
         window.sessionStorage.setItem('portal_password_backup', encrypted);
         console.log('[PasswordStorage] Password stored in both browserStorage and sessionStorage ✓');
       }
-    } catch (sessionError) {
+    } catch {
       console.warn('[PasswordStorage] sessionStorage backup failed, but browserStorage succeeded');
     }
     
@@ -152,10 +152,9 @@ export function isPasswordAvailable(): boolean {
  * Get request body with password included
  */
 export function getRequestBodyWithPassword(
-  access_token: string, 
-  force_refresh: boolean = false,
-  has_long_term_cache: boolean = false
-): { access_token: string; force_refresh: boolean; has_long_term_cache?: boolean; password?: string } {
+  access_token: string,
+  force_refresh: boolean = false
+): { access_token: string; force_refresh: boolean; password?: string } {
   console.log('[PasswordStorage] 🔍 Retrieving password for API request...');
   const password = getPortalPassword();
   
@@ -173,14 +172,12 @@ export function getRequestBodyWithPassword(
   const requestBody = {
     access_token,
     force_refresh,
-    ...(has_long_term_cache ? { has_long_term_cache: true } : {}),
     ...(password ? { password } : {})
   };
   
   console.log('[PasswordStorage] 📦 Request body prepared:');
   console.log(`[PasswordStorage]   - Has password: ${password ? "✓" : "✗"}`);
   console.log(`[PasswordStorage]   - Force refresh: ${force_refresh}`);
-  console.log(`[PasswordStorage]   - Has long-term cache: ${has_long_term_cache}`);
   
   return requestBody;
 }

@@ -1,4 +1,3 @@
-import { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { validatePortalCredentials } from "./portalValidation";

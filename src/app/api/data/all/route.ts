@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { dataCache } from "@/lib/dataCache";
 import { callBackendScraper } from '@/lib/scraperClient';
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requestQueueTracker } from "@/lib/requestQueue";
+import { getSupabaseCache, setSupabaseCache, getSupabaseCacheWithInfo, deleteSupabaseCache } from "@/lib/supabaseCache";
+import { removeClientCache } from "@/lib/clientCache";
 
 /**
  * Unified data endpoint - Returns all data types in one call
  * POST /api/data/all
  * 
  * Features:
- * - Caches data for 5 minutes for instant retrieval
  * - Uses Python session persistence (no password needed)
- * - Force refresh available to bypass cache
  * 
- * Request body: { access_token: string, force_refresh?: boolean }
+ * Request body: { access_token: string, password?: string }
  * 
  * Returns: {
  *   success: boolean,
@@ -24,9 +23,7 @@ import { requestQueueTracker } from "@/lib/requestQueue";
  *     timetable: {...}
  *   },
  *   metadata: {
- *     ...,
- *     cached: boolean,
- *     cache_age_seconds: number
+ *     ...
  *   }
  * }
  */
@@ -62,13 +59,14 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { access_token, force_refresh = false, password, has_long_term_cache } = body;
+    const { access_token, password, force_refresh } = body;
+    
+    const forceRefresh = force_refresh === true || force_refresh === 'true';
     
     console.log("[API /data/all] 📋 Request parameters:");
-    console.log("  - force_refresh:", force_refresh);
-    console.log("  - has_long_term_cache:", has_long_term_cache);
     console.log("  - password_provided:", password ? "✓" : "✗");
     console.log("  - access_token_length:", access_token?.length || 0);
+    console.log("  - force_refresh:", forceRefresh);
 
     if (!access_token) {
       console.error("[API /data/all] ❌ No access token provided");
@@ -115,209 +113,447 @@ export async function POST(request: NextRequest) {
     // Register request in queue tracker
     requestQueueTracker.registerRequest(user_email);
 
-    // Check cache FIRST (unless force_refresh is true)
-    const cacheKey = `data:${user_email}`;
+    // Check Supabase cache for each data type (with expiry info)
+    console.log(`[API /data/all] 🔍 Checking Supabase cache...`);
+    let calendarInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
+    let timetableInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
+    let attendanceInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
+    let marksInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     
-    console.log(`[API /data/all] 🔍 Checking server-side cache...`);
-    console.log(`[API /data/all]   - Cache key: ${cacheKey}`);
-    console.log(`[API /data/all]   - Force refresh: ${force_refresh}`);
+    try {
+      calendarInfo = await getSupabaseCacheWithInfo(user_id, 'calendar', forceRefresh);
+    } catch (error) {
+      console.error(`[API /data/all] ❌ Error checking calendar cache:`, error);
+      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+      }
+      calendarInfo = null;
+    }
     
-    if (!force_refresh) {
-      const cachedData = dataCache.get(cacheKey);
-      
-      if (cachedData) {
-        const cacheAge = (cachedData as { metadata?: { cached_at?: number } }).metadata?.cached_at 
-          ? Math.floor((Date.now() - (cachedData as { metadata?: { cached_at?: number } }).metadata!.cached_at!) / 1000)
-          : 0;
-        
-        console.log(`[API /data/all] ✅ Server cache HIT for ${user_email}`);
-        console.log(`[API /data/all]   - Cache age: ${cacheAge}s`);
-        console.log(`[API /data/all]   - Response time: ${Date.now() - requestStartTime}ms`);
-        console.log("===========================================");
-        
-        // Add cache metadata to response
-        const cachedResult = cachedData as { metadata?: { cached_at?: number; queue_info?: unknown } };
-        
-        // Get current queue info
-        const queueInfo = requestQueueTracker.getQueueInfo(user_email);
-        
-        // Preserve existing queue_info from cache if present, otherwise use current
-        const existingQueueInfo = cachedResult.metadata?.queue_info;
-        
-        return NextResponse.json({
-          ...cachedData,
-          metadata: {
-            ...cachedData.metadata,
-            cached: true,
-            cache_age_seconds: cacheAge,
-            cache_ttl_seconds: Math.floor((6 * 60 * 60 * 1000) / 1000),
-            queue_info: existingQueueInfo || queueInfo // Use cached queue info or current
+    try {
+      timetableInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', forceRefresh);
+    } catch (error) {
+      console.error(`[API /data/all] ❌ Error checking timetable cache:`, error);
+      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+      }
+      timetableInfo = null;
+    }
+    
+    try {
+      attendanceInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', forceRefresh);
+    } catch (error) {
+      console.error(`[API /data/all] ❌ Error checking attendance cache:`, error);
+      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+      }
+      attendanceInfo = null;
+    }
+    
+    try {
+      marksInfo = await getSupabaseCacheWithInfo(user_id, 'marks', forceRefresh);
+    } catch (error) {
+      console.error(`[API /data/all] ❌ Error checking marks cache:`, error);
+      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+      }
+      marksInfo = null;
+    }
+
+    // Safely extract cached data with null checks
+    const cachedCalendar = (calendarInfo && calendarInfo.data) ? calendarInfo.data : null;
+    const cachedTimetable = (timetableInfo && timetableInfo.data) ? timetableInfo.data : null;
+    const cachedAttendance = (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
+    const cachedMarks = (marksInfo && marksInfo.data) ? marksInfo.data : null;
+
+    // Determine what needs to be fetched
+    const needCalendar = !cachedCalendar || forceRefresh;
+    const needTimetable = !cachedTimetable || forceRefresh;
+    const needAttendance = !cachedAttendance || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire);
+    const needMarks = !cachedMarks || forceRefresh || (marksInfo && marksInfo.isAboutToExpire);
+    const needStatic = needCalendar || needTimetable;
+    const needDynamic = needAttendance || needMarks;
+    
+    // Count how many data types need fetching
+    const missingCount = [needCalendar, needTimetable, needAttendance, needMarks].filter(Boolean).length;
+    const allMissing = missingCount === 4;
+
+    // If force refresh, clear caches first (similar to refresh endpoint)
+    if (forceRefresh) {
+      console.log(`[API /data/all] 🔄 Force refresh requested - clearing caches...`);
+      try {
+        if (needCalendar) {
+          await deleteSupabaseCache(user_id, 'calendar');
+          removeClientCache('calendar');
+        }
+        if (needTimetable) {
+          await deleteSupabaseCache(user_id, 'timetable');
+          removeClientCache('timetable');
+        }
+        if (needAttendance) {
+          await deleteSupabaseCache(user_id, 'attendance');
+          removeClientCache('attendance');
+        }
+        if (needMarks) {
+          await deleteSupabaseCache(user_id, 'marks');
+          removeClientCache('marks');
+        }
+        console.log(`[API /data/all] 🗑️ Cleared caches for force refresh`);
+      } catch (cacheError) {
+        console.warn(`[API /data/all] ⚠️ Error clearing cache (continuing anyway):`, cacheError);
+        console.warn(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+        console.warn(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+      }
+    }
+
+    console.log(`[API /data/all] 📊 Cache status:`);
+    console.log(`[API /data/all]   - Calendar: ${cachedCalendar ? "✓ Cached" : "✗ Need fetch"}`);
+    if (calendarInfo && calendarInfo.minutesUntilExpiry !== null) {
+      console.log(`[API /data/all]     Expires in: ${calendarInfo.minutesUntilExpiry} minutes`);
+    }
+    console.log(`[API /data/all]   - Timetable: ${cachedTimetable ? "✓ Cached" : "✗ Need fetch"}`);
+    if (timetableInfo && timetableInfo.minutesUntilExpiry !== null) {
+      console.log(`[API /data/all]     Expires in: ${timetableInfo.minutesUntilExpiry} minutes`);
+    }
+    console.log(`[API /data/all]   - Attendance: ${cachedAttendance ? "✓ Cached" : "✗ Need fetch"}`);
+    if (attendanceInfo && attendanceInfo.minutesUntilExpiry !== null) {
+      console.log(`[API /data/all]     Expires in: ${attendanceInfo.minutesUntilExpiry} minutes`);
+      if (attendanceInfo.isAboutToExpire) {
+        console.log(`[API /data/all]     ⚠️ About to expire! Triggering background prefetch...`);
+      }
+    }
+    console.log(`[API /data/all]   - Marks: ${cachedMarks ? "✓ Cached" : "✗ Need fetch"}`);
+    if (marksInfo && marksInfo.minutesUntilExpiry !== null) {
+      console.log(`[API /data/all]     Expires in: ${marksInfo.minutesUntilExpiry} minutes`);
+      if (marksInfo.isAboutToExpire) {
+        console.log(`[API /data/all]     ⚠️ About to expire! Triggering background prefetch...`);
+      }
+    }
+
+    // Trigger background prefetch for caches about to expire (non-blocking, only if not already fetching)
+    if (!forceRefresh) {
+      if (attendanceInfo && attendanceInfo.isAboutToExpire && cachedAttendance && !needAttendance) {
+        console.log(`[API /data/all] 🔄 Triggering background prefetch for attendance...`);
+        triggerBackgroundPrefetch(user_email, user_id, password, 'attendance').catch(err => {
+          console.error(`[API /data/all] ❌ Background prefetch error for attendance:`);
+          console.error(`[API /data/all]   - Error type: ${err instanceof Error ? err.constructor.name : typeof err}`);
+          console.error(`[API /data/all]   - Error message: ${err instanceof Error ? err.message : String(err)}`);
+          if (err instanceof Error && err.stack) {
+            console.error(`[API /data/all]   - Stack: ${err.stack}`);
           }
         });
-      } else {
-        console.log(`[API /data/all] ❌ Server cache MISS for ${user_email}`);
+      }
+      if (marksInfo && marksInfo.isAboutToExpire && cachedMarks && !needMarks) {
+        console.log(`[API /data/all] 🔄 Triggering background prefetch for marks...`);
+        triggerBackgroundPrefetch(user_email, user_id, password, 'marks').catch(err => {
+          console.error(`[API /data/all] ❌ Background prefetch error for marks:`);
+          console.error(`[API /data/all]   - Error type: ${err instanceof Error ? err.constructor.name : typeof err}`);
+          console.error(`[API /data/all]   - Error message: ${err instanceof Error ? err.message : String(err)}`);
+          if (err instanceof Error && err.stack) {
+            console.error(`[API /data/all]   - Stack: ${err.stack}`);
+          }
+        });
+      }
+    }
+
+    let staticData: Record<string, unknown> | null = null;
+    let dynamicData: Record<string, unknown> | null = null;
+    const backendStartTime = Date.now();
+
+    // OPTIMIZATION: If all data is missing, use two-request logic (fastest)
+    // If only one type is missing, fetch only that type (fastest for single missing)
+    if (allMissing) {
+      console.log(`[API /data/all] 🚀 All data missing - Using optimized two-request strategy`);
+      // Fetch static data (calendar + timetable together)
+      try {
+        staticData = await callPythonStaticData(user_email, user_id, password);
+        const staticDuration = Date.now() - backendStartTime;
+        console.log(`[API /data/all] ✅ Static data received (${staticDuration}ms)`);
+        
+        const staticDataData = staticData.data as { calendar?: unknown; timetable?: unknown } | undefined;
+        if (staticData.success && staticDataData) {
+          if (staticDataData.calendar && needCalendar) {
+            try {
+              await setSupabaseCache(user_id, 'calendar', staticDataData.calendar);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+          if (staticDataData.timetable && needTimetable) {
+            try {
+              await setSupabaseCache(user_id, 'timetable', staticDataData.timetable);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Static data request failed:`);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        staticData = null;
+      }
+
+      // Fetch dynamic data (attendance + marks together)
+      try {
+        const dynamicStartTime = Date.now();
+        dynamicData = await callPythonDynamicData(user_email, user_id, password);
+        const dynamicDuration = Date.now() - dynamicStartTime;
+        console.log(`[API /data/all] ✅ Dynamic data received (${dynamicDuration}ms)`);
+        
+        const dynamicDataData = dynamicData.data as { attendance?: unknown; marks?: unknown } | undefined;
+        if (dynamicData.success && dynamicDataData) {
+          if (dynamicDataData.attendance && needAttendance) {
+            try {
+              await setSupabaseCache(user_id, 'attendance', dynamicDataData.attendance);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+          if (dynamicDataData.marks && needMarks) {
+            try {
+              await setSupabaseCache(user_id, 'marks', dynamicDataData.marks);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Dynamic data request failed:`);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        dynamicData = null;
       }
     } else {
-      console.log(`[API /data/all] ⏩ Force refresh enabled, bypassing server cache`);
-    }
-
-    // Check if client has long-term cache (check request body)
-    const hasLongTermCache = has_long_term_cache === true;
-    console.log(`[API /data/all] 📦 Client long-term cache status: ${hasLongTermCache ? "✓ EXISTS" : "✗ NOT FOUND"}`);
-
-    if (hasLongTermCache && !force_refresh) {
-      console.log(`[API /data/all] 🎯 Using optimized path: Fetching ONLY attendance & marks`);
-      console.log(`[API /data/all]   - Timetable/Calendar: Using client cache`);
-      console.log(`[API /data/all]   - Backend call: get_attendance_marks_data`);
+      // OPTIMIZATION: Only some data is missing - fetch only what's needed individually
+      console.log(`[API /data/all] 🎯 Partial data missing (${missingCount} types) - Using individual fetch strategy`);
       
-      const backendStartTime = Date.now();
-      // Fetch ONLY attendance and marks from backend
-      const result = await callPythonAttendanceMarksOnly(user_email, user_id, password);
-      const backendDuration = Date.now() - backendStartTime;
-      
-      // Type-safe access to result properties
-      const resultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
-      
-      console.log(`[API /data/all] 🔄 Backend response received`);
-      console.log(`[API /data/all]   - Duration: ${backendDuration}ms`);
-      console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
-      
-      if (!resultTyped.success) {
-        console.error(`[API /data/all] ❌ Backend error: ${resultTyped.error || 'Unknown error'}`);
-      }
-
-      // Check if session expired
-      if (!resultTyped.success && resultTyped.error === "session_expired") {
-        console.error("[API /data/all] ❌ Backend session expired");
-        console.error("[API /data/all]   - User needs to re-authenticate");
-        console.log(`[API /data/all]   - Total response time: ${Date.now() - requestStartTime}ms`);
-        console.log("===========================================");
-        return NextResponse.json(
-          {
-            success: false,
-            error: "session_expired",
-            message: "Your portal session has expired. Please re-enter your password.",
-            requires_password: true
-          },
-          { status: 401 }
-        );
-      }
-
-      // Try to get semester from attendance data, fallback to database
-      let semesterFromAttendance: number | null = null;
-      const attendanceDataInResult = resultTyped.data as { attendance?: { semester?: number; data?: { metadata?: { semester?: number } } } } | undefined;
-      if (attendanceDataInResult?.attendance?.semester) {
-        semesterFromAttendance = attendanceDataInResult.attendance.semester;
-      } else if (attendanceDataInResult?.attendance?.data?.metadata?.semester) {
-        semesterFromAttendance = attendanceDataInResult.attendance.data.metadata.semester;
-      }
-      
-      // If no semester from attendance, fetch from database
-      let semester: number | null = semesterFromAttendance;
-      if (!semester) {
-        console.log(`[API /data/all] 🔍 No semester from attendance (partial data), fetching from database...`);
-        semester = await getSemesterFromDatabase(user_id);
-      } else {
-        console.log(`[API /data/all] ✅ Semester from attendance (partial data): ${semester}`);
-      }
-      
-      // Get queue info
-      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
-      
-      // Return only attendance/marks - client will merge with cached timetable/calendar
-      const resultData = resultTyped.data as { attendance?: unknown; marks?: unknown } | undefined;
-      const resultMetadata = (resultTyped.metadata && typeof resultTyped.metadata === 'object') 
-        ? resultTyped.metadata as Record<string, unknown>
-        : {};
-      
-      const partialResult = {
-        success: resultTyped.success || false,
+      // Initialize with cached data
+      staticData = {
+        success: true,
         data: {
-          attendance: resultData?.attendance,
-          marks: resultData?.marks,
+          calendar: cachedCalendar,
+          timetable: cachedTimetable,
         },
-        metadata: {
-          ...resultMetadata,
-          timetable_cached: true,
-          calendar_cached: true,
-          attendance_fresh: true,
-          marks_fresh: true,
-          partial_data: true, // Indicates client needs to merge with cache
-          ...(semester ? { semester } : {}),
-          queue_info: queueInfo
+        metadata: { source: 'supabase_cache' },
+      };
+      
+      dynamicData = {
+        success: true,
+        data: {
+          attendance: cachedAttendance,
+          marks: cachedMarks,
         },
-        ...(semester ? { semester } : {})
+        metadata: { source: 'supabase_cache' },
       };
 
-      console.log(`[API /data/all] 📊 Partial data response prepared`);
-      const partialResultData = partialResult.data as { attendance?: unknown; marks?: unknown };
-      console.log(`[API /data/all]   - Attendance: ${partialResultData?.attendance ? "✓" : "✗"}`);
-      console.log(`[API /data/all]   - Marks: ${partialResultData?.marks ? "✓" : "✗"}`);
-
-      // Store in short-term cache
-      if (partialResult.success) {
-        dataCache.set(cacheKey, partialResult, 6 * 60 * 60 * 1000); // 6 hour TTL
-        console.log(`[API /data/all] 💾 Stored partial data in server cache (6hour TTL)`);
+      // Fetch only calendar if needed
+      if (needCalendar && !needTimetable) {
+        console.log(`[API /data/all] ⏳ Fetching only calendar...`);
+        try {
+          const calendarResult = await callPythonIndividualData(user_email, user_id, password, 'calendar');
+          if (calendarResult.success && calendarResult.data) {
+            (staticData.data as { calendar?: unknown }).calendar = calendarResult.data;
+            try {
+              await setSupabaseCache(user_id, 'calendar', calendarResult.data);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        } catch (error) {
+          console.error(`[API /data/all] ❌ Calendar fetch failed:`);
+          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof Error && error.stack) {
+            console.error(`[API /data/all]   - Stack: ${error.stack}`);
+          }
+        }
       }
 
-      const totalTime = Date.now() - requestStartTime;
-      console.log(`[API /data/all] ✅ Response sent (${totalTime}ms total)`);
-      console.log("===========================================");
-      return NextResponse.json(partialResult, { status: partialResult.success ? 200 : 500 });
-    }
+      // Fetch only timetable if needed
+      if (needTimetable && !needCalendar) {
+        console.log(`[API /data/all] ⏳ Fetching only timetable...`);
+        try {
+          const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
+          if (timetableResult.success && timetableResult.data) {
+            (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
+            try {
+              await setSupabaseCache(user_id, 'timetable', timetableResult.data);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        } catch (error) {
+          console.error(`[API /data/all] ❌ Timetable fetch failed:`);
+          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof Error && error.stack) {
+            console.error(`[API /data/all]   - Stack: ${error.stack}`);
+          }
+        }
+      }
 
-    // No long-term cache or force refresh - fetch data sequentially (split requests)
-    console.log(`[API /data/all] 🚀 Fetching data from backend (split into 2 sequential requests)`);
-    console.log(`[API /data/all]   - Strategy: Sequential requests (one after another)`);
-    console.log(`[API /data/all]   - Request 1: get_static_data (timetable + calendar)`);
-    console.log(`[API /data/all]   - Request 2: get_dynamic_data (attendance + marks)`);
-    console.log(`[API /data/all]   - Force refresh: ${force_refresh}`);
-    
-    const backendStartTime = Date.now();
-    
-    // Fetch static data first (sequentially)
-    console.log(`[API /data/all] ⏳ Starting request 1/2: get_static_data...`);
-    let staticData: Record<string, unknown> | null = null;
-    try {
-      staticData = await callPythonStaticData(user_email, user_id, password);
-      const staticDuration = Date.now() - backendStartTime;
-      console.log(`[API /data/all] ✅ Static data received (${staticDuration}ms)`);
-      console.log(`[API /data/all]   - Success: ${staticData.success}`);
-      
-      // Safely access nested data properties
-      const staticDataData = staticData.data as { calendar?: unknown; timetable?: unknown } | undefined;
-      console.log(`[API /data/all]   - Calendar: ${staticDataData?.calendar ? "✓" : "✗"}`);
-      console.log(`[API /data/all]   - Timetable: ${staticDataData?.timetable ? "✓" : "✗"}`);
-    } catch (error) {
-      console.error(`[API /data/all] ❌ Static data request failed`);
-      console.error(`[API /data/all]   - Error: ${error instanceof Error ? error.message : String(error)}`);
-      staticData = null;
-    }
-    
-    // Fetch dynamic data second (sequentially)
-    console.log(`[API /data/all] ⏳ Starting request 2/2: get_dynamic_data...`);
-    let dynamicData: Record<string, unknown> | null = null;
-    try {
-      const dynamicStartTime = Date.now();
-      dynamicData = await callPythonDynamicData(user_email, user_id, password);
-      const dynamicDuration = Date.now() - dynamicStartTime;
-      console.log(`[API /data/all] ✅ Dynamic data received (${dynamicDuration}ms)`);
-      console.log(`[API /data/all]   - Success: ${dynamicData.success}`);
-      
-      // Safely access nested data properties
-      const dynamicDataData = dynamicData.data as { attendance?: unknown; marks?: unknown } | undefined;
-      console.log(`[API /data/all]   - Attendance: ${dynamicDataData?.attendance ? "✓" : "✗"}`);
-      console.log(`[API /data/all]   - Marks: ${dynamicDataData?.marks ? "✓" : "✗"}`);
-    } catch (error) {
-      console.error(`[API /data/all] ❌ Dynamic data request failed`);
-      console.error(`[API /data/all]   - Error: ${error instanceof Error ? error.message : String(error)}`);
-      dynamicData = null;
+      // If both static types needed, use grouped fetch
+      if (needCalendar && needTimetable) {
+        console.log(`[API /data/all] ⏳ Fetching static data (calendar + timetable)...`);
+        try {
+          const staticResult = await callPythonStaticData(user_email, user_id, password);
+          if (staticResult.success) {
+            const staticDataData = staticResult.data as { calendar?: unknown; timetable?: unknown } | undefined;
+            if (staticDataData) {
+              (staticData.data as { calendar?: unknown; timetable?: unknown }).calendar = staticDataData.calendar;
+              (staticData.data as { calendar?: unknown; timetable?: unknown }).timetable = staticDataData.timetable;
+              if (staticDataData.calendar) {
+                try {
+                  await setSupabaseCache(user_id, 'calendar', staticDataData.calendar);
+                } catch (cacheError) {
+                  console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
+                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+                }
+              }
+              if (staticDataData.timetable) {
+                try {
+                  await setSupabaseCache(user_id, 'timetable', staticDataData.timetable);
+                } catch (cacheError) {
+                  console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
+                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[API /data/all] ❌ Static data fetch failed:`);
+          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof Error && error.stack) {
+            console.error(`[API /data/all]   - Stack: ${error.stack}`);
+          }
+        }
+      }
+
+      // Fetch only attendance if needed
+      if (needAttendance && !needMarks) {
+        console.log(`[API /data/all] ⏳ Fetching only attendance...`);
+        try {
+          const attendanceResult = await callPythonIndividualData(user_email, user_id, password, 'attendance');
+          if (attendanceResult.success && attendanceResult.data) {
+            (dynamicData.data as { attendance?: unknown }).attendance = attendanceResult.data;
+            try {
+              await setSupabaseCache(user_id, 'attendance', attendanceResult.data);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        } catch (error) {
+          console.error(`[API /data/all] ❌ Attendance fetch failed:`);
+          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof Error && error.stack) {
+            console.error(`[API /data/all]   - Stack: ${error.stack}`);
+          }
+        }
+      }
+
+      // Fetch only marks if needed
+      if (needMarks && !needAttendance) {
+        console.log(`[API /data/all] ⏳ Fetching only marks...`);
+        try {
+          const marksResult = await callPythonIndividualData(user_email, user_id, password, 'marks');
+          if (marksResult.success && marksResult.data) {
+            (dynamicData.data as { marks?: unknown }).marks = marksResult.data;
+            try {
+              await setSupabaseCache(user_id, 'marks', marksResult.data);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        } catch (error) {
+          console.error(`[API /data/all] ❌ Marks fetch failed:`);
+          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof Error && error.stack) {
+            console.error(`[API /data/all]   - Stack: ${error.stack}`);
+          }
+        }
+      }
+
+      // If both dynamic types needed, use grouped fetch
+      if (needAttendance && needMarks) {
+        console.log(`[API /data/all] ⏳ Fetching dynamic data (attendance + marks)...`);
+        try {
+          const dynamicResult = await callPythonDynamicData(user_email, user_id, password);
+          if (dynamicResult.success) {
+            const dynamicDataData = dynamicResult.data as { attendance?: unknown; marks?: unknown } | undefined;
+            if (dynamicDataData) {
+              (dynamicData.data as { attendance?: unknown; marks?: unknown }).attendance = dynamicDataData.attendance;
+              (dynamicData.data as { attendance?: unknown; marks?: unknown }).marks = dynamicDataData.marks;
+              if (dynamicDataData.attendance) {
+                try {
+                  await setSupabaseCache(user_id, 'attendance', dynamicDataData.attendance);
+                } catch (cacheError) {
+                  console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
+                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+                }
+              }
+              if (dynamicDataData.marks) {
+                try {
+                  await setSupabaseCache(user_id, 'marks', dynamicDataData.marks);
+                } catch (cacheError) {
+                  console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
+                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[API /data/all] ❌ Dynamic data fetch failed:`);
+          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof Error && error.stack) {
+            console.error(`[API /data/all]   - Stack: ${error.stack}`);
+          }
+        }
+      }
     }
     
     const backendDuration = Date.now() - backendStartTime;
-    console.log(`[API /data/all] 🔄 Both backend requests completed: ${backendDuration}ms total`);
+    console.log(`[API /data/all] 🔄 Data fetch completed: ${backendDuration}ms total`);
     
-    // Merge results
+    // Merge results (combine cached and fresh data)
     const result = mergeSplitDataResults(staticData, dynamicData);
     
     console.log(`[API /data/all] 📊 Merged result:`);
@@ -375,63 +611,28 @@ export async function POST(request: NextRequest) {
     }
     
     // Include semester in response metadata
-    const resultTyped = result as { success?: boolean; metadata?: { cached_at?: number; cached?: boolean; cache_age_seconds?: number; cache_ttl_seconds?: number; semester?: number }; semester?: number };
+    const resultTyped = result as { success?: boolean; metadata?: { semester?: number; queue_info?: unknown; [key: string]: unknown }; semester?: number };
     if (resultTyped.metadata) {
       if (semester) {
         resultTyped.metadata.semester = semester;
         console.log(`[API /data/all] 📝 Added semester to response metadata: ${semester}`);
       }
+      // Get queue info
+      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
+      resultTyped.metadata.queue_info = queueInfo;
     } else if (semester) {
       // Create metadata if it doesn't exist
-      resultTyped.metadata = { semester };
+      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
+      resultTyped.metadata = { semester, queue_info: queueInfo };
+    } else {
+      // Create metadata with queue info
+      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
+      resultTyped.metadata = { queue_info: queueInfo };
     }
     
     // Also add semester at root level for easy access
     if (semester) {
       (result as { semester?: number }).semester = semester;
-    }
-
-    // Store in short-term cache if successful
-    if (resultTyped.success) {
-      // Get queue info before storing
-      const queueInfo = requestQueueTracker.getQueueInfo(user_email);
-      
-      const resultWithMetadata = resultTyped as { 
-        metadata?: { 
-          cached_at?: number; 
-          cached?: boolean; 
-          cache_age_seconds?: number; 
-          cache_ttl_seconds?: number; 
-          semester?: number;
-          queue_info?: {
-            pending_requests: number;
-            total_pending_requests: number;
-            recent_requests_last_minute: number;
-            backend_queue: {
-              pending_backend_requests: number;
-              total_pending_backend_requests: number;
-              recent_backend_requests_last_minute: number;
-            };
-          };
-        } 
-      };
-      
-      // Store everything in short-term cache (6 hours)
-      if (resultWithMetadata.metadata) {
-        resultWithMetadata.metadata.cached_at = Date.now();
-        resultWithMetadata.metadata.cached = false; // First request (not from cache)
-        resultWithMetadata.metadata.cache_age_seconds = 0;
-        resultWithMetadata.metadata.cache_ttl_seconds = 21600; // 6 hours in seconds
-        resultWithMetadata.metadata.queue_info = queueInfo;
-      } else {
-        // Create metadata if it doesn't exist
-        resultWithMetadata.metadata = {
-          queue_info: queueInfo
-        };
-      }
-      dataCache.set(cacheKey, result as Record<string, unknown>, 6 * 60 * 60 * 1000); // 6 hour TTL
-      console.log(`[API /data/all] 💾 Stored all data in server cache (6hour TTL)`);
-      console.log(`[API /data/all]   - Note: Long-term cache storage happens on client-side`);
     }
 
     const totalTime = Date.now() - requestStartTime;
@@ -473,7 +674,7 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Call backend scraper to get only attendance and marks (timetable/calendar from cache)
+ * Call backend scraper to get only attendance and marks
  */
 async function callPythonAttendanceMarksOnly(email: string, user_id: string, password?: string): Promise<Record<string, unknown>> {
   try {
@@ -509,8 +710,6 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
         metadata: {
           attendance_fresh: true,
           marks_fresh: true,
-          timetable_cached: true, // From client cache
-          calendar_cached: true,  // From client cache
         }
       };
       
@@ -564,6 +763,59 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
       error: error instanceof Error ? error.message : String(error),
       data: null
     } as unknown as Record<string, unknown>;
+  }
+}
+
+/**
+ * Call backend scraper to get individual data type
+ */
+async function callPythonIndividualData(
+  email: string,
+  user_id: string,
+  password: string | undefined,
+  dataType: 'attendance' | 'marks' | 'calendar' | 'timetable'
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  console.log(`[API /data/all] 🔄 Calling backend: get_${dataType}_data`);
+  console.log(`[API /data/all]   - Email: ${email}`);
+  console.log(`[API /data/all]   - Data type: ${dataType}`);
+  console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
+  
+  const backendCallStart = Date.now();
+  
+  try {
+    const action = `get_${dataType}_data`;
+    const result = await callBackendScraper(action, {
+      email,
+      ...(password ? { password } : {}),
+    });
+    
+    const backendCallDuration = Date.now() - backendCallStart;
+    const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
+    
+    console.log(`[API /data/all] 📡 ${dataType} call completed: ${backendCallDuration}ms`);
+    console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
+    console.log(`[API /data/all]   - Error: ${resultTyped.error || "none"}`);
+    
+    if (resultTyped.success) {
+      // Extract data from response (structure may vary by endpoint)
+      const data = resultTyped.data || result;
+      return {
+        success: true,
+        data: data,
+      };
+    }
+    
+    return {
+      success: false,
+      error: resultTyped.error || 'Unknown error',
+    };
+  } catch (error) {
+    const backendCallDuration = Date.now() - backendCallStart;
+    console.error(`[API /data/all] ❌ ${dataType} fetch error (${backendCallDuration}ms):`, error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -1000,6 +1252,50 @@ async function updateDepartmentInDatabase(user_id: string, department: string): 
       console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
     }
   })();
+}
+
+/**
+ * Background prefetch function for near-expiry caches
+ * Fetches fresh data and updates cache without blocking the main request
+ * Uses individual fetch for maximum efficiency
+ */
+async function triggerBackgroundPrefetch(
+  user_email: string,
+  user_id: string,
+  password: string | undefined,
+  dataType: 'attendance' | 'marks'
+): Promise<void> {
+  console.log(`[BackgroundPrefetch] 🔄 Starting background prefetch for ${dataType} (user: ${user_email})`);
+  
+  try {
+    // Fetch only the specific data type (optimized - single request)
+    const result = await callPythonIndividualData(user_email, user_id, password, dataType);
+    
+    if (result.success && result.data) {
+      try {
+        await setSupabaseCache(user_id, dataType, result.data);
+        console.log(`[BackgroundPrefetch] ✅ Background prefetch completed for ${dataType}`);
+      } catch (cacheError) {
+        console.error(`[BackgroundPrefetch] ❌ Failed to save ${dataType} to cache:`);
+        console.error(`[BackgroundPrefetch]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+        console.error(`[BackgroundPrefetch]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+        if (cacheError instanceof Error && cacheError.stack) {
+          console.error(`[BackgroundPrefetch]   - Stack: ${cacheError.stack}`);
+        }
+      }
+    } else {
+      console.warn(`[BackgroundPrefetch] ⚠️ No fresh data received for ${dataType}:`);
+      console.warn(`[BackgroundPrefetch]   - Success: ${result.success}`);
+      console.warn(`[BackgroundPrefetch]   - Error: ${result.error || 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error(`[BackgroundPrefetch] ❌ Error in background prefetch for ${dataType}:`);
+    console.error(`[BackgroundPrefetch]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+    console.error(`[BackgroundPrefetch]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof Error && error.stack) {
+      console.error(`[BackgroundPrefetch]   - Stack: ${error.stack}`);
+    }
+  }
 }
 
 /**

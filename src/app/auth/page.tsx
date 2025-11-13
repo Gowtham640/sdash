@@ -97,8 +97,6 @@ export default function AuthPage() {
       console.log('[Auth Page] Password stored and verified successfully');
 
       // Clear old cache data on fresh login (Option 1)
-      removeStorageItem('unified_data_cache');
-      removeStorageItem('unified_data_cache_timestamp');
       removeStorageItem('user_semester'); // Also clear semester cache
       console.log('[Auth Page] ✅ Cleared previous cache data for fresh fetch');
 

@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
@@ -8,21 +8,8 @@ import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
-import { 
-  getCachedTimetable,
-  isTimetableCacheValid,
-  storeTimetableCache,
-  getTimetableCacheAge,
-  getTimetableCacheDaysRemaining 
-} from '@/lib/timetableCache';
-import {
-  getCachedCalendar,
-  isCalendarCacheValid,
-  storeCalendarCache,
-  getCalendarCacheAge,
-  getCalendarCacheDaysRemaining
-} from '@/lib/calendarCache';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import NavigationButton from "@/components/NavigationButton";
 
 // Import types
@@ -286,6 +273,37 @@ export default function Dashboard() {
         return;
       }
 
+      // Check client-side cache first (unless force refresh)
+      if (!forceRefresh) {
+        const cachedData = getClientCache('unified');
+        if (cachedData) {
+          console.log('[Dashboard] ✅ Using client-side cache (instant load)');
+          const cached = cachedData as {
+            data?: {
+              calendar?: CalendarEvent[];
+              attendance?: AttendanceData;
+              marks?: MarksData;
+              timetable?: unknown;
+            };
+          };
+          
+          if (cached.data) {
+            if (cached.data.calendar) setCalendarData(cached.data.calendar);
+            if (cached.data.attendance) setAttendanceData(cached.data.attendance);
+            if (cached.data.marks) setMarksData(cached.data.marks);
+            if (cached.data.timetable) setTimetableData(cached.data.timetable);
+          }
+          
+          setLoading(false);
+          registerAttendanceFetch();
+          return;
+        }
+      } else {
+        // Force refresh: clear client cache
+        removeClientCache('unified');
+        console.log('[Dashboard] 🗑️ Cleared client cache for force refresh');
+      }
+
       // Ensure password is available (handles race condition after login redirect)
       const password = await waitForPassword();
       
@@ -293,81 +311,11 @@ export default function Dashboard() {
         console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
       }
 
-      // Check browser cache first
-      const cacheKey = 'unified_data_cache';
-      const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours (matching attendance/marks pages)
-      
-      // Check if cache is from before login (stale cache)
-      const loginTimestamp = getStorageItem('login_timestamp');
-      const cachedTimestamp = getStorageItem(cachedTimestampKey);
-      
-      if (loginTimestamp && cachedTimestamp) {
-        const loginTime = parseInt(loginTimestamp);
-        const cacheTime = parseInt(cachedTimestamp);
-        
-        if (cacheTime < loginTime) {
-          console.log('[Dashboard] 🔄 Cache is from before login, clearing stale cache');
-          console.log(`[Dashboard]   - Login time: ${new Date(loginTime).toISOString()}`);
-          console.log(`[Dashboard]   - Cache time: ${new Date(cacheTime).toISOString()}`);
-          removeStorageItem(cacheKey);
-          removeStorageItem(cachedTimestampKey);
-        }
-      }
-      
-      if (!forceRefresh) {
-        const cachedData = getStorageItem(cacheKey);
-        const updatedCachedTimestamp = getStorageItem(cachedTimestampKey);
-        
-        if (cachedData && updatedCachedTimestamp) {
-          const age = Date.now() - parseInt(updatedCachedTimestamp);
-          
-          if (age < cacheMaxAge) {
-            console.log('[Dashboard] ✅ Using browser cache');
-            const result = JSON.parse(cachedData);
-            
-            if (result.success) {
-              processUnifiedData(result);
-              
-              // Register attendance/marks fetch for smart prefetch scheduling
-              if (result.data?.attendance?.success || result.data?.marks?.success) {
-                registerAttendanceFetch();
-              }
-              
-              setLoading(false);
-              return;
-            }
-          }
-        }
-      }
-
-      // Check split cache for timetable/calendar
-      console.log("[Dashboard] 🔍 Checking static cache...");
-      const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
-      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasValidTimetable = isTimetableCacheValid() && cachedTimetable;
-      const hasValidCalendar = isCalendarCacheValid() && cachedCalendar;
-      const hasLongTermCache = hasValidTimetable && hasValidCalendar;
-
-      if (hasLongTermCache) {
-        const timetableDaysLeft = getTimetableCacheDaysRemaining();
-        const timetableCacheAge = getTimetableCacheAge();
-        const calendarDaysLeft = getCalendarCacheDaysRemaining();
-        const calendarCacheAge = getCalendarCacheAge();
-        console.log(`[Dashboard] ✅ Static cache FOUND`);
-        console.log(`[Dashboard]   - Timetable: ${timetableCacheAge} days old, ${timetableDaysLeft} days remaining`);
-        console.log(`[Dashboard]   - Calendar: ${calendarCacheAge} days old, ${calendarDaysLeft} days remaining`);
-      } else {
-        console.log(`[Dashboard] ❌ Static cache NOT FOUND or EXPIRED`);
-        if (!hasValidTimetable) console.log(`[Dashboard]   - Timetable: missing or expired`);
-        if (!hasValidCalendar) console.log(`[Dashboard]   - Calendar: missing or expired`);
-      }
-
       // Fetch from API with automatic retry on password-related session_expired
       let response: Response | null = null;
       let result: any = null;
       let apiStartTime = Date.now();
-      const fetchType = forceRefresh ? '(force refresh all)' : (hasLongTermCache ? '(fetching attendance/marks only - optimized)' : '(fetching all data)');
+      const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
       
       // First attempt
       let attempt = 1;
@@ -381,7 +329,7 @@ export default function Dashboard() {
         response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const apiDuration = Date.now() - apiStartTime;
@@ -422,64 +370,6 @@ export default function Dashboard() {
       if (!response || !result) {
         throw new Error('Failed to fetch data from API');
       }
-      
-      console.log(`[Dashboard]   - Partial data: ${result.metadata?.partial_data || false}`);
-
-      // Merge split cache with API response if needed
-      if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
-        console.log('[Dashboard] 🔗 Merging static cache with fresh attendance/marks');
-        const resultWithCache = {
-          ...result,
-          data: {
-            ...result.data,
-            timetable: hasValidTimetable ? {
-              success: true,
-              data: cachedTimetable,
-              cached: true,
-              age_days: getTimetableCacheAge()
-            } : result.data.timetable,
-            calendar: hasValidCalendar ? {
-              success: true,
-              data: cachedCalendar,
-              cached: true,
-              age_days: getCalendarCacheAge()
-            } : result.data.calendar
-          },
-          metadata: {
-            ...result.metadata,
-            timetable_cached: hasValidTimetable,
-            calendar_cached: hasValidCalendar,
-            timetable_cache_days_remaining: hasValidTimetable ? getTimetableCacheDaysRemaining() : 0,
-            calendar_cache_days_remaining: hasValidCalendar ? getCalendarCacheDaysRemaining() : 0
-          }
-        };
-        result = resultWithCache;
-      }
-
-      // Store timetable/calendar in split cache if fresh data received
-      if (result.success) {
-        // Store timetable separately (30-day cache)
-        if (result.data?.timetable?.success && result.data?.timetable?.data &&
-            (!hasValidTimetable || forceRefresh)) {
-          console.log('[Dashboard] 💾 Storing timetable in cache...');
-          storeTimetableCache(result.data.timetable.data);
-          console.log('[Dashboard] ✅ Stored timetable (valid for 30 days)');
-        }
-        
-        // Store calendar separately (7-day cache)
-        if (result.data?.calendar?.success && result.data?.calendar?.data &&
-            (!hasValidCalendar || forceRefresh)) {
-          console.log('[Dashboard] 💾 Storing calendar in cache...');
-          storeCalendarCache(result.data.calendar.data);
-          console.log('[Dashboard] ✅ Stored calendar (valid for 7 days)');
-        }
-      }
-
-      // Store in browser cache
-      if (result.success) {
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-      }
 
       // Only show session_expired error if all retries failed and password is confirmed unavailable
       if (!response.ok || (result.error === 'session_expired')) {
@@ -497,7 +387,7 @@ export default function Dashboard() {
           const finalResponse = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
           });
           const finalResult = await finalResponse.json();
           
@@ -546,19 +436,55 @@ export default function Dashboard() {
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
     
-    // Process calendar data - handle both nested structures
-    const calendar = result.data.calendar?.data || result.data.calendar?.success?.data;
-    if (calendar && Array.isArray(calendar)) {
+    // Process calendar data - handle both direct format and wrapped format
+    let calendarEvents: CalendarEvent[] | null = null;
+    
+    if (Array.isArray(result.data.calendar)) {
+      // Direct array format
+      calendarEvents = result.data.calendar;
+      console.log('[Dashboard] Calendar data is direct array format');
+    } else if (result.data.calendar && typeof result.data.calendar === 'object') {
+      // Check if it's wrapped format: {success: true, data: [...]}
+      if ('success' in result.data.calendar && 'data' in result.data.calendar) {
+        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
+        const successValue = calendarWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && Array.isArray(calendarWrapper.data)) {
+          calendarEvents = calendarWrapper.data;
+          console.log('[Dashboard] Calendar data is wrapped format');
+        }
+      }
+      // Check legacy nested format: {data: [...]}
+      else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
+        calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
+        console.log('[Dashboard] Calendar data is legacy nested format');
+      }
+    }
+    
+    if (calendarEvents && calendarEvents.length > 0) {
       // Extract semester from multiple sources with fallbacks
       let extractedSemester: number | null = null;
       
-      // 1. Try attendance data first
-      if (result.data.attendance?.semester) {
-        extractedSemester = result.data.attendance.semester;
-        console.log('[Dashboard] Semester from attendance.semester:', extractedSemester);
-      } else if (result.data.attendance?.data?.metadata?.semester) {
-        extractedSemester = result.data.attendance.data.metadata.semester;
-        console.log('[Dashboard] Semester from attendance.data.metadata.semester:', extractedSemester);
+      // 1. Try attendance data first - handle both direct and wrapped formats
+      if (result.data.attendance && typeof result.data.attendance === 'object') {
+        // Direct format: {metadata: {semester: ...}, ...}
+        if ('metadata' in result.data.attendance && result.data.attendance.metadata && typeof result.data.attendance.metadata === 'object' && 'semester' in result.data.attendance.metadata) {
+          extractedSemester = (result.data.attendance.metadata as { semester?: number }).semester || null;
+          console.log('[Dashboard] Semester from attendance.metadata.semester (direct):', extractedSemester);
+        }
+        // Wrapped format: {data: {metadata: {semester: ...}}, ...}
+        else if ('data' in result.data.attendance && result.data.attendance.data && typeof result.data.attendance.data === 'object' && 'metadata' in result.data.attendance.data) {
+          const attendanceData = result.data.attendance.data as { metadata?: { semester?: number } };
+          if (attendanceData.metadata?.semester) {
+            extractedSemester = attendanceData.metadata.semester;
+            console.log('[Dashboard] Semester from attendance.data.metadata.semester (wrapped):', extractedSemester);
+          }
+        }
+        // Legacy: direct semester property
+        else if ('semester' in result.data.attendance) {
+          extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
+          console.log('[Dashboard] Semester from attendance.semester (legacy):', extractedSemester);
+        }
       } 
       // 2. Try response metadata
       else if (result.metadata?.semester) {
@@ -588,39 +514,140 @@ export default function Dashboard() {
         console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
       
-      const modifiedCalendarData = markSaturdaysAsHolidays(calendar as CalendarEvent[], finalSemester);
+      const modifiedCalendarData = markSaturdaysAsHolidays(calendarEvents, finalSemester);
       console.log('[Dashboard] Applied holiday logic for semester:', finalSemester);
       setCalendarData(modifiedCalendarData);
       console.log('[Dashboard] ✅ Calendar data loaded:', modifiedCalendarData.length);
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
+      console.warn('[Dashboard] Calendar data type:', typeof result.data.calendar);
+      console.warn('[Dashboard] Calendar data is array:', Array.isArray(result.data.calendar));
+      setCalendarData([]);
     }
 
-    // Process attendance data - handle both nested structures
-    const attendance = result.data.attendance?.data || result.data.attendance?.success?.data;
-    if (attendance && attendance.all_subjects) {
-      setAttendanceData(attendance as AttendanceData);
-      console.log('[Dashboard] ✅ Attendance data loaded:', attendance.all_subjects.length);
+    // Process attendance data - handle both direct format and wrapped format
+    let attendanceDataObj: AttendanceData | null = null;
+    
+    if (result.data.attendance && typeof result.data.attendance === 'object') {
+      // Check if it's direct format (has all_subjects, summary, metadata at root)
+      if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
+        // Direct format
+        attendanceDataObj = result.data.attendance as AttendanceData;
+        console.log('[Dashboard] Attendance data is direct format');
+      } 
+      // Check if it's wrapped format: {success: true, data: {...}}
+      else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
+        const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
+        const successValue = attendanceWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && attendanceWrapper.data) {
+          attendanceDataObj = attendanceWrapper.data;
+          console.log('[Dashboard] Attendance data is wrapped format');
+        }
+      }
+      // Check legacy nested format: {data: {...}} or {success: {data: {...}}}
+      else if ('data' in result.data.attendance) {
+        const legacyData = (result.data.attendance as { data?: AttendanceData }).data;
+        if (legacyData && ('all_subjects' in legacyData || 'summary' in legacyData)) {
+          attendanceDataObj = legacyData;
+          console.log('[Dashboard] Attendance data is legacy nested format');
+        }
+      }
+    }
+    
+    if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
+      setAttendanceData(attendanceDataObj);
+      console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
     } else {
-      console.warn('[Dashboard] ⚠️ No attendance data found', attendance);
+      console.warn('[Dashboard] ⚠️ No attendance data found');
+      console.warn('[Dashboard] Attendance data type:', typeof result.data.attendance);
+      console.warn('[Dashboard] Attendance data value:', result.data.attendance);
+      setAttendanceData(null);
     }
 
-    // Process marks data - handle both nested structures
-    const marks = result.data.marks?.data || result.data.marks?.success?.data;
-    if (marks && marks.all_courses) {
-      setMarksData(marks as MarksData);
-      console.log('[Dashboard] ✅ Marks data loaded:', marks.all_courses.length);
+    // Process marks data - handle both direct format and wrapped format
+    let marksDataObj: MarksData | null = null;
+    
+    if (result.data.marks && typeof result.data.marks === 'object') {
+      // Check if it's direct format (has all_courses, summary, metadata at root)
+      if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
+        // Direct format
+        marksDataObj = result.data.marks as MarksData;
+        console.log('[Dashboard] Marks data is direct format');
+      } 
+      // Check if it's wrapped format: {success: true, data: {...}}
+      else if ('success' in result.data.marks && 'data' in result.data.marks) {
+        const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
+        const successValue = marksWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && marksWrapper.data) {
+          marksDataObj = marksWrapper.data;
+          console.log('[Dashboard] Marks data is wrapped format');
+        }
+      }
+      // Check legacy nested format: {data: {...}} or {success: {data: {...}}}
+      else if ('data' in result.data.marks) {
+        const legacyData = (result.data.marks as { data?: MarksData }).data;
+        if (legacyData && ('all_courses' in legacyData || 'summary' in legacyData)) {
+          marksDataObj = legacyData;
+          console.log('[Dashboard] Marks data is legacy nested format');
+        }
+      }
+    }
+    
+    if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
+      setMarksData(marksDataObj);
+      console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
     } else {
-      console.warn('[Dashboard] ⚠️ No marks data found', marks);
+      console.warn('[Dashboard] ⚠️ No marks data found');
+      console.warn('[Dashboard] Marks data type:', typeof result.data.marks);
+      console.warn('[Dashboard] Marks data value:', result.data.marks);
+      setMarksData(null);
     }
 
-    // Process timetable data - handle both nested structures
-    const timetable = result.data.timetable?.data || result.data.timetable?.success?.data;
-    if (timetable) {
-      setTimetableData(timetable);
+    // Process timetable data - handle both direct format and wrapped format
+    let timetableDataObj: typeof timetableData | null = null;
+    
+    if (result.data.timetable && typeof result.data.timetable === 'object') {
+      // Check if it's direct format (has timetable, time_slots, metadata at root)
+      if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
+        // Direct format
+        timetableDataObj = result.data.timetable as typeof timetableData;
+        console.log('[Dashboard] Timetable data is direct format');
+      } 
+      // Check if it's wrapped format: {success: true, data: {...}}
+      else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
+        const timetableWrapper = result.data.timetable as { success?: boolean | { data?: unknown }; data?: unknown };
+        const successValue = timetableWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && timetableWrapper.data && typeof timetableWrapper.data === 'object' && timetableWrapper.data !== null) {
+          const wrappedData = timetableWrapper.data as Record<string, unknown>;
+          if (wrappedData && ('timetable' in wrappedData || 'time_slots' in wrappedData)) {
+            timetableDataObj = wrappedData as typeof timetableData;
+            console.log('[Dashboard] Timetable data is wrapped format');
+          }
+        }
+      }
+      // Check legacy nested format: {data: {...}}
+      else if ('data' in result.data.timetable) {
+        const legacyData = (result.data.timetable as { data?: unknown }).data;
+        if (legacyData && typeof legacyData === 'object' && legacyData !== null && ('timetable' in legacyData || 'time_slots' in legacyData)) {
+          timetableDataObj = legacyData as typeof timetableData;
+          console.log('[Dashboard] Timetable data is legacy nested format');
+        }
+      }
+    }
+    
+    if (timetableDataObj) {
+      setTimetableData(timetableDataObj);
       
       try {
-        const occurrences = getSlotOccurrences(timetable);
+        // Convert to TimetableData format for getSlotOccurrences
+        const timetableForUtils = {
+          timetable: (timetableDataObj.timetable || {}) as TimetableData['timetable'],
+          slot_mapping: timetableDataObj.slot_mapping,
+        } as TimetableData;
+        const occurrences = getSlotOccurrences(timetableForUtils);
         setSlotOccurrences(occurrences);
         console.log('[Dashboard] ✅ Timetable data loaded:', occurrences.length);
       } catch (err) {
@@ -628,6 +655,9 @@ export default function Dashboard() {
       }
     } else {
       console.warn('[Dashboard] ⚠️ No timetable data found');
+      console.warn('[Dashboard] Timetable data type:', typeof result.data.timetable);
+      console.warn('[Dashboard] Timetable data value:', result.data.timetable);
+      setTimetableData(null);
     }
 
     // Process day order stats using modified calendar data
@@ -661,6 +691,28 @@ export default function Dashboard() {
         console.error('[Dashboard] ❌ Error processing day order stats:', err);
       }
     }
+
+    // Save to client-side cache (1 hour TTL)
+    // Use processed data from result, not state (state may not be updated yet)
+    const processedCalendar = calendarEvents && calendarEvents.length > 0 ? 
+      markSaturdaysAsHolidays(calendarEvents, 
+        result.data.attendance?.semester || 
+        result.data.attendance?.data?.metadata?.semester || 
+        result.metadata?.semester || 
+        (result as { semester?: number }).semester || 
+        parseInt(getStorageItem('user_semester') || '1', 10) || 1
+      ) : null;
+    
+    const cacheData = {
+      data: {
+        calendar: processedCalendar || calendarData,
+        attendance: attendanceDataObj || attendanceData,
+        marks: marksDataObj || marksData,
+        timetable: timetableDataObj || timetableData,
+      },
+    };
+    setClientCache('unified', cacheData);
+    console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL)');
   };
 
   const calculatePresentHours = (conducted: string, absent: string): number => {

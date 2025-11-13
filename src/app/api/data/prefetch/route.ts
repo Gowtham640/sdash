@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { dataCache } from "@/lib/dataCache";
 import { callBackendScraper } from '@/lib/scraperClient';
 
 /**
  * Background data prefetch endpoint
  * POST /api/data/prefetch
  * 
- * Triggered after user signs in to fetch and cache data in the background.
+ * Triggered after user signs in to fetch data in the background.
  * This endpoint returns immediately without waiting for the fetch to complete.
  * 
  * Request body: { access_token: string }
  * 
- * Returns: { success: true, message: "Prefetch started/already cached" }
+ * Returns: { success: true, message: "Prefetch started" }
  */
 
 /**
@@ -80,31 +79,17 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Prefetch] Session valid for user: ${user_email}`);
 
-    // Check if data already cached
-    const cacheKey = `data:${user_email}`;
-    const cached = dataCache.get(cacheKey);
-
-    if (cached) {
-      console.log(`[Prefetch] ✅ Data already cached for ${user_email}`);
-      return NextResponse.json({
-        success: true,
-        message: "Data already cached",
-        cached: true
-      });
-    }
-
-    // Data not cached - trigger background fetch (DON'T WAIT)
+    // Trigger background fetch (DON'T WAIT)
     console.log(`[Prefetch] 🔄 Starting background fetch for ${user_email}`);
     
     // Trigger async fetch but return immediately
-    triggerBackgroundFetch(user_email, cacheKey).catch(err => {
+    triggerBackgroundFetch(user_email).catch(err => {
       console.error(`[Prefetch] Background fetch error for ${user_email}:`, err);
     });
 
     return NextResponse.json({
       success: true,
-      message: "Prefetch started",
-      cached: false
+      message: "Prefetch started"
     });
 
   } catch (error) {
@@ -124,19 +109,14 @@ export async function POST(request: NextRequest) {
  * Trigger background fetch without waiting
  * Returns immediately, fetch continues in background
  */
-async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<void> {
+async function triggerBackgroundFetch(email: string): Promise<void> {
   console.log(`[Prefetch] Background fetch starting for ${email}`);
   
   try {
     const result = await callPythonUnifiedData(email);
 
     if (result.success) {
-      const resultWithMetadata = result as { metadata?: { cached_at?: number } };
-      if (resultWithMetadata.metadata) {
-        resultWithMetadata.metadata.cached_at = Date.now();
-      }
-      dataCache.set(cacheKey, result, 3 * 60 * 60 * 1000); // 3 hour TTL
-      console.log(`[Prefetch] ✅ Background fetch completed and cached for ${email}`);
+      console.log(`[Prefetch] ✅ Background fetch completed for ${email}`);
     } else {
       console.error(`[Prefetch] ❌ Background fetch failed for ${email}:`, result.error);
     }
@@ -153,7 +133,6 @@ async function triggerBackgroundFetch(email: string, cacheKey: string): Promise<
 async function callPythonUnifiedData(email: string): Promise<Record<string, unknown>> {
   const result = await callBackendScraper('get_all_data', {
     email,
-    force_refresh: false,
   });
   return result as unknown as Record<string, unknown>;
 }

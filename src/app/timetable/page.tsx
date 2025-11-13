@@ -1,21 +1,10 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Link from 'next/link';
-import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats, type CalendarEvent } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
-import { 
-  getCachedTimetable,
-  isTimetableCacheValid,
-  storeTimetableCache,
-  getTimetableCacheAge,
-  getTimetableCacheDaysRemaining 
-} from '@/lib/timetableCache';
-import {
-  getCachedCalendar,
-  isCalendarCacheValid
-} from '@/lib/calendarCache';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 
@@ -79,6 +68,69 @@ export default function TimetablePage() {
     return () => clearInterval(interval);
   }, [loading]);
 
+  const refreshTimetableData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setIsRefreshing(true);
+
+      const access_token = getStorageItem('access_token');
+      
+      if (!access_token) {
+        console.error('[Timetable] No access token found');
+        setError('Please sign in to view your timetable');
+        setLoading(false);
+        setIsRefreshing(false);
+        return;
+      }
+
+      console.log('[Timetable] 🔄 Force refreshing timetable data...');
+
+      const response = await fetch('/api/data/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...getRequestBodyWithPassword(access_token, false),
+          data_type: 'timetable'
+        })
+      });
+
+      const result = await response.json();
+      console.log('[Timetable] Refresh API response:', result);
+      console.log('[Timetable] Refresh API response data:', result.data);
+      console.log('[Timetable] Refresh API response data type:', typeof result.data);
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to refresh timetable data');
+      }
+
+      // If refresh endpoint returns data directly, set it immediately
+      if (result.data && typeof result.data === 'object' && ('timetable' in result.data || 'time_slots' in result.data)) {
+        console.log('[Timetable] Setting timetable data directly from refresh response');
+        const timetableDataObj = result.data as TimetableData;
+        
+        setRawTimetableData(timetableDataObj);
+        const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
+        setTimetableData(convertedData);
+        
+        const occurrences = getSlotOccurrences(timetableDataObj);
+        setSlotOccurrences(occurrences);
+        
+        setLoading(false);
+        setIsRefreshing(false);
+        console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses from refresh');
+      } else {
+        // After refresh, fetch unified data to get updated timetable
+        await fetchUnifiedData(false);
+      }
+    } catch (err) {
+      console.error('[Timetable] Error refreshing data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
@@ -96,144 +148,23 @@ export default function TimetablePage() {
         return;
       }
 
-      // ✅ STEP 1: Check browser cache first (unless force refresh)
-      const cacheKey = 'unified_data_cache';
-      const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
-      
-      if (!forceRefresh) {
-        const cachedData = getStorageItem(cacheKey);
-        const cachedTimestamp = getStorageItem(cachedTimestampKey);
-        
-        if (cachedData && cachedTimestamp) {
-          const age = Date.now() - parseInt(cachedTimestamp);
-          
-          if (age < cacheMaxAge) {
-            console.log('[Timetable] ✅ Using browser cache');
-            const result = JSON.parse(cachedData);
-            
-              // Process the cached data
-            if (result.success) {
-              setCacheInfo({
-                cached: true,
-                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
-              });
-
-              // Process timetable data
-              if (result.data.timetable?.success && result.data.timetable.data) {
-                console.log('[Timetable] Timetable response data:', result.data.timetable.data);
-                setRawTimetableData(result.data.timetable.data);
-                const convertedData = convertTimetableDataToTimeSlots(result.data.timetable.data);
-                setTimetableData(convertedData);
-
-                const occurrences = getSlotOccurrences(result.data.timetable.data);
-                setSlotOccurrences(occurrences);
-                console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
-              }
-
-              // Process calendar data for day order stats
-              if (result.data.calendar?.success && result.data.calendar.data) {
-                const stats = getDayOrderStats(result.data.calendar.data);
-                setDayOrderStats(stats);
-              }
-              
-              setLoading(false);
-              return;
-            }
-          } else {
-            console.log('[Timetable] Browser cache expired');
-          }
-        }
-      }
-
-      // ✅ STEP 2: Check static cache for timetable/calendar
-      console.log("[Timetable] 🔍 Checking static cache...");
-      const cachedTimetable = !forceRefresh ? getCachedTimetable() : null;
-      const cachedCalendar = !forceRefresh ? getCachedCalendar() : null;
-      const hasValidTimetable = isTimetableCacheValid() && cachedTimetable;
-      const hasValidCalendar = isCalendarCacheValid() && cachedCalendar;
-      const hasLongTermCache = hasValidTimetable && hasValidCalendar;
-
-      if (hasLongTermCache) {
-        const timetableDaysLeft = getTimetableCacheDaysRemaining();
-        const timetableCacheAge = getTimetableCacheAge();
-        console.log(`[Timetable] ✅ Static cache FOUND`);
-        console.log(`[Timetable]   - Timetable: ${timetableCacheAge} days old, ${timetableDaysLeft} days remaining`);
-        console.log(`[Timetable]   - Calendar: cached`);
-      } else {
-        console.log(`[Timetable] ❌ Static cache NOT FOUND or EXPIRED`);
-        if (!hasValidTimetable) console.log(`[Timetable]   - Timetable: missing or expired`);
-        if (!hasValidCalendar) console.log(`[Timetable]   - Calendar: missing or expired`);
-      }
-
-      // ✅ STEP 3: Fetch from API
+      // ✅ STEP 1: Fetch from API
       const apiStartTime = Date.now();
-      const fetchType = forceRefresh ? '(force refresh all)' : (hasLongTermCache ? '(fetching attendance/marks only - optimized)' : '(fetching all data)');
+      const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
       console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, hasLongTermCache))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
       });
 
       const apiDuration = Date.now() - apiStartTime;
-      let result = await response.json();
+      const result = await response.json();
       
       console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
       console.log(`[Timetable]   - Success: ${result.success}`);
       console.log(`[Timetable]   - Status: ${response.status}`);
-      console.log(`[Timetable]   - Partial data: ${result.metadata?.partial_data || false}`);
-
-      // ✅ STEP 4: Merge split cache with API response if needed
-      if (hasLongTermCache && result.metadata?.partial_data && !forceRefresh) {
-        console.log('[Timetable] 🔗 Merging static cache with fresh attendance/marks');
-        const resultWithCache = {
-          ...result,
-          data: {
-            ...result.data,
-            timetable: hasValidTimetable ? {
-              success: true,
-              data: cachedTimetable,
-              cached: true,
-              age_days: getTimetableCacheAge()
-            } : result.data.timetable,
-            calendar: hasValidCalendar ? {
-              success: true,
-              data: cachedCalendar,
-              cached: true
-            } : result.data.calendar
-          },
-          metadata: {
-            ...result.metadata,
-            timetable_cached: hasValidTimetable,
-            calendar_cached: hasValidCalendar
-          }
-        };
-        result = resultWithCache;
-      }
-
-      // ✅ STEP 5: Store timetable/calendar in split cache if fresh data received
-      if (result.success) {
-        // Store timetable separately (30-day cache)
-        if (result.data?.timetable?.success && result.data?.timetable?.data &&
-            (!hasValidTimetable || forceRefresh)) {
-          console.log('[Timetable] 💾 Storing timetable in cache...');
-          storeTimetableCache(result.data.timetable.data);
-          console.log('[Timetable] ✅ Stored timetable (valid for 30 days)');
-        }
-        
-        // Store calendar separately (7-day cache) - only if we also got calendar data  
-        // Note: Calendar storage not implemented here as this is timetable page
-        // Calendar should be stored on calendar page
-      }
-
-      // ✅ STEP 6: Store in short-term browser cache for next time
-      if (result.success) {
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-        console.log('[Timetable] ✅ Stored in browser cache');
-      }
 
       // Handle session expiry
       if (!response.ok || (result.error === 'session_expired')) {
@@ -248,36 +179,75 @@ export default function TimetablePage() {
         throw new Error(result.error || 'Failed to fetch data');
       }
 
-      // Extract cache info
-      setCacheInfo({
-        cached: result.metadata?.cached || result.metadata?.timetable_cached || false,
-        age: result.metadata?.cache_age_seconds || 0
-      });
 
       // Process timetable data
-      if (result.data.timetable?.success && result.data.timetable.data) {
-        console.log('[Timetable] Timetable response data:', result.data.timetable.data);
-        console.log('[Timetable] DO 1 time_slots sample:', result.data.timetable.data.timetable['DO 1']?.time_slots);
+      // Handle both formats: direct object or wrapped in {success, data}
+      let timetableDataObj: TimetableData | null = null;
+      
+      if (result.data.timetable && typeof result.data.timetable === 'object') {
+        // Check if it's direct format (has timetable, time_slots, metadata at root)
+        if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
+          // Direct format
+          timetableDataObj = result.data.timetable as TimetableData;
+          console.log('[Timetable] Timetable data is direct format');
+        } 
+        // Check if it's wrapped format: {success: true, data: {...}}
+        else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
+          const timetableWrapper = result.data.timetable as { success?: boolean | { data?: TimetableData }; data?: TimetableData };
+          const successValue = timetableWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && timetableWrapper.data) {
+            timetableDataObj = timetableWrapper.data;
+            console.log('[Timetable] Timetable data is wrapped format');
+          }
+        }
+      }
+      
+      if (timetableDataObj && timetableDataObj.timetable) {
+        console.log('[Timetable] Timetable response data:', timetableDataObj);
+        console.log('[Timetable] DO 1 time_slots sample:', timetableDataObj.timetable['DO 1']?.time_slots);
         
-        setRawTimetableData(result.data.timetable.data);
-        const convertedData = convertTimetableDataToTimeSlots(result.data.timetable.data);
+        setRawTimetableData(timetableDataObj);
+        const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
         console.log('[Timetable] Converted time slots:', convertedData);
         
         setTimetableData(convertedData);
 
-        const occurrences = getSlotOccurrences(result.data.timetable.data);
+        const occurrences = getSlotOccurrences(timetableDataObj);
         console.log('[Timetable] Slot occurrences:', occurrences);
         
         setSlotOccurrences(occurrences);
         console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
       } else {
-        console.error('[Timetable] Timetable data structure invalid:', result.data.timetable);
-        throw new Error('Timetable data unavailable');
+        // Keep page visible even when timetable data is unavailable
+        // User can use refresh button to fetch data
+        console.warn('[Timetable] Timetable data unavailable - keeping page visible for refresh');
+        console.warn('[Timetable] Timetable data type:', typeof result.data.timetable);
+        console.warn('[Timetable] Timetable data value:', result.data.timetable);
+        setRawTimetableData(null);
+        setTimetableData([]);
+        // Don't throw error, just log it so page remains visible
       }
 
       // Process calendar data for day order stats
-      if (result.data.calendar?.success && result.data.calendar.data) {
-        const stats = getDayOrderStats(result.data.calendar.data);
+      // Handle both formats for calendar too
+      let calendarEvents: unknown[] | null = null;
+      
+      if (Array.isArray(result.data.calendar)) {
+        // Direct array format
+        calendarEvents = result.data.calendar;
+      } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
+        // Wrapped format
+        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
+        const successValue = calendarWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && Array.isArray(calendarWrapper.data)) {
+          calendarEvents = calendarWrapper.data;
+        }
+      }
+      
+      if (calendarEvents && calendarEvents.length > 0) {
+        const stats = getDayOrderStats(calendarEvents as CalendarEvent[]);
         setDayOrderStats(stats);
         console.log('[Timetable] Day order stats calculated');
       }
@@ -400,6 +370,64 @@ export default function TimetablePage() {
     );
   }
 
+  // Show empty state if no timetable data but no error (allows refresh button to work)
+  if (!rawTimetableData || !timetableData || timetableData.length === 0) {
+    return (
+      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10 pb-10 gap-8">
+        {/* Home Icon */}
+        <Link 
+          href="/dashboard"
+          className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
+          aria-label="Go to Dashboard"
+        >
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            strokeWidth={2} 
+            stroke="currentColor" 
+            className="w-8 h-8"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+          </svg>
+        </Link>
+        
+        <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
+            <button
+              onClick={refreshTimetableData}
+              disabled={loading}
+              className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Refresh timetable data"
+              title="Refresh timetable data"
+            >
+              <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                fill="none" 
+                viewBox="0 0 24 24" 
+                strokeWidth={2} 
+                stroke="currentColor" 
+                className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col gap-6 justify-center items-center p-8">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
+            No timetable data available
+          </div>
+          <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
+            Click the refresh button above to fetch timetable data
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10 pb-10 gap-8">
       {/* Home Icon */}
@@ -421,7 +449,27 @@ export default function TimetablePage() {
       </Link>
       
       <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
-        <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
+          <button
+            onClick={refreshTimetableData}
+            disabled={loading}
+            className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Refresh timetable data"
+            title="Refresh timetable data"
+          >
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={2} 
+              stroke="currentColor" 
+              className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">

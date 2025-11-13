@@ -83,6 +83,59 @@ export default function MarksPage() {
     setShowPasswordModal(false);
   };
 
+  const refreshMarksData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const access_token = getStorageItem('access_token');
+      
+      if (!access_token) {
+        console.error('[Marks] No access token found');
+        setError('Please sign in to view marks');
+        setLoading(false);
+        return;
+      }
+
+      console.log('[Marks] 🔄 Force refreshing marks data...');
+
+      const response = await fetch('/api/data/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...getRequestBodyWithPassword(access_token, false),
+          data_type: 'marks'
+        })
+      });
+
+      const result = await response.json();
+      console.log('[Marks] Refresh API response:', result);
+      console.log('[Marks] Refresh API response data:', result.data);
+      console.log('[Marks] Refresh API response data type:', typeof result.data);
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to refresh marks data');
+      }
+
+      // If refresh endpoint returns data directly, set it immediately
+      if (result.data && typeof result.data === 'object' && ('all_courses' in result.data || 'summary' in result.data)) {
+        console.log('[Marks] Setting marks data directly from refresh response');
+        const marksDataObj = result.data as MarksData;
+        
+        setMarksData(marksDataObj);
+        setLoading(false);
+        console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses from refresh');
+      } else {
+        // After refresh, fetch unified data to get updated marks
+        await fetchUnifiedData(false);
+      }
+    } catch (err) {
+      console.error('[Marks] Error refreshing data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to refresh marks data');
+      setLoading(false);
+    }
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
       setLoading(true);
@@ -97,48 +150,8 @@ export default function MarksPage() {
         return;
       }
 
-      // ✅ STEP 1: Check browser cache first (unless force refresh)
-      const cacheKey = 'unified_data_cache';
-      const cachedTimestampKey = 'unified_data_cache_timestamp';
-      const cacheMaxAge = 6 * 60 * 60 * 1000; // 6 hours
-      
-      if (!forceRefresh) {
-        const cachedData = getStorageItem(cacheKey);
-        const cachedTimestamp = getStorageItem(cachedTimestampKey);
-        
-        if (cachedData && cachedTimestamp) {
-          const age = Date.now() - parseInt(cachedTimestamp);
-          
-          if (age < cacheMaxAge) {
-            console.log('[Marks] ✅ Using browser cache');
-            const result = JSON.parse(cachedData);
-            
-              // Process the cached data
-            if (result.success) {
-              setCacheInfo({
-                cached: true,
-                age: Math.floor((Date.now() - parseInt(cachedTimestamp)) / 1000)
-              });
-
-              // Process marks data
-              if (result.data.marks?.success && result.data.marks.data) {
-                setMarksData(result.data.marks.data);
-                console.log('[Marks] Loaded marks with', result.data.marks.data.all_courses?.length, 'courses');
-              } else {
-                throw new Error('Marks data unavailable');
-              }
-              
-              setLoading(false);
-              return;
-            }
-          } else {
-            console.log('[Marks] Browser cache expired');
-          }
-        }
-      }
-
-      // ✅ STEP 2: Fetch from API (will use server cache if available)
-      console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(checking server cache)');
+      // ✅ STEP 1: Fetch from API
+      console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
 
       const response = await fetch('/api/data/all', {
         method: 'POST',
@@ -148,13 +161,6 @@ export default function MarksPage() {
 
       const result = await response.json();
       console.log('[Marks] Unified API response:', result);
-
-      // ✅ STEP 3: Store in browser cache for next time
-      if (result.success) {
-        setStorageItem(cacheKey, JSON.stringify(result));
-        setStorageItem(cachedTimestampKey, Date.now().toString());
-        console.log('[Marks] ✅ Stored in browser cache');
-      }
 
       // Handle session expiry
       if (!response.ok || (result.error === 'session_expired')) {
@@ -169,18 +175,40 @@ export default function MarksPage() {
         throw new Error(result.error || 'Failed to fetch data');
       }
 
-      // Extract cache info
-      setCacheInfo({
-        cached: result.metadata?.cached || false,
-        age: result.metadata?.cache_age_seconds || 0
-      });
-
       // Process marks data
-      if (result.data.marks?.success && result.data.marks.data) {
-        setMarksData(result.data.marks.data);
-        console.log('[Marks] Loaded marks with', result.data.marks.data.all_courses?.length, 'courses');
+      // Handle both formats: direct object or wrapped in {success, data}
+      let marksDataObj: MarksData | null = null;
+      
+      if (result.data.marks && typeof result.data.marks === 'object') {
+        // Check if it's direct format (has all_courses, summary, metadata at root)
+        if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
+          // Direct format
+          marksDataObj = result.data.marks as MarksData;
+          console.log('[Marks] Marks data is direct format');
+        } 
+        // Check if it's wrapped format: {success: true, data: {...}}
+        else if ('success' in result.data.marks && 'data' in result.data.marks) {
+          const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
+          const successValue = marksWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && marksWrapper.data) {
+            marksDataObj = marksWrapper.data;
+            console.log('[Marks] Marks data is wrapped format');
+          }
+        }
+      }
+      
+      if (marksDataObj && (marksDataObj.all_courses || marksDataObj.summary)) {
+        setMarksData(marksDataObj);
+        console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses');
       } else {
-        throw new Error('Marks data unavailable');
+        // Keep page visible even when marks data is unavailable
+        // User can use refresh button to fetch data
+        console.warn('[Marks] Marks data unavailable - keeping page visible for refresh');
+        console.warn('[Marks] Marks data type:', typeof result.data.marks);
+        console.warn('[Marks] Marks data value:', result.data.marks);
+        setMarksData(null);
+        // Don't throw error, just log it so page remains visible
       }
       
       // Register attendance/marks fetch for smart prefetch scheduling
@@ -229,7 +257,7 @@ export default function MarksPage() {
     );
   }
 
-  if (error || !marksData) {
+  if (error) {
     return (
       <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Marks</div>
@@ -250,6 +278,64 @@ export default function MarksPage() {
               Sign In Again
             </NavigationButton>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // Show empty state if no marks data but no error (allows refresh button to work)
+  if (!marksData) {
+    return (
+      <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
+        {/* Home Icon */}
+        <Link 
+          href="/dashboard"
+          className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
+          aria-label="Go to Dashboard"
+        >
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            strokeWidth={2} 
+            stroke="currentColor" 
+            className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+          </svg>
+        </Link>
+        
+        <div className="flex flex-col items-center gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
+            <button
+              onClick={refreshMarksData}
+              disabled={loading}
+              className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Refresh marks data"
+              title="Refresh marks data"
+            >
+              <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                fill="none" 
+                viewBox="0 0 24 24" 
+                strokeWidth={2} 
+                stroke="currentColor" 
+                className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        <div className="flex flex-col items-center justify-center gap-4 h-full">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
+            No marks data available
+          </div>
+          <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
+            Click the refresh button above to fetch marks data
+          </div>
         </div>
       </div>
     );
@@ -276,7 +362,27 @@ export default function MarksPage() {
       </Link>
       
       <div className="flex flex-col items-center gap-4">
-        <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
+          <button
+            onClick={refreshMarksData}
+            disabled={loading}
+            className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Refresh marks data"
+            title="Refresh marks data"
+          >
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={2} 
+              stroke="currentColor" 
+              className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+          </button>
+        </div>
       </div>
       
       {/* Individual Course Cards */}
