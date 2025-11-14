@@ -9,6 +9,7 @@ import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
+import { useErrorTracking } from "@/lib/useErrorTracking";
 
 interface CalendarEvent {
   date: string;
@@ -26,6 +27,9 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/calender');
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -213,7 +217,7 @@ export default function CalendarPage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, 'calendar'))
       });
 
       const result = await response.json();

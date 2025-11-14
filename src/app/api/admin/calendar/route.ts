@@ -7,41 +7,66 @@ export async function GET(request: NextRequest) {
     const course = searchParams.get('course') || 'BTech';
     const semester = parseInt(searchParams.get('semester') || '1', 10);
 
-    // First, try to get from user_cache (most recent calendar cache)
-    const { data: cacheData, error: cacheError } = await supabaseAdmin
-      .from('user_cache')
+    let calendarData = null;
+    let recordExists = false;
+
+    // First, check if specific course/semester record exists
+    const { data: specificCalendarData, error: specificError } = await supabaseAdmin
+      .from('calendar')
       .select('data')
-      .eq('data_type', 'calendar')
-      .order('updated_at', { ascending: false })
-      .limit(1)
+      .eq('course', course)
+      .eq('semester', semester)
       .single();
 
-    let calendarData = null;
-
-    if (!cacheError && cacheData && cacheData.data) {
-      // Use data from user_cache
-      calendarData = cacheData.data;
-      console.log("[API /admin/calendar] Using calendar data from user_cache");
-    } else {
-      // Fallback: try to get from public.calendar table
-      const { data: calendarTableData, error: calendarError } = await supabaseAdmin
+    if (!specificError && specificCalendarData && specificCalendarData.data) {
+      // Specific record exists, use it
+      calendarData = specificCalendarData.data;
+      recordExists = true;
+      console.log(`[API /admin/calendar] ✅ Calendar fetched from public.calendar for course: ${course}, semester: ${semester}`);
+    } else if (specificError && specificError.code === 'PGRST116') {
+      // Specific record doesn't exist, use default/0 as base
+      console.log(`[API /admin/calendar] ℹ️ No calendar found for course: ${course}, semester: ${semester} - using default/0 as base`);
+      
+      const { data: fallbackCalendarData, error: fallbackError } = await supabaseAdmin
         .from('calendar')
         .select('data')
-        .eq('course', course)
-        .eq('semester', semester)
+        .eq('course', 'default')
+        .eq('semester', 0)
         .single();
-
-      if (!calendarError && calendarTableData && calendarTableData.data) {
-        calendarData = calendarTableData.data;
-        console.log("[API /admin/calendar] Using calendar data from public.calendar table");
-      } else {
-        console.log("[API /admin/calendar] No calendar data found in user_cache or public.calendar");
+      
+      if (!fallbackError && fallbackCalendarData && fallbackCalendarData.data) {
+        calendarData = fallbackCalendarData.data;
+        recordExists = false;
+        console.log(`[API /admin/calendar] ✅ Using default/0 calendar as base for course: ${course}, semester: ${semester}`);
+      } else if (fallbackError && fallbackError.code === 'PGRST116') {
+        // No default/0 calendar found, try to get any calendar as last resort
+        console.log(`[API /admin/calendar] ℹ️ No default calendar found (default/0), trying to fetch any available calendar`);
+        const { data: anyCalendarData, error: anyCalendarError } = await supabaseAdmin
+          .from('calendar')
+          .select('data')
+          .limit(1)
+          .single();
+        
+        if (!anyCalendarError && anyCalendarData && anyCalendarData.data) {
+          calendarData = anyCalendarData.data;
+          recordExists = false;
+          console.log(`[API /admin/calendar] ✅ Using any available calendar as base`);
+        } else {
+          console.log(`[API /admin/calendar] ℹ️ No calendar found in database at all`);
+        }
+      } else if (fallbackError) {
+        console.warn(`[API /admin/calendar] ⚠️ Error fetching default calendar from public.calendar: ${fallbackError.message}`);
       }
+    } else if (specificError) {
+      console.warn(`[API /admin/calendar] ⚠️ Error fetching calendar from public.calendar: ${specificError.message}`);
     }
 
+    console.log(`[API /admin/calendar] Returning response. recordExists: ${recordExists}, hasData: ${!!calendarData}`);
+    
     return NextResponse.json({
       success: true,
-      data: calendarData
+      data: calendarData,
+      recordExists: recordExists // Indicate if the specific record exists
     });
   } catch (error) {
     console.error("[API /admin/calendar] Error:", error);

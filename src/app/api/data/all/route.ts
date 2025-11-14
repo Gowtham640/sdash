@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requestQueueTracker } from "@/lib/requestQueue";
 import { getSupabaseCache, setSupabaseCache, getSupabaseCacheWithInfo, deleteSupabaseCache } from "@/lib/supabaseCache";
 import { removeClientCache } from "@/lib/clientCache";
+import { trackApiRequest, trackServerError } from "@/lib/analyticsServer";
 
 /**
  * Unified data endpoint - Returns all data types in one call
@@ -55,18 +56,39 @@ export async function POST(request: NextRequest) {
   console.log("[API /data/all] Timestamp:", new Date().toISOString());
 
   let user_email: string = '';
+  let user_id: string | undefined;
   
   try {
     // Parse request body
     const body = await request.json();
-    const { access_token, password, force_refresh } = body;
+    const { access_token, password, force_refresh, types } = body;
     
     const forceRefresh = force_refresh === true || force_refresh === 'true';
+    
+    // Parse types parameter: can be string (comma-separated) or array, or undefined (all types)
+    let requestedTypes: string[] | null = null;
+    if (types) {
+      if (typeof types === 'string') {
+        requestedTypes = types.split(',').map(t => t.trim()).filter(t => t.length > 0);
+      } else if (Array.isArray(types)) {
+        requestedTypes = types.map(t => String(t).trim()).filter(t => t.length > 0);
+      }
+    }
+    
+    // Valid data types
+    const validTypes = ['calendar', 'timetable', 'attendance', 'marks'];
+    if (requestedTypes) {
+      requestedTypes = requestedTypes.filter(t => validTypes.includes(t));
+      if (requestedTypes.length === 0) {
+        requestedTypes = null; // Invalid types, fetch all
+      }
+    }
     
     console.log("[API /data/all] 📋 Request parameters:");
     console.log("  - password_provided:", password ? "✓" : "✗");
     console.log("  - access_token_length:", access_token?.length || 0);
     console.log("  - force_refresh:", forceRefresh);
+    console.log("  - requested_types:", requestedTypes || "all");
 
     if (!access_token) {
       console.error("[API /data/all] ❌ No access token provided");
@@ -113,72 +135,86 @@ export async function POST(request: NextRequest) {
     // Register request in queue tracker
     requestQueueTracker.registerRequest(user_email);
 
-    // Check Supabase cache for each data type (with expiry info)
+    // Determine which data types to fetch
+    const shouldFetchCalendar = !requestedTypes || requestedTypes.includes('calendar');
+    const shouldFetchTimetable = !requestedTypes || requestedTypes.includes('timetable');
+    const shouldFetchAttendance = !requestedTypes || requestedTypes.includes('attendance');
+    const shouldFetchMarks = !requestedTypes || requestedTypes.includes('marks');
+
+    // Check Supabase cache only for requested data types
     console.log(`[API /data/all] 🔍 Checking Supabase cache...`);
     let calendarInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     let timetableInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     let attendanceInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     let marksInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     
-    try {
-      calendarInfo = await getSupabaseCacheWithInfo(user_id, 'calendar', forceRefresh);
-    } catch (error) {
-      console.error(`[API /data/all] ❌ Error checking calendar cache:`, error);
-      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof Error && error.stack) {
-        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+    if (shouldFetchCalendar) {
+      try {
+        calendarInfo = await getSupabaseCacheWithInfo(user_id, 'calendar', forceRefresh);
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Error checking calendar cache:`, error);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        calendarInfo = null;
       }
-      calendarInfo = null;
     }
     
-    try {
-      timetableInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', forceRefresh);
-    } catch (error) {
-      console.error(`[API /data/all] ❌ Error checking timetable cache:`, error);
-      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof Error && error.stack) {
-        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+    if (shouldFetchTimetable) {
+      try {
+        timetableInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', forceRefresh);
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Error checking timetable cache:`, error);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        timetableInfo = null;
       }
-      timetableInfo = null;
     }
     
-    try {
-      attendanceInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', forceRefresh);
-    } catch (error) {
-      console.error(`[API /data/all] ❌ Error checking attendance cache:`, error);
-      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof Error && error.stack) {
-        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+    if (shouldFetchAttendance) {
+      try {
+        attendanceInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', forceRefresh);
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Error checking attendance cache:`, error);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        attendanceInfo = null;
       }
-      attendanceInfo = null;
     }
     
-    try {
-      marksInfo = await getSupabaseCacheWithInfo(user_id, 'marks', forceRefresh);
-    } catch (error) {
-      console.error(`[API /data/all] ❌ Error checking marks cache:`, error);
-      console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-      console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof Error && error.stack) {
-        console.error(`[API /data/all]   - Stack: ${error.stack}`);
+    if (shouldFetchMarks) {
+      try {
+        marksInfo = await getSupabaseCacheWithInfo(user_id, 'marks', forceRefresh);
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Error checking marks cache:`, error);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        marksInfo = null;
       }
-      marksInfo = null;
     }
 
-    // Safely extract cached data with null checks
-    const cachedCalendar = (calendarInfo && calendarInfo.data) ? calendarInfo.data : null;
-    const cachedTimetable = (timetableInfo && timetableInfo.data) ? timetableInfo.data : null;
-    const cachedAttendance = (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
-    const cachedMarks = (marksInfo && marksInfo.data) ? marksInfo.data : null;
+    // Safely extract cached data with null checks (only for requested types)
+    const cachedCalendar = shouldFetchCalendar && (calendarInfo && calendarInfo.data) ? calendarInfo.data : null;
+    const cachedTimetable = shouldFetchTimetable && (timetableInfo && timetableInfo.data) ? timetableInfo.data : null;
+    const cachedAttendance = shouldFetchAttendance && (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
+    const cachedMarks = shouldFetchMarks && (marksInfo && marksInfo.data) ? marksInfo.data : null;
 
-    // Determine what needs to be fetched
-    const needCalendar = !cachedCalendar || forceRefresh;
-    const needTimetable = !cachedTimetable || forceRefresh;
-    const needAttendance = !cachedAttendance || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire);
-    const needMarks = !cachedMarks || forceRefresh || (marksInfo && marksInfo.isAboutToExpire);
+    // Determine what needs to be fetched (only for requested types)
+    const needCalendar = shouldFetchCalendar && (!cachedCalendar || forceRefresh);
+    const needTimetable = shouldFetchTimetable && (!cachedTimetable || forceRefresh);
+    const needAttendance = shouldFetchAttendance && (!cachedAttendance || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire));
+    const needMarks = shouldFetchMarks && (!cachedMarks || forceRefresh || (marksInfo && marksInfo.isAboutToExpire));
     const needStatic = needCalendar || needTimetable;
     const needDynamic = needAttendance || needMarks;
     
@@ -267,6 +303,7 @@ export async function POST(request: NextRequest) {
     let staticData: Record<string, unknown> | null = null;
     let dynamicData: Record<string, unknown> | null = null;
     const backendStartTime = Date.now();
+    let backendWasCalled = false; // Track if backend scraper was actually called
 
     // OPTIMIZATION: If all data is missing, use two-request logic (fastest)
     // If only one type is missing, fetch only that type (fastest for single missing)
@@ -274,6 +311,7 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/all] 🚀 All data missing - Using optimized two-request strategy`);
       // Fetch dynamic data first (attendance + marks together)
       try {
+        backendWasCalled = true;
         const dynamicStartTime = Date.now();
         dynamicData = await callPythonDynamicData(user_email, user_id, password);
         const dynamicDuration = Date.now() - dynamicStartTime;
@@ -312,6 +350,7 @@ export async function POST(request: NextRequest) {
 
       // Fetch static data (calendar + timetable together)
       try {
+        backendWasCalled = true;
         const staticStartTime = Date.now();
         staticData = await callPythonStaticData(user_email, user_id, password);
         const staticDuration = Date.now() - staticStartTime;
@@ -351,12 +390,12 @@ export async function POST(request: NextRequest) {
       // OPTIMIZATION: Only some data is missing - fetch only what's needed individually
       console.log(`[API /data/all] 🎯 Partial data missing (${missingCount} types) - Using individual fetch strategy`);
       
-      // Initialize with cached data
+      // Initialize with cached data (only for requested types)
       staticData = {
         success: true,
         data: {
-          calendar: cachedCalendar,
-          timetable: cachedTimetable,
+          ...(shouldFetchCalendar ? { calendar: cachedCalendar } : {}),
+          ...(shouldFetchTimetable ? { timetable: cachedTimetable } : {}),
         },
         metadata: { source: 'supabase_cache' },
       };
@@ -364,8 +403,8 @@ export async function POST(request: NextRequest) {
       dynamicData = {
         success: true,
         data: {
-          attendance: cachedAttendance,
-          marks: cachedMarks,
+          ...(shouldFetchAttendance ? { attendance: cachedAttendance } : {}),
+          ...(shouldFetchMarks ? { marks: cachedMarks } : {}),
         },
         metadata: { source: 'supabase_cache' },
       };
@@ -374,6 +413,7 @@ export async function POST(request: NextRequest) {
       if (needCalendar && !needTimetable) {
         console.log(`[API /data/all] ⏳ Fetching only calendar...`);
         try {
+          backendWasCalled = true;
           const calendarResult = await callPythonIndividualData(user_email, user_id, password, 'calendar');
           if (calendarResult.success && calendarResult.data) {
             (staticData.data as { calendar?: unknown }).calendar = calendarResult.data;
@@ -399,6 +439,7 @@ export async function POST(request: NextRequest) {
       if (needTimetable && !needCalendar) {
         console.log(`[API /data/all] ⏳ Fetching only timetable...`);
         try {
+          backendWasCalled = true;
           const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
           if (timetableResult.success && timetableResult.data) {
             (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
@@ -424,6 +465,7 @@ export async function POST(request: NextRequest) {
       if (needCalendar && needTimetable) {
         console.log(`[API /data/all] ⏳ Fetching static data (calendar + timetable)...`);
         try {
+          backendWasCalled = true;
           const staticResult = await callPythonStaticData(user_email, user_id, password);
           if (staticResult.success) {
             const staticDataData = staticResult.data as { calendar?: unknown; timetable?: unknown } | undefined;
@@ -464,6 +506,7 @@ export async function POST(request: NextRequest) {
       if (needAttendance && !needMarks) {
         console.log(`[API /data/all] ⏳ Fetching only attendance...`);
         try {
+          backendWasCalled = true;
           const attendanceResult = await callPythonIndividualData(user_email, user_id, password, 'attendance');
           if (attendanceResult.success && attendanceResult.data) {
             (dynamicData.data as { attendance?: unknown }).attendance = attendanceResult.data;
@@ -489,6 +532,7 @@ export async function POST(request: NextRequest) {
       if (needMarks && !needAttendance) {
         console.log(`[API /data/all] ⏳ Fetching only marks...`);
         try {
+          backendWasCalled = true;
           const marksResult = await callPythonIndividualData(user_email, user_id, password, 'marks');
           if (marksResult.success && marksResult.data) {
             (dynamicData.data as { marks?: unknown }).marks = marksResult.data;
@@ -514,6 +558,7 @@ export async function POST(request: NextRequest) {
       if (needAttendance && needMarks) {
         console.log(`[API /data/all] ⏳ Fetching dynamic data (attendance + marks)...`);
         try {
+          backendWasCalled = true;
           const dynamicResult = await callPythonDynamicData(user_email, user_id, password);
           if (dynamicResult.success) {
             const dynamicDataData = dynamicResult.data as { attendance?: unknown; marks?: unknown } | undefined;
@@ -561,17 +606,25 @@ export async function POST(request: NextRequest) {
     const mergedResultTyped = result as { success?: boolean };
     console.log(`[API /data/all]   - Overall success: ${mergedResultTyped.success || false}`);
     
-    // Safely access merged result data properties
+    // Safely access merged result data properties (only log requested types)
     const mergedData = result.data as { 
       calendar?: unknown; 
       timetable?: unknown; 
       attendance?: unknown; 
       marks?: unknown 
     } | undefined;
-    console.log(`[API /data/all]   - Calendar: ${mergedData?.calendar ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Timetable: ${mergedData?.timetable ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Attendance: ${mergedData?.attendance ? "✓" : "✗"}`);
-    console.log(`[API /data/all]   - Marks: ${mergedData?.marks ? "✓" : "✗"}`);
+    if (shouldFetchCalendar) {
+      console.log(`[API /data/all]   - Calendar: ${mergedData?.calendar ? "✓" : "✗"}`);
+    }
+    if (shouldFetchTimetable) {
+      console.log(`[API /data/all]   - Timetable: ${mergedData?.timetable ? "✓" : "✗"}`);
+    }
+    if (shouldFetchAttendance) {
+      console.log(`[API /data/all]   - Attendance: ${mergedData?.attendance ? "✓" : "✗"}`);
+    }
+    if (shouldFetchMarks) {
+      console.log(`[API /data/all]   - Marks: ${mergedData?.marks ? "✓" : "✗"}`);
+    }
     
     // Check for session expiry in either request
     const staticDataTyped = staticData as { success?: boolean; error?: string } | null;
@@ -725,6 +778,13 @@ export async function POST(request: NextRequest) {
     console.log(`[API /data/all]   - Course in response: ${course || 'none'}`);
     console.log("===========================================");
 
+    // Only track API request if backend scraper was actually called
+    if (backendWasCalled) {
+      const backendDuration = Date.now() - backendStartTime;
+      // Track API request (async, non-blocking)
+      void trackApiRequest('/api/data/all', user_id, 'all', backendDuration, finalResultTyped.success ?? false);
+    }
+
     // Return the unified data
     return NextResponse.json(result, { status: finalResultTyped.success ? 200 : 500 });
 
@@ -740,11 +800,18 @@ export async function POST(request: NextRequest) {
     }
     console.error("===========================================");
     
+    // Track error (async, non-blocking)
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorType = error instanceof Error ? error.constructor.name : typeof error;
+    void trackServerError(errorMessage, errorType, user_id, '/api/data/all');
+    // Track API request for error case (backend was attempted)
+    void trackApiRequest('/api/data/all', user_id, 'all', totalTime, false);
+    
     return NextResponse.json(
       {
         success: false,
         error: "Internal server error",
-        details: error instanceof Error ? error.message : String(error)
+        details: errorMessage
       },
       { status: 500 }
     );

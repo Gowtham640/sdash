@@ -9,6 +9,7 @@ import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
+import { useErrorTracking } from "@/lib/useErrorTracking";
 
 interface Assessment {
   assessment_name: string;
@@ -60,6 +61,9 @@ export default function MarksPage() {
   const [marksData, setMarksData] = useState<MarksData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/marks');
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
@@ -156,7 +160,7 @@ export default function MarksPage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, 'marks'))
       });
 
       const result = await response.json();

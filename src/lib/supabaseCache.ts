@@ -65,6 +65,7 @@ export async function getSupabaseCacheWithInfo(
   }
 
   try {
+    const cacheStartTime = Date.now();
     console.log(`[SupabaseCache] 🔍 Checking cache for ${dataType} (user: ${user_id})`);
     
     const { data, error } = await supabaseAdmin
@@ -118,6 +119,7 @@ export async function getSupabaseCacheWithInfo(
     // Cache is valid
     const age = now.getTime() - new Date(entry.updated_at).getTime();
     const ageMinutes = Math.round(age / 1000 / 60);
+    const responseTime = Date.now() - cacheStartTime;
     console.log(`[SupabaseCache] ✅ Cache hit for ${dataType} (age: ${ageMinutes} minutes)`);
     if (minutesUntilExpiry !== null) {
       console.log(`[SupabaseCache]   - Expires in: ${minutesUntilExpiry} minutes`);
@@ -125,6 +127,10 @@ export async function getSupabaseCacheWithInfo(
         console.log(`[SupabaseCache]   - ⚠️ About to expire! (within ${Math.round(PREFETCH_THRESHOLD_MS / 1000 / 60)} minutes)`);
       }
     }
+
+    // Track cache hit event (async, non-blocking)
+    const { trackCacheHit } = await import('@/lib/analyticsServer');
+    void trackCacheHit(dataType, user_id, responseTime);
 
     return {
       data: entry.data,

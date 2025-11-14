@@ -2,6 +2,19 @@
 import React, { useState, useEffect } from "react";
 import { getStorageItem } from "@/lib/browserStorage";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  ResponsiveContainer,
+} from 'recharts';
 
 type PageType = 'analytics' | 'modifications';
 
@@ -22,9 +35,41 @@ export default function AdminPage() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Analytics state
-  const [userCount, setUserCount] = useState<number>(0);
-  const [requestsPerDay, setRequestsPerDay] = useState<number>(0);
-  const [activityData, setActivityData] = useState<any[]>([]);
+  const [analyticsData, setAnalyticsData] = useState<{
+    summary?: {
+      totalUsers: number;
+      totalEvents: number;
+      pageViews: number;
+      cacheHits: number;
+      apiRequests: number;
+      siteOpens: number;
+      errors: number;
+      featureClicks: number;
+      sessions: number;
+    };
+    charts?: {
+      pageVisitsByPage: Array<{ page: string; count: number }>;
+      cacheHitsByType: Array<{ type: string; count: number }>;
+      apiRequestsByEndpoint: Array<{ endpoint: string; count: number }>;
+      browserDistribution: Array<{ browser: string; count: number }>;
+      featureUsage: Array<{ feature: string; count: number }>;
+      errorTypes: Array<{ type: string; count: number }>;
+      pageVisitsOverTime: Array<{ date: string; count: number }>;
+    };
+    metrics?: {
+      avgCacheResponseTime: number;
+      avgApiResponseTime: number;
+      avgSessionDuration: number;
+      heavyUsers: number;
+      casualUsers: number;
+      avgDaysPerWeek: number;
+    };
+    responseTimes?: {
+      cache: { min: number; max: number; avg: number };
+      api: { min: number; max: number; avg: number };
+    };
+  } | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(true);
 
   // Modifications state
   const [selectedCourses, setSelectedCourses] = useState<string[]>(['BTech']);
@@ -115,29 +160,35 @@ export default function AdminPage() {
 
   const fetchAnalytics = async () => {
     try {
-      const response = await fetch('/api/admin/analytics');
+      setAnalyticsLoading(true);
+      const response = await fetch('/api/admin/analytics?days=30');
       const result = await response.json();
 
       if (result.success && result.data) {
-        setUserCount(result.data.userCount || 0);
-        setRequestsPerDay(result.data.requestsPerDay || 0);
-        setActivityData(result.data.activityData || []);
+        setAnalyticsData(result.data);
       }
     } catch (err) {
       console.error('[Admin] Error fetching analytics:', err);
+    } finally {
+      setAnalyticsLoading(false);
     }
   };
 
   const fetchCalendarForEditing = async () => {
     try {
-      // Fetch from user_cache initially (API will handle fallback to public.calendar)
+      // Fetch from public.calendar (API will handle fallback to default/0)
       // Use first selected course and semester for now
       const course = selectedCourses[0] || 'BTech';
       const semester = selectedSemesters[0] || 1;
+      console.log(`[Admin] Fetching calendar for course: ${course}, semester: ${semester}`);
+      
       const response = await fetch(`/api/admin/calendar?course=${encodeURIComponent(course)}&semester=${semester}`);
       const result = await response.json();
 
+      console.log('[Admin] Calendar API response:', result);
+
       if (result.success && result.data) {
+        console.log('[Admin] Calendar data received:', result.data);
         // Store the full calendar JSON structure
         setFullCalendarData(result.data);
         
@@ -146,33 +197,49 @@ export default function AdminPage() {
         if (Array.isArray(result.data)) {
           // Direct array format
           events = result.data;
+          console.log('[Admin] Calendar is direct array, events count:', events.length);
         } else if (result.data && typeof result.data === 'object') {
           // Check if it has an events array or data array
           if (Array.isArray(result.data.events)) {
             events = result.data.events;
+            console.log('[Admin] Calendar has events array, count:', events.length);
           } else if (Array.isArray(result.data.data)) {
             events = result.data.data;
+            console.log('[Admin] Calendar has data array, count:', events.length);
           } else if (Array.isArray(result.data.calendar)) {
             events = result.data.calendar;
+            console.log('[Admin] Calendar has calendar array, count:', events.length);
           } else {
             // If it's an object but no array found, try to extract all date-based properties
-            console.warn('[Admin] Calendar data is object but no events array found, treating as empty');
-            events = [];
+            console.warn('[Admin] Calendar data is object but no events array found. Data structure:', Object.keys(result.data));
+            // Try to find any array property
+            const keys = Object.keys(result.data);
+            for (const key of keys) {
+              if (Array.isArray(result.data[key])) {
+                events = result.data[key];
+                console.log(`[Admin] Found array in key "${key}", count:`, events.length);
+                break;
+              }
+            }
           }
         }
         
         // Sort events chronologically by date (DD/MM/YYYY format)
-        events.sort((a, b) => {
-          if (!a.date || !b.date) return 0;
-          const parseDate = (dateStr: string) => {
-            const [day, month, year] = dateStr.split('/').map(Number);
-            return new Date(year, month - 1, day);
-          };
-          return parseDate(a.date).getTime() - parseDate(b.date).getTime();
-        });
+        if (events.length > 0) {
+          events.sort((a, b) => {
+            if (!a.date || !b.date) return 0;
+            const parseDate = (dateStr: string) => {
+              const [day, month, year] = dateStr.split('/').map(Number);
+              return new Date(year, month - 1, day);
+            };
+            return parseDate(a.date).getTime() - parseDate(b.date).getTime();
+          });
+        }
         
+        console.log('[Admin] Final events count:', events.length);
         setCalendarEvents(events);
       } else {
+        console.warn('[Admin] No calendar data received. Success:', result.success, 'Data:', result.data);
         setFullCalendarData(null);
         setCalendarEvents([]);
       }
@@ -403,49 +470,219 @@ export default function AdminPage() {
       <div className="flex-1 overflow-y-auto p-6 sm:p-8 md:p-10">
         {activePage === 'analytics' && (
           <div className="flex flex-col gap-6">
-            <div className="text-white text-2xl sm:text-3xl md:text-4xl font-sora font-bold">
-              Analytics
+            <div className="flex justify-between items-center">
+              <div className="text-white text-2xl sm:text-3xl md:text-4xl font-sora font-bold">
+                Analytics Dashboard
+              </div>
+              {analyticsLoading && (
+                <div className="text-white/70 text-sm font-sora">Loading...</div>
+              )}
             </div>
 
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl transition-all duration-200 hover:bg-white/15 hover:border-white/30 hover:shadow-lg hover:shadow-white/5 hover:scale-[1.02] cursor-default">
-                <div className="text-white/70 text-sm font-sora mb-2 transition-colors duration-200 hover:text-white/90">Total Users</div>
-                <div className="text-white text-3xl font-sora font-bold">{userCount}</div>
-              </div>
-              <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl transition-all duration-200 hover:bg-white/15 hover:border-white/30 hover:shadow-lg hover:shadow-white/5 hover:scale-[1.02] cursor-default">
-                <div className="text-white/70 text-sm font-sora mb-2 transition-colors duration-200 hover:text-white/90">Requests Today</div>
-                <div className="text-white text-3xl font-sora font-bold">{requestsPerDay}</div>
-              </div>
-              <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl transition-all duration-200 hover:bg-white/15 hover:border-white/30 hover:shadow-lg hover:shadow-white/5 hover:scale-[1.02] cursor-default">
-                <div className="text-white/70 text-sm font-sora mb-2 transition-colors duration-200 hover:text-white/90">Cache Entries</div>
-                <div className="text-white text-3xl font-sora font-bold">{activityData.length}</div>
-              </div>
-            </div>
+            {analyticsLoading ? (
+              <div className="text-white/70 text-center py-12">Loading analytics data...</div>
+            ) : analyticsData ? (
+              <>
+                {/* Summary Stats Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
+                    <div className="text-white/70 text-xs font-sora mb-1">Total Users</div>
+                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalUsers || 0}</div>
+                  </div>
+                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
+                    <div className="text-white/70 text-xs font-sora mb-1">Page Views</div>
+                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.pageViews || 0}</div>
+                  </div>
+                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
+                    <div className="text-white/70 text-xs font-sora mb-1">Cache Hits</div>
+                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.cacheHits || 0}</div>
+                  </div>
+                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
+                    <div className="text-white/70 text-xs font-sora mb-1">API Requests</div>
+                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.apiRequests || 0}</div>
+                  </div>
+                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
+                    <div className="text-white/70 text-xs font-sora mb-1">Errors</div>
+                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.errors || 0}</div>
+                  </div>
+                </div>
 
-            {/* Activity Log */}
-            <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl transition-all duration-200 hover:bg-white/12">
-              <div className="text-white text-xl font-sora font-bold mb-4">Recent Activity</div>
-              <div className="flex flex-col gap-3">
-                {activityData.length > 0 ? (
-                  activityData.slice(0, 20).map((activity, index) => (
-                    <div
-                      key={index}
-                      className="relative p-3 backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-sm font-sora transition-all duration-200 hover:bg-white/15 hover:border-white/30 hover:shadow-md hover:shadow-white/5 hover:scale-[1.01] cursor-default"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="transition-colors duration-200 hover:text-white/90">{activity.data_type}</span>
-                        <span className="text-white/70 transition-colors duration-200 hover:text-white/90">
-                          {new Date(activity.updated_at).toLocaleString()}
-                        </span>
+                {/* Page Visits Over Time */}
+                {analyticsData.charts?.pageVisitsOverTime && analyticsData.charts.pageVisitsOverTime.length > 0 && (
+                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                    <div className="text-white text-xl font-sora font-bold mb-4">Page Visits (Last 7 Days)</div>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={analyticsData.charts.pageVisitsOverTime}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                        <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                        <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                        <Line type="monotone" dataKey="count" stroke="#60a5fa" strokeWidth={2} dot={{ fill: '#60a5fa', r: 4 }} isAnimationActive={true} animationDuration={500} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Charts Row 1 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Page Visits by Page */}
+                  {analyticsData.charts?.pageVisitsByPage && analyticsData.charts.pageVisitsByPage.length > 0 && (
+                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                      <div className="text-white text-xl font-sora font-bold mb-4">Page Visits by Page</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={analyticsData.charts.pageVisitsByPage}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis dataKey="page" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Bar dataKey="count" fill="#60a5fa" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Browser Distribution */}
+                  {analyticsData.charts?.browserDistribution && analyticsData.charts.browserDistribution.length > 0 && (
+                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                      <div className="text-white text-xl font-sora font-bold mb-4">Browser Distribution</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <PieChart>
+                          <Pie
+                            data={analyticsData.charts.browserDistribution}
+                            dataKey="count"
+                            nameKey="browser"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={100}
+                            label={({ browser, count }) => `${browser}: ${count}`}
+                            labelLine={false}
+                            isAnimationActive={true}
+                            animationDuration={500}
+                          >
+                            {analyticsData.charts.browserDistribution.map((entry, index) => {
+                              const colors = ['#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#fb7185'];
+                              return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                            })}
+                          </Pie>
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                {/* Charts Row 2 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Cache Hits vs API Requests */}
+                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                    <div className="text-white text-xl font-sora font-bold mb-4">Cache Hits vs API Requests</div>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={[
+                        { name: 'Cache Hits', count: analyticsData.summary?.cacheHits || 0 },
+                        { name: 'API Requests', count: analyticsData.summary?.apiRequests || 0 },
+                      ]}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                        <XAxis dataKey="name" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                        <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                        <Bar dataKey="count" fill="#34d399" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Feature Usage */}
+                  {analyticsData.charts?.featureUsage && analyticsData.charts.featureUsage.length > 0 && (
+                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                      <div className="text-white text-xl font-sora font-bold mb-4">Feature Usage</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={analyticsData.charts.featureUsage}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis dataKey="feature" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Bar dataKey="count" fill="#fbbf24" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                {/* Charts Row 3 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Cache Hits by Type */}
+                  {analyticsData.charts?.cacheHitsByType && analyticsData.charts.cacheHitsByType.length > 0 && (
+                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                      <div className="text-white text-xl font-sora font-bold mb-4">Cache Hits by Data Type</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={analyticsData.charts.cacheHitsByType}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Bar dataKey="count" fill="#a78bfa" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Error Types */}
+                  {analyticsData.charts?.errorTypes && analyticsData.charts.errorTypes.length > 0 && (
+                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                      <div className="text-white text-xl font-sora font-bold mb-4">Error Types</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={analyticsData.charts.errorTypes}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Bar dataKey="count" fill="#f87171" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                {/* Performance Metrics */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                    <div className="text-white text-xl font-sora font-bold mb-4">Response Times</div>
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <div className="text-white/70 text-sm font-sora mb-1">Avg Cache Response</div>
+                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgCacheResponseTime || 0}ms</div>
+                      </div>
+                      <div>
+                        <div className="text-white/70 text-sm font-sora mb-1">Avg API Response</div>
+                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgApiResponseTime || 0}ms</div>
                       </div>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-white/70 text-sm font-sora">No recent activity</div>
-                )}
-              </div>
-            </div>
+                  </div>
+
+                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                    <div className="text-white text-xl font-sora font-bold mb-4">User Engagement</div>
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <div className="text-white/70 text-sm font-sora mb-1">Avg Session Duration</div>
+                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSessionDuration || 0} min</div>
+                      </div>
+                      <div>
+                        <div className="text-white/70 text-sm font-sora mb-1">Avg Days/Week</div>
+                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgDaysPerWeek || 0}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
+                    <div className="text-white text-xl font-sora font-bold mb-4">User Types</div>
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <div className="text-white/70 text-sm font-sora mb-1">Heavy Users</div>
+                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.heavyUsers || 0}</div>
+                      </div>
+                      <div>
+                        <div className="text-white/70 text-sm font-sora mb-1">Casual Users</div>
+                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.casualUsers || 0}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-white/70 text-center py-12">No analytics data available</div>
+            )}
           </div>
         )}
 

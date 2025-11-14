@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
@@ -17,6 +17,8 @@ import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
+import { trackFeatureClick } from "@/lib/analytics";
+import { useErrorTracking } from "@/lib/useErrorTracking";
 
 interface AttendanceSubject {
   row_number: number;
@@ -214,6 +216,9 @@ export default function AttendancePage() {
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/attendance');
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
@@ -231,6 +236,10 @@ export default function AttendancePage() {
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+  
+  // Refs to prevent duplicate button clicks
+  const isOpeningPredictionModal = useRef(false);
+  const isOpeningOdmlModal = useRef(false);
 
   useEffect(() => {
     fetchUnifiedData();
@@ -247,12 +256,27 @@ export default function AttendancePage() {
     return () => clearInterval(interval);
   }, [loading]);
 
+  // Use ref to prevent duplicate calls
+  const isCalculatingRef = useRef(false);
+  
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
+    // Prevent duplicate calls
+    if (isCalculatingRef.current) {
+      console.log('[Attendance] Prediction calculation already in progress, skipping duplicate call');
+      return;
+    }
+    
     if (!attendanceData) {
       return;
     }
 
+    // Mark as calculating and track feature click
+    isCalculatingRef.current = true;
     setIsCalculating(true);
+    
+    // Track that prediction was calculated (feature used) - only once
+    trackFeatureClick('predict_attendance_calculate', '/attendance');
+    
     try {
       const results = calculatePredictedAttendance(
         attendanceData,
@@ -268,15 +292,31 @@ export default function AttendancePage() {
       console.error('Prediction calculation error:', err);
     } finally {
       setIsCalculating(false);
+      isCalculatingRef.current = false;
     }
   };
 
+  // Use ref to prevent duplicate calls for ODML
+  const isOdmlCalculatingRef = useRef(false);
+  
   const handleODMLCalculate = async (periods: LeavePeriod[]) => {
+    // Prevent duplicate calls
+    if (isOdmlCalculatingRef.current) {
+      console.log('[Attendance] OD/ML calculation already in progress, skipping duplicate call');
+      return;
+    }
+    
     if (!attendanceData) {
       return;
     }
 
+    // Mark as calculating and track feature click
+    isOdmlCalculatingRef.current = true;
     setIsCalculating(true);
+    
+    // Track that OD/ML was calculated (feature used) - only once
+    trackFeatureClick('odml_calculate', '/attendance');
+    
     try {
       const results = calculateODMLAdjustedAttendance(
         attendanceData,
@@ -292,6 +332,7 @@ export default function AttendancePage() {
       console.error('OD/ML calculation error:', err);
     } finally {
       setIsCalculating(false);
+      isOdmlCalculatingRef.current = false;
     }
   };
 
@@ -382,7 +423,7 @@ export default function AttendancePage() {
       const response = await fetch('/api/data/all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, 'attendance'))
       });
 
       const result = await response.json();
@@ -823,7 +864,21 @@ export default function AttendancePage() {
         {!isPredictionMode && !isOdmlMode ? (
           <div className="flex gap-4 items-center">
               <button
-                  onClick={() => setShowPredictionModal(true)}
+                  onClick={() => {
+                    // Prevent duplicate clicks
+                    if (isOpeningPredictionModal.current) {
+                      return;
+                    }
+                    isOpeningPredictionModal.current = true;
+                    
+                    trackFeatureClick('predict_attendance', '/attendance');
+                    setShowPredictionModal(true);
+                    
+                    // Reset after a short delay
+                    setTimeout(() => {
+                      isOpeningPredictionModal.current = false;
+                    }, 500);
+                  }}
                   className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
                   >
                   <ShinyText 
@@ -834,7 +889,21 @@ export default function AttendancePage() {
                   />
               </button>
               <button
-                  onClick={() => setShowODMLModal(true)}
+                  onClick={() => {
+                    // Prevent duplicate clicks
+                    if (isOpeningOdmlModal.current) {
+                      return;
+                    }
+                    isOpeningOdmlModal.current = true;
+                    
+                    // Don't track when opening modal - only track when calculating (like attendance prediction)
+                    setShowODMLModal(true);
+                    
+                    // Reset after a short delay
+                    setTimeout(() => {
+                      isOpeningOdmlModal.current = false;
+                    }, 500);
+                  }}
                   className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
                   >
                   <ShinyText 

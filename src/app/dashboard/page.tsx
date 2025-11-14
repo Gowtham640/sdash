@@ -11,6 +11,7 @@ import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browser
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import NavigationButton from "@/components/NavigationButton";
+import { useErrorTracking } from "@/lib/useErrorTracking";
 
 // Import types
 interface CalendarEvent {
@@ -67,6 +68,9 @@ export default function Dashboard() {
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/dashboard');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [factOpacity, setFactOpacity] = useState(1);

@@ -153,8 +153,9 @@ export function isPasswordAvailable(): boolean {
  */
 export function getRequestBodyWithPassword(
   access_token: string,
-  force_refresh: boolean = false
-): { access_token: string; force_refresh: boolean; password?: string } {
+  force_refresh: boolean = false,
+  types?: string | string[]
+): { access_token: string; force_refresh: boolean; password?: string; types?: string | string[] } {
   console.log('[PasswordStorage] 🔍 Retrieving password for API request...');
   const password = getPortalPassword();
   
@@ -169,15 +170,17 @@ export function getRequestBodyWithPassword(
     console.log(`[PasswordStorage]   - Will be sent to backend`);
   }
   
-  const requestBody = {
+  const requestBody: { access_token: string; force_refresh: boolean; password?: string; types?: string | string[] } = {
     access_token,
     force_refresh,
-    ...(password ? { password } : {})
+    ...(password ? { password } : {}),
+    ...(types ? { types } : {})
   };
   
   console.log('[PasswordStorage] 📦 Request body prepared:');
   console.log(`[PasswordStorage]   - Has password: ${password ? "✓" : "✗"}`);
   console.log(`[PasswordStorage]   - Force refresh: ${force_refresh}`);
+  console.log(`[PasswordStorage]   - Types: ${types ? (Array.isArray(types) ? types.join(',') : types) : 'all'}`);
   
   return requestBody;
 }
