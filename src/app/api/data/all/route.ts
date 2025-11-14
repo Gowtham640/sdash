@@ -272,44 +272,7 @@ export async function POST(request: NextRequest) {
     // If only one type is missing, fetch only that type (fastest for single missing)
     if (allMissing) {
       console.log(`[API /data/all] 🚀 All data missing - Using optimized two-request strategy`);
-      // Fetch static data (calendar + timetable together)
-      try {
-        staticData = await callPythonStaticData(user_email, user_id, password);
-        const staticDuration = Date.now() - backendStartTime;
-        console.log(`[API /data/all] ✅ Static data received (${staticDuration}ms)`);
-        
-        const staticDataData = staticData.data as { calendar?: unknown; timetable?: unknown } | undefined;
-        if (staticData.success && staticDataData) {
-          if (staticDataData.calendar && needCalendar) {
-            try {
-              await setSupabaseCache(user_id, 'calendar', staticDataData.calendar);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
-          }
-          if (staticDataData.timetable && needTimetable) {
-            try {
-              await setSupabaseCache(user_id, 'timetable', staticDataData.timetable);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
-          }
-        }
-      } catch (error) {
-        console.error(`[API /data/all] ❌ Static data request failed:`);
-        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof Error && error.stack) {
-          console.error(`[API /data/all]   - Stack: ${error.stack}`);
-        }
-        staticData = null;
-      }
-
-      // Fetch dynamic data (attendance + marks together)
+      // Fetch dynamic data first (attendance + marks together)
       try {
         const dynamicStartTime = Date.now();
         dynamicData = await callPythonDynamicData(user_email, user_id, password);
@@ -345,6 +308,44 @@ export async function POST(request: NextRequest) {
           console.error(`[API /data/all]   - Stack: ${error.stack}`);
         }
         dynamicData = null;
+      }
+
+      // Fetch static data (calendar + timetable together)
+      try {
+        const staticStartTime = Date.now();
+        staticData = await callPythonStaticData(user_email, user_id, password);
+        const staticDuration = Date.now() - staticStartTime;
+        console.log(`[API /data/all] ✅ Static data received (${staticDuration}ms)`);
+        
+        const staticDataData = staticData.data as { calendar?: unknown; timetable?: unknown } | undefined;
+        if (staticData.success && staticDataData) {
+          if (staticDataData.calendar && needCalendar) {
+            try {
+              await setSupabaseCache(user_id, 'calendar', staticDataData.calendar);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+          if (staticDataData.timetable && needTimetable) {
+            try {
+              await setSupabaseCache(user_id, 'timetable', staticDataData.timetable);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Static data request failed:`);
+        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error && error.stack) {
+          console.error(`[API /data/all]   - Stack: ${error.stack}`);
+        }
+        staticData = null;
       }
     } else {
       // OPTIMIZATION: Only some data is missing - fetch only what's needed individually
@@ -592,13 +593,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Try to get semester from attendance data first, fallback to database
+    // Try to get semester and course from attendance data first, fallback to database
     let semesterFromAttendance: number | null = null;
-    const attendanceData = (result.data as { attendance?: { semester?: number; data?: { metadata?: { semester?: number } } } })?.attendance;
+    let courseFromAttendance: string | null = null;
+    const attendanceData = (result.data as { attendance?: { semester?: number; data?: { metadata?: { semester?: number; department?: string } } } })?.attendance;
     if (attendanceData?.semester) {
       semesterFromAttendance = attendanceData.semester;
     } else if (attendanceData?.data?.metadata?.semester) {
       semesterFromAttendance = attendanceData.data.metadata.semester;
+    }
+    
+    // Extract course from department field (BTech/MTech)
+    if (attendanceData?.data?.metadata?.department) {
+      const department = attendanceData.data.metadata.department;
+      // Map department to course (e.g., "Computer Science" -> "BTech", "M.Tech" -> "MTech")
+      if (department.toLowerCase().includes('m.tech') || department.toLowerCase().includes('mtech')) {
+        courseFromAttendance = 'MTech';
+      } else {
+        courseFromAttendance = 'BTech'; // Default to BTech
+      }
+      console.log(`[API /data/all] ✅ Course from attendance: ${courseFromAttendance} (from department: ${department})`);
     }
     
     // If no semester from attendance and attendance failed, fetch from database
@@ -610,29 +624,97 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/all] ✅ Semester from attendance: ${semester}`);
     }
     
-    // Include semester in response metadata
-    const resultTyped = result as { success?: boolean; metadata?: { semester?: number; queue_info?: unknown; [key: string]: unknown }; semester?: number };
+    // Fetch calendar from database if course and semester are available
+    let course: string | null = courseFromAttendance || 'BTech'; // Default to BTech
+    // Fetch calendar if semester is available (including 0, but not null/undefined)
+    if (semester !== null && semester !== undefined && result.data && typeof result.data === 'object') {
+      try {
+        console.log(`[API /data/all] 🔍 Fetching calendar from database for course: ${course}, semester: ${semester}`);
+        
+        // First, try to get calendar for specific course and semester
+        let calendarDbData = null;
+        let calendarError = null;
+        
+        const { data: specificCalendarData, error: specificError } = await supabaseAdmin
+          .from('calendar')
+          .select('data')
+          .eq('course', course)
+          .eq('semester', semester)
+          .single();
+        
+        if (!specificError && specificCalendarData && specificCalendarData.data) {
+          calendarDbData = specificCalendarData;
+          console.log(`[API /data/all] ✅ Calendar fetched from database for course: ${course}, semester: ${semester}`);
+        } else if (specificError && specificError.code === 'PGRST116') {
+          // Not found for specific course/semester, try fallback: course='default', semester=0
+          console.log(`[API /data/all] ℹ️ No calendar found for course: ${course}, semester: ${semester} - trying fallback (default/0)`);
+          
+          const { data: fallbackCalendarData, error: fallbackError } = await supabaseAdmin
+            .from('calendar')
+            .select('data')
+            .eq('course', 'default')
+            .eq('semester', 0)
+            .single();
+          
+          if (!fallbackError && fallbackCalendarData && fallbackCalendarData.data) {
+            calendarDbData = fallbackCalendarData;
+            console.log(`[API /data/all] ✅ Calendar fetched from database using fallback (default/0)`);
+          } else if (fallbackError && fallbackError.code === 'PGRST116') {
+            console.log(`[API /data/all] ℹ️ No calendar found in database (neither specific nor fallback) - using backend calendar`);
+            calendarError = fallbackError;
+          } else if (fallbackError) {
+            console.warn(`[API /data/all] ⚠️ Error fetching fallback calendar from database: ${fallbackError.message}`);
+            calendarError = fallbackError;
+          }
+        } else if (specificError) {
+          console.warn(`[API /data/all] ⚠️ Error fetching calendar from database: ${specificError.message}`);
+          calendarError = specificError;
+        }
+        
+        // Use calendar from database if found
+        if (calendarDbData && calendarDbData.data) {
+          console.log(`[API /data/all] ✅ Calendar fetched from database (overriding backend calendar)`);
+          (result.data as { calendar?: unknown }).calendar = calendarDbData.data;
+        }
+      } catch (err) {
+        console.warn(`[API /data/all] ⚠️ Error fetching calendar from database:`, err);
+      }
+    }
+    
+    // Include semester and course in response metadata
+    const resultTyped = result as { success?: boolean; metadata?: { semester?: number; course?: string; queue_info?: unknown; [key: string]: unknown }; semester?: number; course?: string };
     if (resultTyped.metadata) {
       if (semester) {
         resultTyped.metadata.semester = semester;
         console.log(`[API /data/all] 📝 Added semester to response metadata: ${semester}`);
       }
+      if (course) {
+        resultTyped.metadata.course = course;
+        console.log(`[API /data/all] 📝 Added course to response metadata: ${course}`);
+      }
       // Get queue info
       const queueInfo = requestQueueTracker.getQueueInfo(user_email);
       resultTyped.metadata.queue_info = queueInfo;
-    } else if (semester) {
+    } else if (semester || course) {
       // Create metadata if it doesn't exist
       const queueInfo = requestQueueTracker.getQueueInfo(user_email);
-      resultTyped.metadata = { semester, queue_info: queueInfo };
+      resultTyped.metadata = { 
+        ...(semester ? { semester } : {}),
+        ...(course ? { course } : {}),
+        queue_info: queueInfo 
+      };
     } else {
       // Create metadata with queue info
       const queueInfo = requestQueueTracker.getQueueInfo(user_email);
       resultTyped.metadata = { queue_info: queueInfo };
     }
     
-    // Also add semester at root level for easy access
+    // Also add semester and course at root level for easy access
     if (semester) {
       (result as { semester?: number }).semester = semester;
+    }
+    if (course) {
+      (result as { course?: string }).course = course;
     }
 
     const totalTime = Date.now() - requestStartTime;
@@ -640,6 +722,7 @@ export async function POST(request: NextRequest) {
     console.log(`[API /data/all] ✅ Response sent (${totalTime}ms total)`);
     console.log(`[API /data/all]   - Status: ${finalResultTyped.success ? 200 : 500}`);
     console.log(`[API /data/all]   - Semester in response: ${semester || 'none'}`);
+    console.log(`[API /data/all]   - Course in response: ${course || 'none'}`);
     console.log("===========================================");
 
     // Return the unified data

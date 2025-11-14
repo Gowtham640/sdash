@@ -55,3 +55,11 @@ create policy if not exists "Users can update only their own cache" on public.us
 for update
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
+
+create table calendar (
+id uuid primary key default gen_random_uuid(),
+course text not null, -- e.g. 'BTech', 'MTech'
+semester int not null, -- e.g. 1, 2, 3, 4
+data jsonb not null, -- stores full calendar data (holidays, events, etc.)
+updated_at timestamp with time zone default now()
+);
