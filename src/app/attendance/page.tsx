@@ -1102,7 +1102,7 @@ export default function AttendancePage() {
                   })()}
                   <div 
                     className="relative w-full h-full flex items-center justify-center" 
-                    style={{ border: '1px solid red', minWidth: '200px', minHeight: '200px' }}
+                    style={{ minWidth: '200px', minHeight: '200px' }}
                     ref={(el) => {
                       if (el) {
                         const rect = el.getBoundingClientRect();
