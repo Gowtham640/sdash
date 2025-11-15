@@ -1089,45 +1089,77 @@ export default function AttendancePage() {
                 </div>
 
                 {/* Right Side - Pie Chart */}
-                <div className="flex flex-col items-center justify-center  w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
-                  {pieChartData.length > 0 ? (
-                    <div className="relative w-full h-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={pieChartData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius="55%"
-                            outerRadius="85%"
-                            paddingAngle={5}
-                            dataKey="value"
-                          >
-                            {pieChartData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="text-center">
-                          <div className="text-white font-sora text-xl sm:text-2xl md:text-3xl lg:text-3xl font-bold">
-                            {attendancePercentage.toFixed(1)}%
-                          </div>
-                          <div className="text-gray-400 font-sora text-xs sm:text-sm">
-                            {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
-                          </div>
-                          {prediction && (
-                            <div className="text-gray-500 font-sora text-[10px] sm:text-xs mt-1">
-                              Current: {currentAttendance.toFixed(1)}%
-                            </div>
-                          )}
+                <div className="flex flex-col items-center justify-center w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
+                  {(() => {
+                    console.log('[PIE CHART DEBUG] Subject:', subject.subject_code);
+                    console.log('[PIE CHART DEBUG] pieChartData:', pieChartData);
+                    console.log('[PIE CHART DEBUG] pieChartData type:', typeof pieChartData);
+                    console.log('[PIE CHART DEBUG] pieChartData length:', pieChartData?.length);
+                    console.log('[PIE CHART DEBUG] pieChartData values:', pieChartData?.map(e => ({ name: e.name, value: e.value, color: e.color })));
+                    console.log('[PIE CHART DEBUG] hours_conducted:', subject.hours_conducted);
+                    console.log('[PIE CHART DEBUG] hours_absent:', subject.hours_absent);
+                    return null;
+                  })()}
+                  <div 
+                    className="relative w-full h-full flex items-center justify-center" 
+                    style={{ border: '1px solid red', minWidth: '200px', minHeight: '200px' }}
+                    ref={(el) => {
+                      if (el) {
+                        const rect = el.getBoundingClientRect();
+                        const computed = window.getComputedStyle(el);
+                        console.log('[PIE CHART DEBUG] Container actual dimensions:', {
+                          width: rect.width,
+                          height: rect.height,
+                          clientWidth: el.clientWidth,
+                          clientHeight: el.clientHeight,
+                          computedWidth: computed.width,
+                          computedHeight: computed.height,
+                          display: computed.display,
+                          position: computed.position
+                        });
+                      }
+                    }}
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      {(() => {
+                        console.log('[PIE CHART DEBUG] ResponsiveContainer rendering with data:', pieChartData || []);
+                        console.log('[PIE CHART DEBUG] Data sum:', pieChartData?.reduce((sum, e) => sum + (e.value || 0), 0));
+                        return (
+                          <PieChart>
+                            <Pie
+                              data={pieChartData || []}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius="55%"
+                              outerRadius="85%"
+                              paddingAngle={5}
+                              dataKey="value"
+                            >
+                              {(pieChartData || []).map((entry, index) => {
+                                console.log(`[PIE CHART DEBUG] Rendering Cell ${index}:`, entry);
+                                return <Cell key={`cell-${index}`} fill={entry.color} />;
+                              })}
+                            </Pie>
+                          </PieChart>
+                        );
+                      })()}
+                    </ResponsiveContainer>
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="text-center">
+                        <div className="text-white font-sora text-xl sm:text-2xl md:text-3xl lg:text-3xl font-bold">
+                          {attendancePercentage.toFixed(1)}%
                         </div>
+                        <div className="text-gray-400 font-sora text-xs sm:text-sm">
+                          {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
+                        </div>
+                        {prediction && (
+                          <div className="text-gray-500 font-sora text-[10px] sm:text-xs mt-1">
+                            Current: {currentAttendance.toFixed(1)}%
+                          </div>
+                        )}
                       </div>
                     </div>
-                  ) : (
-                    <div className="text-gray-400 font-sora">No data available</div>
-                  )}
+                  </div>
                 </div>
               </div>
 

@@ -638,7 +638,7 @@ export async function POST(request: NextRequest) {
     
     // Fetch calendar from public.calendar table (ALWAYS, not from Supabase cache or backend)
     // Calendar is fetched based on user's course and semester, then saved to client cache
-    let course: string | null = courseFromAttendance || 'BTech'; // Default to BTech
+    const course: string | null = courseFromAttendance || 'BTech'; // Default to BTech
     
     console.log(`[API /data/all] 📋 CALENDAR FETCH DEBUG - Starting calendar fetch process`);
     console.log(`[API /data/all]   - Course from attendance: ${courseFromAttendance || 'none'}`);
