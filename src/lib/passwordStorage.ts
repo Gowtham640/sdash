@@ -149,15 +149,25 @@ export function isPasswordAvailable(): boolean {
 }
 
 /**
- * Get request body with password included
+ * Get request body with password and session_id included
  */
 export function getRequestBodyWithPassword(
   access_token: string,
   force_refresh: boolean = false,
   types?: string | string[]
-): { access_token: string; force_refresh: boolean; password?: string; types?: string | string[] } {
+): { access_token: string; force_refresh: boolean; password?: string; types?: string | string[]; session_id?: string } {
   console.log('[PasswordStorage] 🔍 Retrieving password for API request...');
   const password = getPortalPassword();
+  
+  // Get session_id from localStorage (for analytics tracking)
+  let session_id: string | undefined;
+  try {
+    if (typeof window !== 'undefined') {
+      session_id = getStorageItem('analytics_session_id') || undefined;
+    }
+  } catch (error) {
+    console.warn('[PasswordStorage] Could not retrieve session_id:', error);
+  }
   
   if (!password) {
     console.error('[PasswordStorage] ❌ CRITICAL: No password available for API request!');
@@ -170,17 +180,19 @@ export function getRequestBodyWithPassword(
     console.log(`[PasswordStorage]   - Will be sent to backend`);
   }
   
-  const requestBody: { access_token: string; force_refresh: boolean; password?: string; types?: string | string[] } = {
+  const requestBody: { access_token: string; force_refresh: boolean; password?: string; types?: string | string[]; session_id?: string } = {
     access_token,
     force_refresh,
     ...(password ? { password } : {}),
-    ...(types ? { types } : {})
+    ...(types ? { types } : {}),
+    ...(session_id ? { session_id } : {})
   };
   
   console.log('[PasswordStorage] 📦 Request body prepared:');
   console.log(`[PasswordStorage]   - Has password: ${password ? "✓" : "✗"}`);
   console.log(`[PasswordStorage]   - Force refresh: ${force_refresh}`);
   console.log(`[PasswordStorage]   - Types: ${types ? (Array.isArray(types) ? types.join(',') : types) : 'all'}`);
+  console.log(`[PasswordStorage]   - Session ID: ${session_id || 'none'}`);
   
   return requestBody;
 }

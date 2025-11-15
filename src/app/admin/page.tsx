@@ -14,6 +14,7 @@ import {
   YAxis,
   CartesianGrid,
   ResponsiveContainer,
+  Tooltip,
 } from 'recharts';
 
 type PageType = 'analytics' | 'modifications';
@@ -46,6 +47,8 @@ export default function AdminPage() {
       errors: number;
       featureClicks: number;
       sessions: number;
+      uniqueSessions: number;
+      activeSessions: number;
     };
     charts?: {
       pageVisitsByPage: Array<{ page: string; count: number }>;
@@ -55,6 +58,13 @@ export default function AdminPage() {
       featureUsage: Array<{ feature: string; count: number }>;
       errorTypes: Array<{ type: string; count: number }>;
       pageVisitsOverTime: Array<{ date: string; count: number }>;
+      siteOpensOverTime: Array<{ date: string; count: number }>;
+      totalUsersOverTime: Array<{ date: string; count: number }>;
+      cacheHitsOverTime: Array<{ date: string; count: number }>;
+      apiRequestsOverTime: Array<{ date: string; count: number }>;
+      errorsOverTime: Array<{ date: string; count: number }>;
+      featureClicksOverTime: Array<{ date: string; count: number }>;
+      uniqueSessionsOverTime: Array<{ date: string; count: number }>;
     };
     metrics?: {
       avgCacheResponseTime: number;
@@ -63,6 +73,8 @@ export default function AdminPage() {
       heavyUsers: number;
       casualUsers: number;
       avgDaysPerWeek: number;
+      avgSessionsPerUser: number;
+      avgSiteOpensPerUser: number;
     };
     responseTimes?: {
       cache: { min: number; max: number; avg: number };
@@ -70,6 +82,88 @@ export default function AdminPage() {
     };
   } | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
+
+  // Modal state for stat card details
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalData, setModalData] = useState<{ title: string; data: Array<{ date: string; count: number }>; color: string } | null>(null);
+
+  // Analytics filters
+  const [analyticsSemester, setAnalyticsSemester] = useState<string>('all');
+  const [analyticsTimeRange, setAnalyticsTimeRange] = useState<string>('30d'); // Default: past month
+
+  // Helper function to get time range label
+  const getTimeRangeLabel = (timeRange: string): string => {
+    const labels: Record<string, string> = {
+      '1h': 'Past 1 Hour',
+      '24h': 'Past 24 Hours',
+      '48h': 'Past 48 Hours',
+      '7d': 'Past Week',
+      '30d': 'Past Month',
+      '180d': 'Past 6 Months',
+      '365d': 'Past 1 Year',
+      'all': 'All Time',
+    };
+    return labels[timeRange] || 'Selected Period';
+  };
+
+  // Helper function to generate mini graph SVG background with smooth curves
+  const generateMiniGraph = (data: Array<{ date: string; count: number }>, color: string): string => {
+    if (!data || data.length === 0) return '';
+    const maxCount = Math.max(...data.map(d => d.count), 1);
+    const width = 120;
+    const height = 60;
+    const padding = 5;
+    const graphWidth = width - padding * 2;
+    const graphHeight = height - padding * 2;
+    
+    // Create smooth curved path using quadratic bezier curves
+    if (data.length > 1) {
+      const points = data.map((d, i) => {
+        const x = padding + (i / Math.max(data.length - 1, 1)) * graphWidth;
+        const y = padding + graphHeight - (d.count / maxCount) * graphHeight;
+        return { x, y };
+      });
+      
+      // Create a smooth path with bezier curves
+      let path = `M ${points[0].x} ${points[0].y}`;
+      for (let i = 0; i < points.length - 1; i++) {
+        const current = points[i];
+        const next = points[i + 1];
+        const midX = (current.x + next.x) / 2;
+        const midY = (current.y + next.y) / 2;
+        
+        // Use quadratic bezier for smooth curves
+        if (i === 0) {
+          path += ` Q ${current.x} ${current.y} ${midX} ${midY}`;
+        } else {
+          const prev = points[i - 1];
+          const controlX = current.x;
+          const controlY = current.y;
+          path += ` Q ${controlX} ${controlY} ${midX} ${midY}`;
+        }
+      }
+      // Complete the path to the last point
+      const lastPoint = points[points.length - 1];
+      path += ` Q ${lastPoint.x} ${lastPoint.y} ${lastPoint.x} ${lastPoint.y}`;
+      
+      return `<svg width="${width}" height="${height}" style="position: absolute; bottom: 0; right: 0; pointer-events: none;"><path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.25" /></svg>`;
+    } else {
+      // Single point - show a simple curved line
+      const y = padding + graphHeight - (data[0]?.count || 0) / maxCount * graphHeight;
+      const midX = width / 2;
+      return `<svg width="${width}" height="${height}" style="position: absolute; bottom: 0; right: 0; pointer-events: none;"><path d="M ${padding} ${padding + graphHeight} Q ${midX} ${y} ${width - padding} ${y}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" opacity="0.25" /></svg>`;
+    }
+  };
+
+  // Helper function to open modal with chart data
+  const openStatModal = (title: string, chartKey: string, color: string) => {
+    if (!analyticsData?.charts) return;
+    const data = analyticsData.charts[chartKey as keyof typeof analyticsData.charts] as Array<{ date: string; count: number }> | undefined;
+    if (data && data.length > 0) {
+      setModalData({ title, data, color });
+      setModalOpen(true);
+    }
+  };
 
   // Modifications state
   const [selectedCourses, setSelectedCourses] = useState<string[]>(['BTech']);
@@ -96,7 +190,7 @@ export default function AdminPage() {
       fetchCalendarForEditing();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePage, isAdmin, selectedCourses, selectedSemesters]);
+  }, [activePage, isAdmin, selectedCourses, selectedSemesters, analyticsSemester, analyticsTimeRange]);
 
   // Auto-scroll to current date within calendar container only
   useEffect(() => {
@@ -161,7 +255,12 @@ export default function AdminPage() {
   const fetchAnalytics = async () => {
     try {
       setAnalyticsLoading(true);
-      const response = await fetch('/api/admin/analytics?days=30');
+      const params = new URLSearchParams();
+      params.append('timeRange', analyticsTimeRange);
+      if (analyticsSemester !== 'all') {
+        params.append('semester', analyticsSemester);
+      }
+      const response = await fetch(`/api/admin/analytics?${params.toString()}`);
       const result = await response.json();
 
       if (result.success && result.data) {
@@ -471,7 +570,7 @@ export default function AdminPage() {
         {activePage === 'analytics' && (
           <div className="flex flex-col gap-6">
             <div className="flex justify-between items-center">
-              <div className="text-white text-2xl sm:text-3xl md:text-4xl font-sora font-bold">
+            <div className="text-white text-2xl sm:text-3xl md:text-4xl font-sora font-bold">
                 Analytics Dashboard
               </div>
               {analyticsLoading && (
@@ -479,57 +578,268 @@ export default function AdminPage() {
               )}
             </div>
 
+            {/* Filters */}
+            <div className="flex flex-wrap gap-4 items-center">
+              <div className="flex items-center gap-2">
+                <label className="text-white/70 text-sm font-sora">Time Range:</label>
+                <select
+                  value={analyticsTimeRange}
+                  onChange={(e) => setAnalyticsTimeRange(e.target.value)}
+                  className="px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-blue-400/50 transition-all"
+                  style={{ 
+                    background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.6) 0%, rgba(37, 99, 235, 0.7) 100%)',
+                    border: '1px solid rgba(96, 165, 250, 0.4)',
+                    color: '#ffffff',
+                    boxShadow: '0 2px 10px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+                  }}
+                >
+                  <option value="1h" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 1 Hour</option>
+                  <option value="24h" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 24 Hours</option>
+                  <option value="48h" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 48 Hours</option>
+                  <option value="7d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past Week</option>
+                  <option value="30d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past Month</option>
+                  <option value="180d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 6 Months</option>
+                  <option value="365d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 1 Year</option>
+                  <option value="all" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>From the Start</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-white/70 text-sm font-sora">Semester:</label>
+                <select
+                  value={analyticsSemester}
+                  onChange={(e) => setAnalyticsSemester(e.target.value)}
+                  className="px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-violet-400/50 transition-all"
+                  style={{ 
+                    background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.6) 0%, rgba(124, 58, 237, 0.7) 100%)',
+                    border: '1px solid rgba(167, 139, 250, 0.4)',
+                    color: '#ffffff',
+                    boxShadow: '0 2px 10px rgba(139, 92, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+                  }}
+                >
+                  <option value="all" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>All Semesters</option>
+                  <option value="1" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 1</option>
+                  <option value="2" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 2</option>
+                  <option value="3" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 3</option>
+                  <option value="4" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 4</option>
+                  <option value="5" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 5</option>
+                  <option value="6" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 6</option>
+                  <option value="7" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 7</option>
+                  <option value="8" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 8</option>
+                </select>
+              </div>
+            </div>
+
             {analyticsLoading ? (
               <div className="text-white/70 text-center py-12">Loading analytics data...</div>
             ) : analyticsData ? (
               <>
                 {/* Summary Stats Cards */}
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
-                    <div className="text-white/70 text-xs font-sora mb-1">Total Users</div>
-                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalUsers || 0}</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-emerald-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.4) 0%, rgba(5, 150, 105, 0.5) 100%)', boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Total Users', 'totalUsersOverTime', '#10b981')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.totalUsersOverTime || [], '#10b981') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Total Users</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalUsers || 0}</div>
+                          </div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-blue-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.5) 100%)', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Page Views', 'pageVisitsOverTime', '#3b82f6')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.pageVisitsOverTime || [], '#3b82f6') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Page Views</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.pageViews || 0}</div>
+                          </div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-purple-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.4) 0%, rgba(147, 51, 234, 0.5) 100%)', boxShadow: '0 4px 15px rgba(168, 85, 247, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Cache Hits', 'cacheHitsOverTime', '#a855f7')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.cacheHitsOverTime || [], '#a855f7') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Cache Hits</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.cacheHits || 0}</div>
+                        </div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-amber-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.4) 0%, rgba(245, 158, 11, 0.5) 100%)', boxShadow: '0 4px 15px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('API Requests', 'apiRequestsOverTime', '#fbbf24')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.apiRequestsOverTime || [], '#fbbf24') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">API Requests</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.apiRequests || 0}</div>
+                      </div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-rose-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.4) 0%, rgba(225, 29, 72, 0.5) 100%)', boxShadow: '0 4px 15px rgba(244, 63, 94, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Errors', 'errorsOverTime', '#f43f5e')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.errorsOverTime || [], '#f43f5e') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Errors</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.errors || 0}</div>
                   </div>
-                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
-                    <div className="text-white/70 text-xs font-sora mb-1">Page Views</div>
-                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.pageViews || 0}</div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-fuchsia-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(240, 171, 252, 0.4) 0%, rgba(217, 70, 239, 0.5) 100%)', boxShadow: '0 4px 15px rgba(240, 171, 252, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Feature Used', 'featureClicksOverTime', '#e879f9')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.featureClicksOverTime || [], '#e879f9') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Feature Used</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.featureClicks || 0}</div>
+              </div>
+            </div>
+
+                {/* Session Stats Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-cyan-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(34, 211, 238, 0.4) 0%, rgba(6, 182, 212, 0.5) 100%)', boxShadow: '0 4px 15px rgba(34, 211, 238, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Site Opens', 'siteOpensOverTime', '#22d3ee')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.siteOpensOverTime || [], '#22d3ee') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Site Opens</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.siteOpens || 0}</div>
+                          </div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-indigo-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                    style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.4) 0%, rgba(79, 70, 229, 0.5) 100%)', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                    onClick={() => openStatModal('Unique Sessions', 'uniqueSessionsOverTime', '#6366f1')}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div 
+                      className="absolute bottom-0 right-0 w-24 h-16"
+                      dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.uniqueSessionsOverTime || [], '#6366f1') }}
+                    ></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Unique Sessions</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.uniqueSessions || 0}</div>
+                          </div>
+                  <div className="relative p-4 backdrop-blur rounded-2xl border border-teal-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(20, 184, 166, 0.4) 0%, rgba(15, 118, 110, 0.5) 100%)', boxShadow: '0 4px 15px rgba(20, 184, 166, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Active Sessions</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.activeSessions || 0}</div>
+                        </div>
+                  <div className="relative p-4 backdrop-blur rounded-2xl border border-pink-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(236, 72, 153, 0.4) 0%, rgba(219, 39, 119, 0.5) 100%)', boxShadow: '0 4px 15px rgba(236, 72, 153, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Ended Sessions</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.sessions || 0}</div>
+                      </div>
+                  <div className="relative p-4 backdrop-blur rounded-2xl border border-violet-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.4) 0%, rgba(124, 58, 237, 0.5) 100%)', boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Avg Sessions/User</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSessionsPerUser?.toFixed(1) || '0.0'}</div>
                   </div>
-                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
-                    <div className="text-white/70 text-xs font-sora mb-1">Cache Hits</div>
-                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.cacheHits || 0}</div>
-                  </div>
-                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
-                    <div className="text-white/70 text-xs font-sora mb-1">API Requests</div>
-                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.apiRequests || 0}</div>
-                  </div>
-                  <div className="relative p-4 backdrop-blur bg-white/10 border border-white/20 rounded-2xl">
-                    <div className="text-white/70 text-xs font-sora mb-1">Errors</div>
-                    <div className="text-white text-2xl font-sora font-bold">{analyticsData.summary?.errors || 0}</div>
+                  <div className="relative p-4 backdrop-blur rounded-2xl border border-orange-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 146, 60, 0.4) 0%, rgba(234, 88, 12, 0.5) 100%)', boxShadow: '0 4px 15px rgba(251, 146, 60, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Avg Opens/User</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSiteOpensPerUser?.toFixed(1) || '0.0'}</div>
                   </div>
                 </div>
 
-                {/* Page Visits Over Time */}
-                {analyticsData.charts?.pageVisitsOverTime && analyticsData.charts.pageVisitsOverTime.length > 0 && (
-                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                    <div className="text-white text-xl font-sora font-bold mb-4">Page Visits (Last 7 Days)</div>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={analyticsData.charts.pageVisitsOverTime}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                        <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                        <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                        <Line type="monotone" dataKey="count" stroke="#60a5fa" strokeWidth={2} dot={{ fill: '#60a5fa', r: 4 }} isAnimationActive={true} animationDuration={500} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
+                {/* Page Visits & Site Opens Over Time */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {analyticsData.charts?.pageVisitsOverTime && analyticsData.charts.pageVisitsOverTime.length > 0 && (
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-blue-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(37, 99, 235, 0.4) 100%)', boxShadow: '0 4px 20px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Page Visits ({getTimeRangeLabel(analyticsTimeRange)})</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <LineChart data={analyticsData.charts.pageVisitsOverTime}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis 
+                            dataKey="date" 
+                            stroke="#ffffff80" 
+                            tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
+                            interval={2}
+                          />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Tooltip 
+                            contentStyle={{ 
+                              backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+                              border: '1px solid rgba(255, 255, 255, 0.2)',
+                              borderRadius: '8px',
+                              fontFamily: 'Sora'
+                            }}
+                            labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
+                            itemStyle={{ color: '#60a5fa', fontFamily: 'Sora' }}
+                          />
+                          <Line type="monotone" dataKey="count" stroke="#60a5fa" strokeWidth={2} dot={{ fill: '#60a5fa', r: 4 }} isAnimationActive={true} animationDuration={500} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {analyticsData.charts?.siteOpensOverTime && analyticsData.charts.siteOpensOverTime.length > 0 && (
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-emerald-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.4) 100%)', boxShadow: '0 4px 20px rgba(16, 185, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Site Opens ({getTimeRangeLabel(analyticsTimeRange)})</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <LineChart data={analyticsData.charts.siteOpensOverTime}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis 
+                            dataKey="date" 
+                            stroke="#ffffff80" 
+                            tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
+                            interval={2}
+                          />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Tooltip 
+                            contentStyle={{ 
+                              backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+                              border: '1px solid rgba(255, 255, 255, 0.2)',
+                              borderRadius: '8px',
+                              fontFamily: 'Sora'
+                            }}
+                            labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
+                            itemStyle={{ color: '#34d399', fontFamily: 'Sora' }}
+                          />
+                          <Line type="monotone" dataKey="count" stroke="#34d399" strokeWidth={2} dot={{ fill: '#34d399', r: 4 }} isAnimationActive={true} animationDuration={500} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
 
                 {/* Charts Row 1 */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Page Visits by Page */}
                   {analyticsData.charts?.pageVisitsByPage && analyticsData.charts.pageVisitsByPage.length > 0 && (
-                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                      <div className="text-white text-xl font-sora font-bold mb-4">Page Visits by Page</div>
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-purple-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.3) 0%, rgba(147, 51, 234, 0.4) 100%)', boxShadow: '0 4px 20px rgba(168, 85, 247, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Page Visits by Page</div>
                       <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={analyticsData.charts.pageVisitsByPage}>
+                        <BarChart data={analyticsData.charts.pageVisitsByPage.map(item => ({
+                          ...item,
+                          page: item.page.startsWith('/') ? item.page.substring(1) : item.page
+                        }))}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis dataKey="page" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
@@ -539,21 +849,66 @@ export default function AdminPage() {
                     </div>
                   )}
 
+                  {/* Feature Used by Feature */}
+                  {analyticsData.charts?.featureUsage && analyticsData.charts.featureUsage.length > 0 && (
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-fuchsia-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(240, 171, 252, 0.3) 0%, rgba(217, 70, 239, 0.4) 100%)', boxShadow: '0 4px 20px rgba(240, 171, 252, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Feature Used by Feature</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={analyticsData.charts.featureUsage.map(item => ({
+                          ...item,
+                          feature: item.feature.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
+                        }))}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                          <XAxis dataKey="feature" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <Bar dataKey="count" fill="#e879f9" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* Charts Row 2 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Browser Distribution */}
                   {analyticsData.charts?.browserDistribution && analyticsData.charts.browserDistribution.length > 0 && (
-                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                      <div className="text-white text-xl font-sora font-bold mb-4">Browser Distribution</div>
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-cyan-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(34, 211, 238, 0.3) 0%, rgba(6, 182, 212, 0.4) 100%)', boxShadow: '0 4px 20px rgba(34, 211, 238, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Browser Distribution</div>
                       <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
                           <Pie
-                            data={analyticsData.charts.browserDistribution}
+                            data={(() => {
+                              const total = analyticsData.charts.browserDistribution.reduce((sum, item) => sum + item.count, 0);
+                              return analyticsData.charts.browserDistribution.map(item => ({
+                                ...item,
+                                percentage: total > 0 ? ((item.count / total) * 100).toFixed(1) : '0.0'
+                              }));
+                            })()}
                             dataKey="count"
                             nameKey="browser"
-                            cx="50%"
+                            cx="55%"
                             cy="50%"
-                            outerRadius={100}
-                            label={({ browser, count }) => `${browser}: ${count}`}
-                            labelLine={false}
+                            outerRadius={80}
+                            label={(props: any) => {
+                              const browser = props.browser || props.payload?.browser || '';
+                              const percentage = props.percentage || props.payload?.percentage || '0.0';
+                              return (
+                                <text
+                                  x={props.x}
+                                  y={props.y}
+                                  fill="#ffffff"
+                                  textAnchor={props.textAnchor}
+                                  dominantBaseline="central"
+                                  style={{ fontFamily: 'Sora', fontSize: '12px' }}
+                                >
+                                  {`${browser}: ${percentage}%`}
+                                </text>
+                              );
+                            }}
+                            labelLine={{ stroke: '#ffffff', strokeWidth: 1 }}
                             isAnimationActive={true}
                             animationDuration={500}
                           >
@@ -566,13 +921,11 @@ export default function AdminPage() {
                       </ResponsiveContainer>
                     </div>
                   )}
-                </div>
 
-                {/* Charts Row 2 */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Cache Hits vs API Requests */}
-                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                    <div className="text-white text-xl font-sora font-bold mb-4">Cache Hits vs API Requests</div>
+                  <div className="relative p-6 backdrop-blur rounded-3xl border border-amber-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.4) 100%)', boxShadow: '0 4px 20px rgba(251, 191, 36, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                    <div className="relative text-white text-xl font-sora font-bold mb-4">Cache Hits vs API Requests</div>
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={[
                         { name: 'Cache Hits', count: analyticsData.summary?.cacheHits || 0 },
@@ -584,36 +937,34 @@ export default function AdminPage() {
                         <Bar dataKey="count" fill="#34d399" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                       </BarChart>
                     </ResponsiveContainer>
-                  </div>
-
-                  {/* Feature Usage */}
-                  {analyticsData.charts?.featureUsage && analyticsData.charts.featureUsage.length > 0 && (
-                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                      <div className="text-white text-xl font-sora font-bold mb-4">Feature Usage</div>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={analyticsData.charts.featureUsage}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis dataKey="feature" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                          <Bar dataKey="count" fill="#fbbf24" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </div>
+              </div>
+            </div>
 
                 {/* Charts Row 3 */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Cache Hits by Type */}
                   {analyticsData.charts?.cacheHitsByType && analyticsData.charts.cacheHitsByType.length > 0 && (
-                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                      <div className="text-white text-xl font-sora font-bold mb-4">Cache Hits by Data Type</div>
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-indigo-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(79, 70, 229, 0.4) 100%)', boxShadow: '0 4px 20px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Cache Hits by Data Type</div>
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={analyticsData.charts.cacheHitsByType}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                          <Bar dataKey="count" fill="#a78bfa" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
+                          <Bar dataKey="count" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500}>
+                            {analyticsData.charts.cacheHitsByType.map((entry, index) => {
+                              // Different colors for each data type
+                              const typeColors: Record<string, string> = {
+                                'attendance': '#60a5fa',
+                                'marks': '#34d399',
+                                'calendar': '#fbbf24',
+                                'timetable': '#f87171',
+                              };
+                              const color = typeColors[entry.type.toLowerCase()] || '#a78bfa';
+                              return <Cell key={`cell-${index}`} fill={color} />;
+                            })}
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -621,8 +972,9 @@ export default function AdminPage() {
 
                   {/* Error Types */}
                   {analyticsData.charts?.errorTypes && analyticsData.charts.errorTypes.length > 0 && (
-                    <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                      <div className="text-white text-xl font-sora font-bold mb-4">Error Types</div>
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-rose-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.3) 0%, rgba(225, 29, 72, 0.4) 100%)', boxShadow: '0 4px 20px rgba(244, 63, 94, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Error Types</div>
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={analyticsData.charts.errorTypes}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
@@ -635,11 +987,32 @@ export default function AdminPage() {
                   )}
                 </div>
 
+                {/* Session Metrics */}
+                <div className="relative p-6 backdrop-blur rounded-3xl border border-teal-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(20, 184, 166, 0.3) 0%, rgba(15, 118, 110, 0.4) 100%)', boxShadow: '0 4px 20px rgba(20, 184, 166, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                  <div className="relative text-white text-xl font-sora font-bold mb-4">Session Metrics</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <div className="text-white/70 text-sm font-sora mb-1">Avg Session Duration</div>
+                      <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSessionDuration || 0} min</div>
+                    </div>
+                    <div>
+                      <div className="text-white/70 text-sm font-sora mb-1">Avg Sessions per User</div>
+                      <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSessionsPerUser?.toFixed(1) || '0.0'}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/70 text-sm font-sora mb-1">Avg Site Opens per User</div>
+                      <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSiteOpensPerUser?.toFixed(1) || '0.0'}</div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Performance Metrics */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                    <div className="text-white text-xl font-sora font-bold mb-4">Response Times</div>
-                    <div className="flex flex-col gap-3">
+                  <div className="relative p-6 backdrop-blur rounded-3xl border border-violet-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(124, 58, 237, 0.4) 100%)', boxShadow: '0 4px 20px rgba(139, 92, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                    <div className="relative text-white text-xl font-sora font-bold mb-4">Response Times</div>
+                    <div className="relative flex flex-col gap-3">
                       <div>
                         <div className="text-white/70 text-sm font-sora mb-1">Avg Cache Response</div>
                         <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgCacheResponseTime || 0}ms</div>
@@ -651,13 +1024,10 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                    <div className="text-white text-xl font-sora font-bold mb-4">User Engagement</div>
-                    <div className="flex flex-col gap-3">
-                      <div>
-                        <div className="text-white/70 text-sm font-sora mb-1">Avg Session Duration</div>
-                        <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSessionDuration || 0} min</div>
-                      </div>
+                  <div className="relative p-6 backdrop-blur rounded-3xl border border-orange-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 146, 60, 0.3) 0%, rgba(234, 88, 12, 0.4) 100%)', boxShadow: '0 4px 20px rgba(251, 146, 60, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                    <div className="relative text-white text-xl font-sora font-bold mb-4">User Engagement</div>
+                    <div className="relative flex flex-col gap-3">
                       <div>
                         <div className="text-white/70 text-sm font-sora mb-1">Avg Days/Week</div>
                         <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgDaysPerWeek || 0}</div>
@@ -665,9 +1035,10 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  <div className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl">
-                    <div className="text-white text-xl font-sora font-bold mb-4">User Types</div>
-                    <div className="flex flex-col gap-3">
+                  <div className="relative p-6 backdrop-blur rounded-3xl border border-sky-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.3) 0%, rgba(2, 132, 199, 0.4) 100%)', boxShadow: '0 4px 20px rgba(14, 165, 233, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                    <div className="relative text-white text-xl font-sora font-bold mb-4">User Types</div>
+                    <div className="relative flex flex-col gap-3">
                       <div>
                         <div className="text-white/70 text-sm font-sora mb-1">Heavy Users</div>
                         <div className="text-white text-2xl font-sora font-bold">{analyticsData.metrics?.heavyUsers || 0}</div>
@@ -939,6 +1310,75 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+
+      {/* Stat Card Detail Modal */}
+      {modalOpen && modalData && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setModalOpen(false)}
+        >
+          <div 
+            className="relative w-[90%] max-w-4xl p-6 backdrop-blur rounded-3xl border overflow-hidden"
+            style={{ 
+              background: `linear-gradient(135deg, ${modalData.color}20 0%, ${modalData.color}30 100%)`,
+              borderColor: `${modalData.color}40`,
+              boxShadow: `0 8px 32px ${modalData.color}30, inset 0 1px 0 rgba(255, 255, 255, 0.15)`
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+            <div className="relative">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-white text-2xl font-sora font-bold">{modalData.title} Over Time</h2>
+                <button
+                  onClick={() => setModalOpen(false)}
+                  className="text-white/70 hover:text-white transition-colors text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={modalData.data}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                  <XAxis 
+                    dataKey="date" 
+                    stroke="#ffffff80" 
+                    tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }}
+                    angle={-45}
+                    textAnchor="end"
+                    height={80}
+                    interval={2}
+                  />
+                  <YAxis 
+                    stroke="#ffffff80" 
+                    tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
+                    label={{ value: 'Count', angle: -90, position: 'insideLeft', fill: '#ffffff80', fontFamily: 'Sora' }}
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      borderRadius: '8px',
+                      fontFamily: 'Sora'
+                    }}
+                    labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
+                    itemStyle={{ color: modalData.color, fontFamily: 'Sora' }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="count" 
+                    stroke={modalData.color} 
+                    strokeWidth={3} 
+                    dot={{ fill: modalData.color, r: 5 }} 
+                    isAnimationActive={true} 
+                    animationDuration={500}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

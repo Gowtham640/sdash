@@ -4,7 +4,6 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 interface EventRow {
   id: string;
   user_id: string | null;
-  user_name: string | null;
   user_email: string | null;
   session_id: string | null;
   event_name: string;
@@ -69,17 +68,47 @@ function parseBrowser(userAgent: string): string {
 
 export async function GET(request: NextRequest) {
   try {
-    // Get date range (default: last 30 days)
+    // Get date range and filters
     const { searchParams } = new URL(request.url);
-    const days = parseInt(searchParams.get('days') || '30', 10);
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
+    const timeRange = searchParams.get('timeRange') || '30d'; // Default: past month
+    const semesterFilter = searchParams.get('semester'); // 'all', '1', '2', etc., or null
     
-    // Fetch all events from the last N days
-    const { data: events, error: eventsError } = await supabaseAdmin
+    // Calculate start date based on time range
+    let startDate: Date | null = null;
+    if (timeRange !== 'all') {
+      startDate = new Date();
+      if (timeRange === '1h') {
+        startDate.setHours(startDate.getHours() - 1);
+      } else if (timeRange === '24h') {
+        startDate.setHours(startDate.getHours() - 24);
+      } else if (timeRange === '48h') {
+        startDate.setHours(startDate.getHours() - 48);
+      } else if (timeRange === '7d') {
+        startDate.setDate(startDate.getDate() - 7);
+      } else if (timeRange === '30d') {
+        startDate.setDate(startDate.getDate() - 30);
+      } else if (timeRange === '180d') {
+        startDate.setDate(startDate.getDate() - 180);
+      } else if (timeRange === '365d') {
+        startDate.setDate(startDate.getDate() - 365);
+      } else {
+        // Fallback to 30 days for unknown values
+        startDate.setDate(startDate.getDate() - 30);
+      }
+    }
+    
+    // Build query for events
+    let eventsQuery = supabaseAdmin
       .from('events')
-      .select('*')
-      .gte('created_at', startDate.toISOString())
+      .select('*');
+    
+    // Only apply date filter if not "all"
+    if (startDate) {
+      eventsQuery = eventsQuery.gte('created_at', startDate.toISOString());
+    }
+    
+    // Fetch all events first
+    const { data: events, error: eventsError } = await eventsQuery
       .order('created_at', { ascending: false });
     
     if (eventsError) {
@@ -90,12 +119,34 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    const eventRows = (events || []) as EventRow[];
+    let eventRows = (events || []) as EventRow[];
     
-    // Get user count
-    const { count: userCount } = await supabaseAdmin
+    // Filter by semester if specified
+    if (semesterFilter && semesterFilter !== 'all') {
+      // Fetch users matching semester filter
+      const { data: filteredUsers } = await supabaseAdmin
+        .from('users')
+        .select('id, semester')
+        .eq('semester', parseInt(semesterFilter, 10));
+      
+      const filteredUserIds = new Set((filteredUsers || []).map(u => u.id));
+      
+      // Filter events by user IDs
+      eventRows = eventRows.filter(event => 
+        !event.user_id || filteredUserIds.has(event.user_id)
+      );
+    }
+    
+    // Get user count (filtered by semester if specified)
+    let userCountQuery = supabaseAdmin
       .from('users')
       .select('*', { count: 'exact', head: true });
+    
+    if (semesterFilter && semesterFilter !== 'all') {
+      userCountQuery = userCountQuery.eq('semester', parseInt(semesterFilter, 10));
+    }
+    
+    const { count: userCount } = await userCountQuery;
     
     // Calculate metrics
     const pageViews = eventRows.filter(e => e.event_name === 'page_view');
@@ -163,32 +214,249 @@ export async function GET(request: NextRequest) {
       if (responseTime) apiResponseTimes.push(responseTime);
     });
     
-    // Session durations
+    // Session analysis
     const sessionDurations: number[] = [];
+    const uniqueSessions = new Set<string>();
+    const sessionsByUser = new Map<string, Set<string>>(); // Track unique sessions per user
+    const siteOpensByUser = new Map<string, number>();
+    const activeSessions = new Set<string>(); // Sessions that started but haven't ended
+    
+    // Track all session IDs from events
+    eventRows.forEach(event => {
+      if (event.session_id) {
+        uniqueSessions.add(event.session_id);
+        
+        // Track unique sessions per user
+        if (event.user_id) {
+          if (!sessionsByUser.has(event.user_id)) {
+            sessionsByUser.set(event.user_id, new Set());
+          }
+          sessionsByUser.get(event.user_id)?.add(event.session_id);
+        }
+      }
+    });
+    
+    // Track site opens per user
+    siteOpens.forEach(event => {
+      if (event.user_id) {
+        siteOpensByUser.set(event.user_id, (siteOpensByUser.get(event.user_id) || 0) + 1);
+      }
+      if (event.session_id) {
+        activeSessions.add(event.session_id);
+      }
+    });
+    
+    // Remove ended sessions from active sessions
+    sessionEnds.forEach(event => {
+      if (event.session_id) {
+        activeSessions.delete(event.session_id);
+      }
+    });
+    
+    // Calculate session durations
     sessionEnds.forEach(event => {
       const duration = (event.event_data as { duration_ms?: number } | null)?.duration_ms;
       if (duration) sessionDurations.push(duration / 1000 / 60); // Convert to minutes
     });
     
-    // Page visits over time (last 7 days)
-    const pageVisitsOverTime = new Map<string, number>();
-    const last7Days = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      return date.toISOString().split('T')[0];
-    }).reverse();
+    // Calculate average unique sessions per user
+    const avgSessionsPerUser = sessionsByUser.size > 0
+      ? Array.from(sessionsByUser.values()).reduce((sum, sessionSet) => sum + sessionSet.size, 0) / sessionsByUser.size
+      : 0;
     
-    last7Days.forEach(date => {
-      pageVisitsOverTime.set(date, 0);
-    });
+    // Calculate average site opens per user
+    const avgSiteOpensPerUser = siteOpensByUser.size > 0
+      ? Array.from(siteOpensByUser.values()).reduce((a, b) => a + b, 0) / siteOpensByUser.size
+      : 0;
     
-    pageViews.forEach(event => {
-      if (event.created_at) {
-        const date = new Date(event.created_at).toISOString().split('T')[0];
-        if (pageVisitsOverTime.has(date)) {
-          pageVisitsOverTime.set(date, (pageVisitsOverTime.get(date) || 0) + 1);
+    // Generate time buckets based on time range
+    const generateTimeBuckets = (): Array<{ key: string; label: string; start: Date; end: Date }> => {
+      const buckets: Array<{ key: string; label: string; start: Date; end: Date }> = [];
+      const now = new Date();
+      
+      if (timeRange === '1h') {
+        // Last hour: 6 buckets of 10 minutes each
+        for (let i = 5; i >= 0; i--) {
+          const start = new Date(now.getTime() - (i + 1) * 10 * 60 * 1000);
+          const end = new Date(now.getTime() - i * 10 * 60 * 1000);
+          const key = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+          buckets.push({ key, label: key, start, end });
+        }
+      } else if (timeRange === '24h') {
+        // Last 24 hours: 12 buckets of 2 hours each
+        for (let i = 11; i >= 0; i--) {
+          const start = new Date(now.getTime() - (i + 1) * 2 * 60 * 60 * 1000);
+          const end = new Date(now.getTime() - i * 2 * 60 * 60 * 1000);
+          const key = `${start.getHours().toString().padStart(2, '0')}:00`;
+          buckets.push({ key, label: key, start, end });
+        }
+      } else if (timeRange === '48h') {
+        // Last 48 hours: 12 buckets of 4 hours each
+        for (let i = 11; i >= 0; i--) {
+          const start = new Date(now.getTime() - (i + 1) * 4 * 60 * 60 * 1000);
+          const end = new Date(now.getTime() - i * 4 * 60 * 60 * 1000);
+          const key = `${start.getDate()}/${start.getMonth() + 1} ${start.getHours().toString().padStart(2, '0')}:00`;
+          buckets.push({ key, label: key, start, end });
+        }
+      } else if (timeRange === '7d') {
+        // Last 7 days: daily buckets
+        for (let i = 6; i >= 0; i--) {
+          const date = new Date(now);
+          date.setDate(date.getDate() - i);
+          const key = date.toISOString().split('T')[0];
+          const label = `${date.getDate()}/${date.getMonth() + 1}`;
+          const start = new Date(date);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(date);
+          end.setHours(23, 59, 59, 999);
+          buckets.push({ key, label, start, end });
+        }
+      } else if (timeRange === '30d') {
+        // Last 30 days: 15 buckets of 2 days each
+        for (let i = 14; i >= 0; i--) {
+          const date = new Date(now);
+          date.setDate(date.getDate() - i * 2);
+          const key = date.toISOString().split('T')[0];
+          const label = `${date.getDate()}/${date.getMonth() + 1}`;
+          const start = new Date(date);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(date);
+          end.setDate(end.getDate() + 1);
+          end.setHours(23, 59, 59, 999);
+          buckets.push({ key, label, start, end });
+        }
+      } else if (timeRange === '180d') {
+        // Last 6 months: 13 buckets of 2 weeks each
+        for (let i = 12; i >= 0; i--) {
+          const date = new Date(now);
+          date.setDate(date.getDate() - i * 14);
+          const weekStart = new Date(date);
+          weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+          const key = weekStart.toISOString().split('T')[0];
+          const label = `${weekStart.getDate()}/${weekStart.getMonth() + 1}`;
+          const weekEnd = new Date(weekStart);
+          weekEnd.setDate(weekEnd.getDate() + 13);
+          buckets.push({ key, label, start: weekStart, end: weekEnd });
+        }
+      } else if (timeRange === '365d') {
+        // Last year: monthly buckets
+        for (let i = 11; i >= 0; i--) {
+          const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+          const label = `${date.getMonth() + 1}/${date.getFullYear().toString().slice(2)}`;
+          const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+          buckets.push({ key, label, start: date, end: monthEnd });
+        }
+      } else {
+        // All time: 12 buckets of 2 months each
+        for (let i = 11; i >= 0; i--) {
+          const date = new Date(now.getFullYear(), now.getMonth() - i * 2, 1);
+          const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+          const label = `${date.getMonth() + 1}/${date.getFullYear().toString().slice(2)}`;
+          const monthEnd = new Date(date.getFullYear(), date.getMonth() + 2, 0);
+          buckets.push({ key, label, start: date, end: monthEnd });
         }
       }
+      
+      return buckets;
+    };
+    
+    const timeBuckets = generateTimeBuckets();
+    
+    // Helper function to get bucket key for an event timestamp
+    const getBucketKey = (timestamp: string): string | null => {
+      const eventDate = new Date(timestamp);
+      for (const bucket of timeBuckets) {
+        if (eventDate >= bucket.start && eventDate <= bucket.end) {
+          return bucket.key;
+        }
+      }
+      return null;
+    };
+    
+    // Site opens over time
+    const siteOpensOverTime = new Map<string, number>();
+    timeBuckets.forEach(bucket => {
+      siteOpensOverTime.set(bucket.key, 0);
+    });
+    siteOpens.forEach(event => {
+      if (event.created_at) {
+        const bucketKey = getBucketKey(event.created_at);
+        if (bucketKey && siteOpensOverTime.has(bucketKey)) {
+          siteOpensOverTime.set(bucketKey, (siteOpensOverTime.get(bucketKey) || 0) + 1);
+        }
+      }
+    });
+    
+    // Page visits over time
+    const pageVisitsOverTime = new Map<string, number>();
+    timeBuckets.forEach(bucket => {
+      pageVisitsOverTime.set(bucket.key, 0);
+    });
+    pageViews.forEach(event => {
+      if (event.created_at) {
+        const bucketKey = getBucketKey(event.created_at);
+        if (bucketKey && pageVisitsOverTime.has(bucketKey)) {
+          pageVisitsOverTime.set(bucketKey, (pageVisitsOverTime.get(bucketKey) || 0) + 1);
+        }
+      }
+    });
+    
+    // Generate time-series data for all metrics
+    const generateTimeSeries = (events: EventRow[], eventName: string): Map<string, number> => {
+      const timeSeries = new Map<string, number>();
+      timeBuckets.forEach(bucket => {
+        timeSeries.set(bucket.key, 0);
+      });
+      events.forEach(event => {
+        if (event.created_at && event.event_name === eventName) {
+          const bucketKey = getBucketKey(event.created_at);
+          if (bucketKey && timeSeries.has(bucketKey)) {
+            timeSeries.set(bucketKey, (timeSeries.get(bucketKey) || 0) + 1);
+          }
+        }
+      });
+      return timeSeries;
+    };
+    
+    // Time-series for all metrics
+    const totalUsersOverTime = new Map<string, number>();
+    const uniqueUsersPerBucket = new Map<string, Set<string>>();
+    timeBuckets.forEach(bucket => {
+      uniqueUsersPerBucket.set(bucket.key, new Set());
+      totalUsersOverTime.set(bucket.key, 0);
+    });
+    eventRows.forEach(event => {
+      if (event.created_at && event.user_id) {
+        const bucketKey = getBucketKey(event.created_at);
+        if (bucketKey && uniqueUsersPerBucket.has(bucketKey)) {
+          uniqueUsersPerBucket.get(bucketKey)?.add(event.user_id);
+        }
+      }
+    });
+    uniqueUsersPerBucket.forEach((userSet, key) => {
+      totalUsersOverTime.set(key, userSet.size);
+    });
+    
+    const cacheHitsOverTime = generateTimeSeries(cacheHits, 'cache_hit');
+    const apiRequestsOverTime = generateTimeSeries(apiRequests, 'api_request');
+    const errorsOverTime = generateTimeSeries(errors, 'error');
+    const featureClicksOverTime = generateTimeSeries(featureClicks, 'feature_click');
+    const uniqueSessionsOverTime = new Map<string, Set<string>>();
+    timeBuckets.forEach(bucket => {
+      uniqueSessionsOverTime.set(bucket.key, new Set());
+    });
+    eventRows.forEach(event => {
+      if (event.created_at && event.session_id) {
+        const bucketKey = getBucketKey(event.created_at);
+        if (bucketKey && uniqueSessionsOverTime.has(bucketKey)) {
+          uniqueSessionsOverTime.get(bucketKey)?.add(event.session_id);
+        }
+      }
+    });
+    const uniqueSessionsOverTimeCount = new Map<string, number>();
+    uniqueSessionsOverTime.forEach((sessionSet, key) => {
+      uniqueSessionsOverTimeCount.set(key, sessionSet.size);
     });
     
     // User engagement (events per user)
@@ -227,6 +495,8 @@ export async function GET(request: NextRequest) {
           errors: errors.length,
           featureClicks: featureClicks.length,
           sessions: sessionEnds.length,
+          uniqueSessions: uniqueSessions.size,
+          activeSessions: activeSessions.size,
         },
         // Charts data
         charts: {
@@ -254,9 +524,37 @@ export async function GET(request: NextRequest) {
             type,
             count,
           })),
-          pageVisitsOverTime: Array.from(pageVisitsOverTime.entries()).map(([date, count]) => ({
-            date,
-            count,
+          pageVisitsOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: pageVisitsOverTime.get(bucket.key) || 0,
+          })),
+          siteOpensOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: siteOpensOverTime.get(bucket.key) || 0,
+          })),
+          totalUsersOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: totalUsersOverTime.get(bucket.key) || 0,
+          })),
+          cacheHitsOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: cacheHitsOverTime.get(bucket.key) || 0,
+          })),
+          apiRequestsOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: apiRequestsOverTime.get(bucket.key) || 0,
+          })),
+          errorsOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: errorsOverTime.get(bucket.key) || 0,
+          })),
+          featureClicksOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: featureClicksOverTime.get(bucket.key) || 0,
+          })),
+          uniqueSessionsOverTime: timeBuckets.map(bucket => ({
+            date: bucket.label,
+            count: uniqueSessionsOverTimeCount.get(bucket.key) || 0,
           })),
         },
         // Metrics
@@ -273,6 +571,8 @@ export async function GET(request: NextRequest) {
           heavyUsers,
           casualUsers,
           avgDaysPerWeek: Math.round(avgDaysPerWeek * 10) / 10,
+          avgSessionsPerUser: Math.round(avgSessionsPerUser * 10) / 10,
+          avgSiteOpensPerUser: Math.round(avgSiteOpensPerUser * 10) / 10,
         },
         // Response time distributions
         responseTimes: {

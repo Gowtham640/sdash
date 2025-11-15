@@ -270,12 +270,9 @@ export default function AttendancePage() {
       return;
     }
 
-    // Mark as calculating and track feature click
+    // Mark as calculating
     isCalculatingRef.current = true;
     setIsCalculating(true);
-    
-    // Track that prediction was calculated (feature used) - only once
-    trackFeatureClick('predict_attendance_calculate', '/attendance');
     
     try {
       const results = calculatePredictedAttendance(
@@ -310,12 +307,9 @@ export default function AttendancePage() {
       return;
     }
 
-    // Mark as calculating and track feature click
+    // Mark as calculating
     isOdmlCalculatingRef.current = true;
     setIsCalculating(true);
-    
-    // Track that OD/ML was calculated (feature used) - only once
-    trackFeatureClick('odml_calculate', '/attendance');
     
     try {
       const results = calculateODMLAdjustedAttendance(
@@ -447,13 +441,20 @@ export default function AttendancePage() {
       let attendanceDataObj: AttendanceData | null = null;
       let extractedSemester: number = 1;
       
+      console.log('[Attendance] Processing attendance data from API response');
+      console.log('[Attendance] result.data.attendance type:', typeof result.data.attendance);
+      console.log('[Attendance] result.data.attendance keys:', result.data.attendance ? Object.keys(result.data.attendance) : 'null/undefined');
+      console.log('[Attendance] result.data.attendance sample:', result.data.attendance ? JSON.stringify(result.data.attendance).substring(0, 500) : 'null/undefined');
+      
       if (result.data.attendance && typeof result.data.attendance === 'object') {
         // Check if it's direct format (has all_subjects, summary, metadata at root)
         if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
           // Direct format
           attendanceDataObj = result.data.attendance as AttendanceData;
           extractedSemester = (result.data.attendance as { metadata?: { semester?: number } }).metadata?.semester || 1;
-          console.log('[Attendance] Attendance data is direct format');
+          console.log('[Attendance] ✅ Attendance data is direct format');
+          console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
+          console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
         } 
         // Check if it's wrapped format: {success: true, data: {...}}
         else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
@@ -463,9 +464,21 @@ export default function AttendancePage() {
           if (isSuccess && attendanceWrapper.data) {
             attendanceDataObj = attendanceWrapper.data;
             extractedSemester = attendanceWrapper.semester || attendanceWrapper.data.metadata?.semester || 1;
-            console.log('[Attendance] Attendance data is wrapped format');
+            console.log('[Attendance] ✅ Attendance data is wrapped format');
+            console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
+            console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
+          } else {
+            console.warn('[Attendance] ⚠️ Wrapped format but no valid data found');
           }
+        } else {
+          console.warn('[Attendance] ⚠️ Attendance data object exists but doesn\'t match expected formats');
+          console.warn('[Attendance]   - Has all_subjects:', 'all_subjects' in result.data.attendance);
+          console.warn('[Attendance]   - Has summary:', 'summary' in result.data.attendance);
+          console.warn('[Attendance]   - Has success:', 'success' in result.data.attendance);
+          console.warn('[Attendance]   - Has data:', 'data' in result.data.attendance);
         }
+      } else {
+        console.warn('[Attendance] ⚠️ result.data.attendance is not an object or is null/undefined');
       }
       
       if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
@@ -896,7 +909,7 @@ export default function AttendancePage() {
                     }
                     isOpeningOdmlModal.current = true;
                     
-                    // Don't track when opening modal - only track when calculating (like attendance prediction)
+                    trackFeatureClick('predict_odml', '/attendance');
                     setShowODMLModal(true);
                     
                     // Reset after a short delay

@@ -23,6 +23,7 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
 
   useEffect(() => {
     // Track page view only on actual route change (not rerenders)
+    // The trackPageView function has built-in deduplication, so we can call it safely
     if (pathname && pathname !== lastPathnameRef.current) {
       lastPathnameRef.current = pathname;
       trackPageView(pathname);

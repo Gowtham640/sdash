@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { access_token, password, force_refresh, types } = body;
+    const { access_token, password, force_refresh, types, session_id } = body;
     
     const forceRefresh = force_refresh === true || force_refresh === 'true';
     
@@ -89,6 +89,7 @@ export async function POST(request: NextRequest) {
     console.log("  - access_token_length:", access_token?.length || 0);
     console.log("  - force_refresh:", forceRefresh);
     console.log("  - requested_types:", requestedTypes || "all");
+    console.log("  - session_id:", session_id || "none");
 
     if (!access_token) {
       console.error("[API /data/all] ❌ No access token provided");
@@ -150,7 +151,7 @@ export async function POST(request: NextRequest) {
     
     if (shouldFetchCalendar) {
       try {
-        calendarInfo = await getSupabaseCacheWithInfo(user_id, 'calendar', forceRefresh);
+        calendarInfo = await getSupabaseCacheWithInfo(user_id, 'calendar', forceRefresh, session_id);
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking calendar cache:`, error);
         console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
@@ -164,7 +165,7 @@ export async function POST(request: NextRequest) {
     
     if (shouldFetchTimetable) {
       try {
-        timetableInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', forceRefresh);
+        timetableInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', forceRefresh, session_id);
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking timetable cache:`, error);
         console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
@@ -178,7 +179,7 @@ export async function POST(request: NextRequest) {
     
     if (shouldFetchAttendance) {
       try {
-        attendanceInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', forceRefresh);
+        attendanceInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', forceRefresh, session_id);
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking attendance cache:`, error);
         console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
@@ -192,7 +193,7 @@ export async function POST(request: NextRequest) {
     
     if (shouldFetchMarks) {
       try {
-        marksInfo = await getSupabaseCacheWithInfo(user_id, 'marks', forceRefresh);
+        marksInfo = await getSupabaseCacheWithInfo(user_id, 'marks', forceRefresh, session_id);
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking marks cache:`, error);
         console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
@@ -303,7 +304,8 @@ export async function POST(request: NextRequest) {
     let staticData: Record<string, unknown> | null = null;
     let dynamicData: Record<string, unknown> | null = null;
     const backendStartTime = Date.now();
-    let backendWasCalled = false; // Track if backend scraper was actually called
+    let backendWasCalled = false; // Track if backend scraper was actually called (for api_request tracking)
+    const backendCallReasons: string[] = []; // Track why backend was called (for logging)
 
     // OPTIMIZATION: If all data is missing, use two-request logic (fastest)
     // If only one type is missing, fetch only that type (fastest for single missing)
@@ -312,6 +314,8 @@ export async function POST(request: NextRequest) {
       // Fetch dynamic data first (attendance + marks together)
       try {
         backendWasCalled = true;
+        backendCallReasons.push('all data missing - fetching dynamic data');
+        console.log(`[API /data/all] 🔄 Backend scraper call #1: Fetching dynamic data (attendance + marks)`);
         const dynamicStartTime = Date.now();
         dynamicData = await callPythonDynamicData(user_email, user_id, password);
         const dynamicDuration = Date.now() - dynamicStartTime;
@@ -351,6 +355,8 @@ export async function POST(request: NextRequest) {
       // Fetch static data (calendar + timetable together)
       try {
         backendWasCalled = true;
+        backendCallReasons.push('all data missing - fetching static data');
+        console.log(`[API /data/all] 🔄 Backend scraper call #2: Fetching static data (calendar + timetable)`);
         const staticStartTime = Date.now();
         staticData = await callPythonStaticData(user_email, user_id, password);
         const staticDuration = Date.now() - staticStartTime;
@@ -414,6 +420,8 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ⏳ Fetching only calendar...`);
         try {
           backendWasCalled = true;
+          backendCallReasons.push(`calendar ${forceRefresh ? 'force refresh' : 'cache miss'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching calendar`);
           const calendarResult = await callPythonIndividualData(user_email, user_id, password, 'calendar');
           if (calendarResult.success && calendarResult.data) {
             (staticData.data as { calendar?: unknown }).calendar = calendarResult.data;
@@ -440,6 +448,8 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ⏳ Fetching only timetable...`);
         try {
           backendWasCalled = true;
+          backendCallReasons.push(`timetable ${forceRefresh ? 'force refresh' : 'cache miss'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching timetable`);
           const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
           if (timetableResult.success && timetableResult.data) {
             (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
@@ -466,6 +476,8 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ⏳ Fetching static data (calendar + timetable)...`);
         try {
           backendWasCalled = true;
+          backendCallReasons.push(`static data (calendar+timetable) ${forceRefresh ? 'force refresh' : 'cache miss'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching static data (calendar + timetable)`);
           const staticResult = await callPythonStaticData(user_email, user_id, password);
           if (staticResult.success) {
             const staticDataData = staticResult.data as { calendar?: unknown; timetable?: unknown } | undefined;
@@ -507,6 +519,8 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ⏳ Fetching only attendance...`);
         try {
           backendWasCalled = true;
+          backendCallReasons.push(`attendance ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching attendance`);
           const attendanceResult = await callPythonIndividualData(user_email, user_id, password, 'attendance');
           if (attendanceResult.success && attendanceResult.data) {
             (dynamicData.data as { attendance?: unknown }).attendance = attendanceResult.data;
@@ -533,6 +547,8 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ⏳ Fetching only marks...`);
         try {
           backendWasCalled = true;
+          backendCallReasons.push(`marks ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching marks`);
           const marksResult = await callPythonIndividualData(user_email, user_id, password, 'marks');
           if (marksResult.success && marksResult.data) {
             (dynamicData.data as { marks?: unknown }).marks = marksResult.data;
@@ -559,6 +575,8 @@ export async function POST(request: NextRequest) {
         console.log(`[API /data/all] ⏳ Fetching dynamic data (attendance + marks)...`);
         try {
           backendWasCalled = true;
+          backendCallReasons.push(`dynamic data (attendance+marks) ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching dynamic data (attendance + marks)`);
           const dynamicResult = await callPythonDynamicData(user_email, user_id, password);
           if (dynamicResult.success) {
             const dynamicDataData = dynamicResult.data as { attendance?: unknown; marks?: unknown } | undefined;
@@ -599,8 +617,13 @@ export async function POST(request: NextRequest) {
     const backendDuration = Date.now() - backendStartTime;
     console.log(`[API /data/all] 🔄 Data fetch completed: ${backendDuration}ms total`);
     
-    // Merge results (combine cached and fresh data)
-    const result = mergeSplitDataResults(staticData, dynamicData);
+    // Merge results (combine cached and fresh data) - only include requested types
+    const result = mergeSplitDataResults(staticData, dynamicData, {
+      shouldFetchCalendar,
+      shouldFetchTimetable,
+      shouldFetchAttendance,
+      shouldFetchMarks,
+    });
     
     console.log(`[API /data/all] 📊 Merged result:`);
     const mergedResultTyped = result as { success?: boolean };
@@ -778,11 +801,18 @@ export async function POST(request: NextRequest) {
     console.log(`[API /data/all]   - Course in response: ${course || 'none'}`);
     console.log("===========================================");
 
-    // Only track API request if backend scraper was actually called
+    // Track API request if backend scraper was actually called (force refresh or cache miss)
     if (backendWasCalled) {
       const backendDuration = Date.now() - backendStartTime;
-      // Track API request (async, non-blocking)
-      void trackApiRequest('/api/data/all', user_id, 'all', backendDuration, finalResultTyped.success ?? false);
+      console.log(`[API /data/all] 📊 Backend scraper was called - tracking api_request event`);
+      console.log(`[API /data/all]   - Backend duration: ${backendDuration}ms`);
+      console.log(`[API /data/all]   - Success: ${finalResultTyped.success ?? false}`);
+      console.log(`[API /data/all]   - Reasons: ${backendCallReasons.join(', ')}`);
+      // Track API request (async, non-blocking) - this represents a backend scraper call
+      void trackApiRequest('/api/data/all', user_id, 'all', backendDuration, finalResultTyped.success ?? false, undefined, undefined, session_id);
+    } else {
+      console.log(`[API /data/all] 📊 No backend scraper call - all data from cache (no api_request event)`);
+      console.log(`[API /data/all]   - Only cache_hit events will be tracked`);
     }
 
     // Return the unified data
@@ -803,9 +833,9 @@ export async function POST(request: NextRequest) {
     // Track error (async, non-blocking)
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorType = error instanceof Error ? error.constructor.name : typeof error;
-    void trackServerError(errorMessage, errorType, user_id, '/api/data/all');
+    void trackServerError(errorMessage, errorType, user_id, '/api/data/all', session_id);
     // Track API request for error case (backend was attempted)
-    void trackApiRequest('/api/data/all', user_id, 'all', totalTime, false);
+    void trackApiRequest('/api/data/all', user_id, 'all', totalTime, false, undefined, undefined, session_id);
     
     return NextResponse.json(
       {
@@ -1152,28 +1182,57 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
 
 /**
  * Merge static and dynamic data results into unified format
+ * Only includes requested data types in the response
  */
 function mergeSplitDataResults(
   staticData: Record<string, unknown> | null,
-  dynamicData: Record<string, unknown> | null
+  dynamicData: Record<string, unknown> | null,
+  options?: {
+    shouldFetchCalendar?: boolean;
+    shouldFetchTimetable?: boolean;
+    shouldFetchAttendance?: boolean;
+    shouldFetchMarks?: boolean;
+  }
 ): Record<string, unknown> {
   const staticSuccess = staticData && staticData.success;
   const dynamicSuccess = dynamicData && dynamicData.success;
   const overallSuccess = staticSuccess || dynamicSuccess;
   
+  const shouldFetchCalendar = options?.shouldFetchCalendar ?? true;
+  const shouldFetchTimetable = options?.shouldFetchTimetable ?? true;
+  const shouldFetchAttendance = options?.shouldFetchAttendance ?? true;
+  const shouldFetchMarks = options?.shouldFetchMarks ?? true;
+  
   console.log(`[API /data/all] 🔗 Merging split data results`);
   console.log(`[API /data/all]   - Static data success: ${staticSuccess}`);
   console.log(`[API /data/all]   - Dynamic data success: ${dynamicSuccess}`);
   console.log(`[API /data/all]   - Overall success: ${overallSuccess}`);
+  console.log(`[API /data/all]   - Including: calendar=${shouldFetchCalendar}, timetable=${shouldFetchTimetable}, attendance=${shouldFetchAttendance}, marks=${shouldFetchMarks}`);
+  
+  // Build data object only with requested types
+  const dataObject: Record<string, unknown> = {};
+  
+  if (shouldFetchCalendar) {
+    dataObject.calendar = (staticData?.data as { calendar?: unknown } | undefined)?.calendar ?? null;
+  }
+  
+  if (shouldFetchTimetable) {
+    dataObject.timetable = (staticData?.data as { timetable?: unknown } | undefined)?.timetable ?? null;
+  }
+  
+  if (shouldFetchAttendance) {
+    // Get attendance from dynamicData - it might be directly in data.attendance or wrapped
+    const attendanceFromDynamic = (dynamicData?.data as { attendance?: unknown } | undefined)?.attendance;
+    dataObject.attendance = attendanceFromDynamic ?? null;
+  }
+  
+  if (shouldFetchMarks) {
+    dataObject.marks = (dynamicData?.data as { marks?: unknown } | undefined)?.marks ?? null;
+  }
   
   const merged: Record<string, unknown> = {
     success: overallSuccess,
-    data: {
-      calendar: (staticData?.data as { calendar?: unknown } | undefined)?.calendar || { success: false, error: "Not fetched" },
-      timetable: (staticData?.data as { timetable?: unknown } | undefined)?.timetable || { success: false, error: "Not fetched" },
-      attendance: (dynamicData?.data as { attendance?: unknown } | undefined)?.attendance || { success: false, error: "Not fetched" },
-      marks: (dynamicData?.data as { marks?: unknown } | undefined)?.marks || { success: false, error: "Not fetched" },
-    },
+    data: dataObject,
     metadata: {
       generated_at: new Date().toISOString(),
       source: "SRM Academia Portal - Split Data Fetch",

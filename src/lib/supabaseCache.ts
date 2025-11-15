@@ -45,9 +45,10 @@ export interface CacheInfo {
 export async function getSupabaseCache(
   user_id: string,
   dataType: CacheDataType,
-  forceRefresh: boolean = false
+  forceRefresh: boolean = false,
+  sessionId?: string | null
 ): Promise<unknown | null> {
-  const cacheInfo = await getSupabaseCacheWithInfo(user_id, dataType, forceRefresh);
+  const cacheInfo = await getSupabaseCacheWithInfo(user_id, dataType, forceRefresh, sessionId);
   return cacheInfo?.data || null;
 }
 
@@ -57,7 +58,8 @@ export async function getSupabaseCache(
 export async function getSupabaseCacheWithInfo(
   user_id: string,
   dataType: CacheDataType,
-  forceRefresh: boolean = false
+  forceRefresh: boolean = false,
+  sessionId?: string | null
 ): Promise<CacheInfo | null> {
   if (forceRefresh) {
     console.log(`[SupabaseCache] Force refresh requested for ${dataType}, skipping cache`);
@@ -130,7 +132,7 @@ export async function getSupabaseCacheWithInfo(
 
     // Track cache hit event (async, non-blocking)
     const { trackCacheHit } = await import('@/lib/analyticsServer');
-    void trackCacheHit(dataType, user_id, responseTime);
+    void trackCacheHit(dataType, user_id, responseTime, sessionId);
 
     return {
       data: entry.data,

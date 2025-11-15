@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 /**
  * Decode JWT token to extract user info
  */
-function decodeJWT(token: string): { user_id?: string; email?: string; name?: string } | null {
+function decodeJWT(token: string): { user_id?: string; email?: string } | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) {
@@ -13,12 +13,11 @@ function decodeJWT(token: string): { user_id?: string; email?: string; name?: st
 
     const payload = parts[1];
     const decoded = Buffer.from(payload, 'base64').toString('utf-8');
-    const claims = JSON.parse(decoded) as { sub?: string; email?: string; user_metadata?: { name?: string } };
+    const claims = JSON.parse(decoded) as { sub?: string; email?: string };
     
     return {
       user_id: claims.sub,
       email: claims.email,
-      name: claims.user_metadata?.name,
     };
   } catch (error) {
     console.error("[API /analytics/track] JWT decode error:", error);
@@ -29,7 +28,7 @@ function decodeJWT(token: string): { user_id?: string; email?: string; name?: st
 /**
  * Extract user info from request headers
  */
-function getUserInfo(request: NextRequest): { user_id: string | null; user_email: string | null; user_name: string | null } {
+function getUserInfo(request: NextRequest): { user_id: string | null; user_email: string | null } {
   // Try to get access token from Authorization header
   const authHeader = request.headers.get('authorization');
   let token: string | null = null;
@@ -46,14 +45,13 @@ function getUserInfo(request: NextRequest): { user_id: string | null; user_email
   }
   
   if (!token) {
-    return { user_id: null, user_email: null, user_name: null };
+    return { user_id: null, user_email: null };
   }
   
   const userInfo = decodeJWT(token);
   return {
     user_id: userInfo?.user_id ?? null,
     user_email: userInfo?.email ?? null,
-    user_name: userInfo?.name ?? null,
   };
 }
 
@@ -85,12 +83,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     
     // Extract user info from request
-    const { user_id, user_email, user_name } = getUserInfo(request);
+    const { user_id, user_email } = getUserInfo(request);
     
     // Prepare events for insertion
     const eventsToInsert = body.events.map((event) => ({
       user_id: user_id ?? null,
-      user_name: user_name ?? null,
       user_email: user_email ?? null,
       session_id: event.session_id ?? null,
       event_name: event.event_name,

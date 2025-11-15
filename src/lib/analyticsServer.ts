@@ -114,12 +114,13 @@ export async function trackServerEvent(
 export async function trackCacheHit(
   dataType: string,
   userId?: string | null,
-  responseTime?: number
+  responseTime?: number,
+  sessionId?: string | null
 ): Promise<void> {
   await trackServerEvent('cache_hit', {
     data_type: dataType,
     response_time: responseTime,
-  }, userId);
+  }, userId, sessionId);
 }
 
 /**
@@ -132,7 +133,8 @@ export async function trackApiRequest(
   responseTime?: number,
   success?: boolean,
   cacheHitCount?: number,
-  cacheHitTypes?: string[]
+  cacheHitTypes?: string[],
+  sessionId?: string | null
 ): Promise<void> {
   const eventData: ServerEventData = {
     endpoint,
@@ -149,7 +151,7 @@ export async function trackApiRequest(
     }
   }
   
-  await trackServerEvent('api_request', eventData, userId);
+  await trackServerEvent('api_request', eventData, userId, sessionId);
 }
 
 /**
@@ -159,12 +161,13 @@ export async function trackServerError(
   errorMessage: string,
   errorType: string,
   userId?: string | null,
-  page?: string
+  page?: string,
+  sessionId?: string | null
 ): Promise<void> {
   await trackServerEvent('error', {
     error_message: errorMessage,
     error_type: errorType,
     page: page ?? 'server',
-  }, userId);
+  }, userId, sessionId);
 }
 
