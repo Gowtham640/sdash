@@ -278,13 +278,13 @@ export default function Dashboard() {
       }
 
       // Check client-side cache first (unless force refresh)
+      // Note: Calendar is always fetched fresh from public.calendar table, not from cache
       if (!forceRefresh) {
         const cachedData = getClientCache('unified');
         if (cachedData) {
-          console.log('[Dashboard] ✅ Using client-side cache (instant load)');
+          console.log('[Dashboard] ✅ Using client-side cache for non-calendar data (calendar always fetched fresh)');
           const cached = cachedData as {
             data?: {
-              calendar?: CalendarEvent[];
               attendance?: AttendanceData;
               marks?: MarksData;
               timetable?: unknown;
@@ -292,15 +292,13 @@ export default function Dashboard() {
           };
           
           if (cached.data) {
-            if (cached.data.calendar) setCalendarData(cached.data.calendar);
+            // Calendar is always fetched fresh from public.calendar, not from cache
             if (cached.data.attendance) setAttendanceData(cached.data.attendance);
             if (cached.data.marks) setMarksData(cached.data.marks);
             if (cached.data.timetable) setTimetableData(cached.data.timetable);
           }
           
-          setLoading(false);
-          registerAttendanceFetch();
-          return;
+          // Don't return early - continue to fetch calendar from API
         }
       } else {
         // Force refresh: clear client cache
@@ -337,7 +335,36 @@ export default function Dashboard() {
       });
 
       const apiDuration = Date.now() - apiStartTime;
-        result = await response.json();
+      
+      // Check if response is OK and has content before parsing JSON
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[Dashboard] ❌ API error response (${response.status}):`, errorText);
+        throw new Error(`API request failed with status ${response.status}: ${errorText}`);
+      }
+      
+      // Check if response has content
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error(`[Dashboard] ❌ Invalid response content type:`, contentType);
+        console.error(`[Dashboard]   - Response body:`, text.substring(0, 200));
+        throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
+      }
+      
+      // Parse JSON with error handling
+      try {
+        const responseText = await response.text();
+        if (!responseText || responseText.trim().length === 0) {
+          console.error(`[Dashboard] ❌ Empty response body`);
+          throw new Error('Empty response from server');
+        }
+        result = JSON.parse(responseText);
+      } catch (jsonError) {
+        console.error(`[Dashboard] ❌ JSON parse error:`, jsonError);
+        console.error(`[Dashboard]   - Response status: ${response.status}`);
+        throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+      }
       
       console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
       console.log(`[Dashboard]   - Success: ${result.success}`);
@@ -697,26 +724,16 @@ export default function Dashboard() {
     }
 
     // Save to client-side cache (1 hour TTL)
-    // Use processed data from result, not state (state may not be updated yet)
-    const processedCalendar = calendarEvents && calendarEvents.length > 0 ? 
-      markSaturdaysAsHolidays(calendarEvents, 
-        result.data.attendance?.semester || 
-        result.data.attendance?.data?.metadata?.semester || 
-        result.metadata?.semester || 
-        (result as { semester?: number }).semester || 
-        parseInt(getStorageItem('user_semester') || '1', 10) || 1
-      ) : null;
-    
+    // Note: Calendar is NOT cached - it's always fetched fresh from public.calendar table
     const cacheData = {
       data: {
-        calendar: processedCalendar || calendarData,
         attendance: attendanceDataObj || attendanceData,
         marks: marksDataObj || marksData,
         timetable: timetableDataObj || timetableData,
       },
     };
     setClientCache('unified', cacheData);
-    console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL)');
+    console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL) - calendar excluded (always fresh)');
   };
 
   const calculatePresentHours = (conducted: string, absent: string): number => {

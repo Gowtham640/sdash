@@ -85,8 +85,68 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Extract user info from request
     const { user_id, user_email } = getUserInfo(request);
     
+    // Deduplicate events server-side (check for existing events with same fingerprint)
+    // For session_end and site_open, check for duplicates in the last 5 seconds
+    const deduplicatedEvents: QueuedEvent[] = [];
+    const seenFingerprints = new Set<string>();
+    
+    for (const event of body.events) {
+      // Create fingerprint for deduplication
+      let fingerprint: string;
+      
+      if (event.event_name === 'session_end') {
+        // For session_end, use session_id + session_end timestamp
+        const sessionEnd = (event.event_data as { session_end?: number } | null)?.session_end;
+        fingerprint = `session_end_${event.session_id}_${sessionEnd || event.timestamp}`;
+      } else if (event.event_name === 'site_open') {
+        // For site_open, use session_id
+        fingerprint = `site_open_${event.session_id}`;
+      } else if (event.event_name === 'page_view') {
+        // For page_view, use session_id + page
+        const page = (event.event_data as { page?: string } | null)?.page;
+        fingerprint = `page_view_${event.session_id}_${page || 'unknown'}`;
+      } else {
+        // For other events, use event_name + session_id + timestamp (within 2 seconds)
+        fingerprint = `${event.event_name}_${event.session_id}_${Math.floor(event.timestamp / 2000)}`;
+      }
+      
+      // Check if we've seen this fingerprint in this batch
+      if (seenFingerprints.has(fingerprint)) {
+        console.log(`[API /analytics/track] Skipping duplicate event in batch: ${event.event_name} (${fingerprint})`);
+        continue;
+      }
+      
+      // Check database for recent duplicates (for session_end and site_open)
+      if (event.event_name === 'session_end' || event.event_name === 'site_open') {
+        const fiveSecondsAgo = new Date(event.timestamp - 5000).toISOString();
+        const { data: existingEvents } = await supabaseAdmin
+          .from('events')
+          .select('id')
+          .eq('event_name', event.event_name)
+          .eq('session_id', event.session_id)
+          .gte('created_at', fiveSecondsAgo)
+          .limit(1);
+        
+        if (existingEvents && existingEvents.length > 0) {
+          console.log(`[API /analytics/track] Skipping duplicate event in database: ${event.event_name} for session ${event.session_id}`);
+          continue;
+        }
+      }
+      
+      seenFingerprints.add(fingerprint);
+      deduplicatedEvents.push(event);
+    }
+    
+    if (deduplicatedEvents.length === 0) {
+      return NextResponse.json({
+        success: true,
+        count: 0,
+        message: 'All events were duplicates',
+      });
+    }
+    
     // Prepare events for insertion
-    const eventsToInsert = body.events.map((event) => ({
+    const eventsToInsert = deduplicatedEvents.map((event) => ({
       user_id: user_id ?? null,
       user_email: user_email ?? null,
       session_id: event.session_id ?? null,
@@ -112,6 +172,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({
       success: true,
       count: eventsToInsert.length,
+      originalCount: body.events.length,
+      duplicatesFiltered: body.events.length - eventsToInsert.length,
     });
   } catch (error) {
     console.error("[API /analytics/track] Error:", error);

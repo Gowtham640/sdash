@@ -110,13 +110,17 @@ export async function POST(request: NextRequest) {
     console.log(`[API /data/refresh] ✅ Session validated for user: ${user_email}`);
     console.log(`[API /data/refresh] 🔄 Force refreshing ${data_type}...`);
 
-    // Clear caches for this data type
-    try {
-      await deleteSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'calendar' | 'timetable');
-      removeClientCache(data_type === 'attendance' || data_type === 'marks' || data_type === 'calendar' || data_type === 'timetable' ? data_type : 'unified');
-      console.log(`[API /data/refresh] 🗑️ Cleared caches for ${data_type}`);
-    } catch (cacheError) {
-      console.warn(`[API /data/refresh] ⚠️ Error clearing cache (continuing anyway):`, cacheError);
+    // Clear caches for this data type (calendar is not cached, so skip clearing)
+    if (data_type !== 'calendar') {
+      try {
+        await deleteSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'timetable');
+        removeClientCache(data_type === 'attendance' || data_type === 'marks' || data_type === 'timetable' ? data_type : 'unified');
+        console.log(`[API /data/refresh] 🗑️ Cleared caches for ${data_type}`);
+      } catch (cacheError) {
+        console.warn(`[API /data/refresh] ⚠️ Error clearing cache (continuing anyway):`, cacheError);
+      }
+    } else {
+      console.log(`[API /data/refresh] ℹ️ Calendar is not cached, skipping cache clear`);
     }
 
     // Fetch fresh data from backend
@@ -143,15 +147,19 @@ export async function POST(request: NextRequest) {
       if (resultTyped.success) {
         freshData = resultTyped.data || result;
         
-        // Save to Supabase cache
-        try {
-          await setSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'calendar' | 'timetable', freshData);
-          console.log(`[API /data/refresh] ✅ Saved ${data_type} to Supabase cache`);
-        } catch (cacheError) {
-          console.error(`[API /data/refresh] ❌ Failed to save to cache:`);
-          console.error(`[API /data/refresh]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-          console.error(`[API /data/refresh]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-          // Continue even if cache save fails
+        // Save to Supabase cache (except calendar, which is always fetched from public.calendar table)
+        if (data_type !== 'calendar') {
+          try {
+            await setSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'timetable', freshData);
+            console.log(`[API /data/refresh] ✅ Saved ${data_type} to Supabase cache`);
+          } catch (cacheError) {
+            console.error(`[API /data/refresh] ❌ Failed to save to cache:`);
+            console.error(`[API /data/refresh]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+            console.error(`[API /data/refresh]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+            // Continue even if cache save fails
+          }
+        } else {
+          console.log(`[API /data/refresh] ℹ️ Calendar is not cached, always fetched from public.calendar table`);
         }
       } else {
         fetchError = resultTyped.error || 'Unknown error';

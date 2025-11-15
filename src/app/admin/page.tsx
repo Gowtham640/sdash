@@ -836,10 +836,22 @@ export default function AdminPage() {
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
                       <div className="relative text-white text-xl font-sora font-bold mb-4">Page Visits by Page</div>
                       <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={analyticsData.charts.pageVisitsByPage.map(item => ({
-                          ...item,
-                          page: item.page.startsWith('/') ? item.page.substring(1) : item.page
-                        }))}>
+                        <BarChart data={analyticsData.charts.pageVisitsByPage.map(item => {
+                          let pageName = item.page.startsWith('/') ? item.page.substring(1) : item.page;
+                          // Format page names for better readability
+                          if (pageName === '' || pageName === '/') {
+                            pageName = 'Home';
+                          } else if (pageName === 'auth') {
+                            pageName = 'Auth';
+                          } else {
+                            // Capitalize first letter
+                            pageName = pageName.charAt(0).toUpperCase() + pageName.slice(1);
+                          }
+                          return {
+                            ...item,
+                            page: pageName
+                          };
+                        })}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis dataKey="page" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />

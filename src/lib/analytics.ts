@@ -33,7 +33,8 @@ const ACTIVITY_CHECK_INTERVAL_MS = 60000; // Check activity every minute
 // Batch configuration
 const BATCH_INTERVAL_MS = 20000; // 20 seconds (between 15-30)
 const MAX_QUEUE_SIZE = 100; // Prevent localStorage overflow
-const PAGE_VIEW_DEBOUNCE_MS = 1000; // Only track page view if page stays same for 1 second
+const PAGE_VIEW_DEBOUNCE_MS = 2000; // Only track page view if page stays same for 2 seconds (increased for auth/landing pages)
+const PAGE_VIEW_COOLDOWN_MS = 5000; // Cooldown period: don't track same page again within 5 seconds
 
 // Global state to prevent duplicate initialization
 let isInitialized = false;
@@ -43,6 +44,7 @@ let lastTrackedPage: string | null = null;
 let sessionEndSubmitted = false; // Memory flag for session_end submission
 let siteOpenTracked = false; // Memory flag for site_open (prevents race conditions)
 let lastPageViewTracked: string | null = null; // Memory flag for page_view (prevents rapid duplicates)
+let lastPageViewTimestamp: number = 0; // Timestamp of last page view to enforce cooldown
 let activityCheckIntervalId: NodeJS.Timeout | null = null;
 let timeSyncIntervalId: NodeJS.Timeout | null = null;
 
@@ -160,41 +162,8 @@ function getOrCreateSessionId(): string {
     if (existingSessionId && alreadyEnded !== 'true') {
       console.log('[Analytics] Ending expired session before creating new one');
       
-      // Get old session data BEFORE clearing
-      const oldSessionStart = existingSessionStart ? parseInt(existingSessionStart, 10) : getSyncedTime();
-      const currentTime = getSyncedTime();
-      const sessionDuration = currentTime - oldSessionStart;
-      
-      // Mark as ended IMMEDIATELY (before clearing)
-      sessionEndSubmitted = true;
-      setStorageItem(SESSION_END_SUBMITTED_KEY, 'true');
-      setStorageItem(SESSION_ENDED_KEY, 'true');
-      
-      // Create session_end event with the OLD session ID
-      const sessionEndEvent: AnalyticsEvent = {
-        event_name: 'session_end',
-        event_data: {
-          duration_ms: sessionDuration,
-          session_start: oldSessionStart,
-          session_end: currentTime,
-          expired: true, // Mark as expired (auto-ended)
-        },
-        timestamp: currentTime,
-      };
-      
-      // Add to queue with OLD session ID
-      const { user_agent } = parseUserAgent();
-      const queue = getQueuedEvents();
-      const queuedEvent: QueuedEvent = {
-        ...sessionEndEvent,
-        session_id: existingSessionId, // Use OLD session ID
-        user_agent,
-      };
-      queue.push(queuedEvent);
-      queueEvents(queue);
-      
-      // Send immediately
-      void processQueue();
+      // Track session end with the OLD session_id (before clearing)
+      trackSessionEnd(existingSessionId);
     }
     
     // Clear old session data
@@ -203,10 +172,11 @@ function getOrCreateSessionId(): string {
     removeStorageItem(LAST_ACTIVITY_KEY);
     removeStorageItem(SITE_OPENED_KEY);
     removeStorageItem(SESSION_ENDED_KEY);
-    removeStorageItem(SESSION_END_SUBMITTED_KEY);
-    sessionEndSubmitted = false; // Reset memory flag
-    siteOpenTracked = false; // Reset site_open flag
-    lastPageViewTracked = null; // Reset page_view flag
+        removeStorageItem(SESSION_END_SUBMITTED_KEY);
+        sessionEndSubmitted = false; // Reset memory flag
+        siteOpenTracked = false; // Reset site_open flag
+        lastPageViewTracked = null; // Reset page_view flag
+        lastPageViewTimestamp = 0; // Reset page view timestamp
   }
   
   let sessionId = getStorageItem(SESSION_ID_KEY);
@@ -317,7 +287,7 @@ function addEventToQueue(event: AnalyticsEvent): void {
   // Update last activity timestamp (use synced time)
   updateLastActivity();
   
-  // Check queue for duplicates (especially for page_view)
+  // Check queue for duplicates (especially for page_view, site_open, session_end)
   const queue = getQueuedEvents();
   
   // For page_view events, check if same page is already in queue
@@ -332,6 +302,37 @@ function addEventToQueue(event: AnalyticsEvent): void {
         console.log(`[Analytics] Skipping duplicate page_view in queue: ${page}`);
         return;
       }
+    }
+  }
+  
+  // For site_open events, check if already in queue (prevent duplicates)
+  if (event.event_name === 'site_open') {
+    const duplicateInQueue = queue.some(qe => 
+      qe.event_name === 'site_open' && 
+      qe.session_id === sessionId
+    );
+    if (duplicateInQueue) {
+      console.log(`[Analytics] Skipping duplicate site_open in queue for session: ${sessionId}`);
+      return;
+    }
+  }
+  
+  // For session_end events, check if already in queue (prevent duplicates)
+  if (event.event_name === 'session_end') {
+    const sessionEndData = event.event_data as { session_end?: number } | null;
+    const duplicateInQueue = queue.some(qe => {
+      if (qe.event_name !== 'session_end') return false;
+      const qeData = qe.event_data as { session_end?: number } | null;
+      // Check if same session_end timestamp (within 1 second tolerance)
+      if (sessionEndData?.session_end && qeData?.session_end) {
+        return Math.abs(sessionEndData.session_end - qeData.session_end) < 1000;
+      }
+      // Or same session_id
+      return qe.session_id === sessionId;
+    });
+    if (duplicateInQueue) {
+      console.log(`[Analytics] Skipping duplicate session_end in queue for session: ${sessionId}`);
+      return;
     }
   }
   
@@ -461,13 +462,43 @@ function getEventFingerprint(eventName: EventName, eventData: EventData | null):
   return `${eventName}_${JSON.stringify(keyData)}`;
 }
 
+// Track recent page views with longer cooldown for auth and landing pages
+const recentPageViews = new Map<string, number>();
+const PAGE_VIEW_DEDUP_MS = 5000; // 5 seconds for general pages
+const PAGE_VIEW_DEDUP_MS_SPECIAL = 10000; // 10 seconds for auth and landing pages
+
 /**
  * Track an event (with deduplication for all event types)
  * Non-blocking, async operation
  */
 export function trackEvent(eventName: EventName, eventData: EventData | null = null): void {
+  // Special handling for page_view with longer cooldown for auth and landing pages
+  if (eventName === 'page_view' && eventData?.page) {
+    const page = eventData.page as string;
+    const now = Date.now();
+    const dedupWindow = (page === '/auth' || page === '/' || page === '') ? PAGE_VIEW_DEDUP_MS_SPECIAL : PAGE_VIEW_DEDUP_MS;
+    const lastPageView = recentPageViews.get(page);
+    
+    if (lastPageView && (now - lastPageView) < dedupWindow) {
+      console.log(`[Analytics] Skipping duplicate page_view: ${page} (last tracked ${now - lastPageView}ms ago, window: ${dedupWindow}ms)`);
+      return;
+    }
+    
+    // Mark as tracked immediately
+    recentPageViews.set(page, now);
+    
+    // Clean up old entries
+    if (recentPageViews.size > 50) {
+      for (const [key, timestamp] of recentPageViews.entries()) {
+        if (now - timestamp > dedupWindow) {
+          recentPageViews.delete(key);
+        }
+      }
+    }
+  }
+  
   // Skip deduplication for feature_click (already handled in trackFeatureClick)
-  if (eventName !== 'feature_click') {
+  if (eventName !== 'feature_click' && eventName !== 'page_view') {
     const fingerprint = getEventFingerprint(eventName, eventData);
     const now = Date.now();
     const lastEvent = recentEvents.get(fingerprint);
@@ -514,8 +545,17 @@ export function trackEvent(eventName: EventName, eventData: EventData | null = n
 
 /**
  * Track page view (debounced to prevent duplicates)
+ * Enhanced deduplication for auth and landing pages
  */
 export function trackPageView(page: string, additionalData?: EventData): void {
+  const now = Date.now();
+  
+  // Check cooldown period (prevent tracking same page within cooldown window)
+  if (page === lastPageViewTracked && (now - lastPageViewTimestamp) < PAGE_VIEW_COOLDOWN_MS) {
+    console.log(`[Analytics] Page view in cooldown period: ${page} (${now - lastPageViewTimestamp}ms ago)`);
+    return;
+  }
+  
   // Check memory flag first (prevents rapid duplicates from React StrictMode)
   if (page === lastPageViewTracked) {
     console.log(`[Analytics] Page view already tracked (memory flag): ${page}`);
@@ -537,7 +577,9 @@ export function trackPageView(page: string, additionalData?: EventData): void {
     pageViewTimeoutId = null;
   }
   
-  // Debounce page view tracking
+  // Debounce page view tracking (longer for auth and landing pages)
+  const debounceTime = (page === '/auth' || page === '/') ? PAGE_VIEW_DEBOUNCE_MS * 2 : PAGE_VIEW_DEBOUNCE_MS;
+  
   pageViewTimeoutId = setTimeout(() => {
     // Double-check page hasn't changed during debounce
     if (page !== lastTrackedPage) {
@@ -547,6 +589,7 @@ export function trackPageView(page: string, additionalData?: EventData): void {
     
     // Mark as tracked IMMEDIATELY (before async trackEvent)
     lastPageViewTracked = page;
+    lastPageViewTimestamp = Date.now();
     setStorageItem(LAST_PAGE_KEY, page);
     
     const { browser, user_agent } = parseUserAgent();
@@ -560,7 +603,7 @@ export function trackPageView(page: string, additionalData?: EventData): void {
     
     // Clear timeout ID after tracking
     pageViewTimeoutId = null;
-  }, PAGE_VIEW_DEBOUNCE_MS);
+  }, debounceTime);
 }
 
 /**
@@ -611,7 +654,21 @@ export function trackSiteOpen(): void {
   const alreadyOpened = getStorageItem(SITE_OPENED_KEY);
   if (alreadyOpened === 'true') {
     siteOpenTracked = true; // Sync memory flag
+    console.log('[Analytics] site_open already tracked (localStorage flag)');
     return; // Already tracked for this session
+  }
+  
+  // Check queue for existing site_open for this session (additional safeguard)
+  const queue = getQueuedEvents();
+  const duplicateInQueue = queue.some(qe => 
+    qe.event_name === 'site_open' && 
+    qe.session_id === sessionId
+  );
+  if (duplicateInQueue) {
+    siteOpenTracked = true; // Sync memory flag
+    setStorageItem(SITE_OPENED_KEY, 'true');
+    console.log('[Analytics] site_open already in queue for session:', sessionId);
+    return;
   }
   
   // Mark as opened IMMEDIATELY (before async trackEvent)
@@ -690,8 +747,9 @@ export function trackError(errorMessage: string, errorType?: string, page?: stri
 /**
  * Track session end (only once per session, even with multiple tabs)
  * Uses memory flag + localStorage to ensure single submission
+ * IMPORTANT: Uses the CURRENT session_id (not a new one)
  */
-export function trackSessionEnd(): void {
+export function trackSessionEnd(sessionIdToUse?: string): void {
   // Check memory flag first (fastest check)
   if (sessionEndSubmitted) {
     console.log('[Analytics] Session end already submitted (memory flag)');
@@ -711,6 +769,8 @@ export function trackSessionEnd(): void {
   setStorageItem(SESSION_END_SUBMITTED_KEY, 'true');
   setStorageItem(SESSION_ENDED_KEY, 'true');
   
+  // Get the session ID to use (use provided one, or get current one WITHOUT creating new)
+  const sessionId = sessionIdToUse || getStorageItem(SESSION_ID_KEY) || getOrCreateSessionId();
   const sessionStart = getOrCreateSessionStart();
   const currentTime = getSyncedTime();
   const sessionDuration = currentTime - sessionStart;
@@ -719,14 +779,46 @@ export function trackSessionEnd(): void {
   const queue = getQueuedEvents();
   const pageViews = queue.filter(e => e.event_name === 'page_view').length;
   
-  console.log(`[Analytics] Tracking session_end: duration=${sessionDuration}ms, pageViews=${pageViews}`);
+  console.log(`[Analytics] Tracking session_end for session: ${sessionId}, duration=${sessionDuration}ms, pageViews=${pageViews}`);
   
-  trackEvent('session_end', {
-    duration_ms: sessionDuration,
-    page_views: pageViews,
-    session_start: sessionStart,
-    session_end: currentTime,
+  // Create event directly with the correct session_id
+  const { user_agent } = parseUserAgent();
+  const sessionEndEvent: AnalyticsEvent = {
+    event_name: 'session_end',
+    event_data: {
+      duration_ms: sessionDuration,
+      page_views: pageViews,
+      session_start: sessionStart,
+      session_end: currentTime,
+    },
+    timestamp: currentTime,
+  };
+  
+  const queuedEvent: QueuedEvent = {
+    ...sessionEndEvent,
+    session_id: sessionId, // Use the provided/current session_id
+    user_agent,
+  };
+  
+  // Add to queue (with deduplication check)
+  const updatedQueue = getQueuedEvents();
+  const duplicateInQueue = updatedQueue.some(qe => {
+    if (qe.event_name !== 'session_end') return false;
+    const qeData = qe.event_data as { session_end?: number } | null;
+    const eventData = sessionEndEvent.event_data as { session_end?: number } | null;
+    // Check if same session_end timestamp (within 1 second tolerance) or same session_id
+    if (eventData?.session_end && qeData?.session_end) {
+      return Math.abs(eventData.session_end - qeData.session_end) < 1000;
+    }
+    return qe.session_id === sessionId;
   });
+  
+  if (!duplicateInQueue) {
+    updatedQueue.push(queuedEvent);
+    queueEvents(updatedQueue);
+  } else {
+    console.log(`[Analytics] Skipping duplicate session_end in queue for session: ${sessionId}`);
+  }
   
   // Send immediately on unload
   void processQueue();
@@ -755,8 +847,11 @@ function checkAndAutoEndExpiredSessions(): boolean {
   if (isSessionExpired()) {
     console.log('[Analytics] Session expired (30 min inactivity) - auto-ending session');
     
-    // Auto-end the session
-    trackSessionEnd();
+    // Get the session_id BEFORE clearing (important!)
+    const expiredSessionId = sessionId;
+    
+    // Auto-end the session with the correct session_id
+    trackSessionEnd(expiredSessionId);
     
     // Clear session data
     removeStorageItem(SESSION_ID_KEY);
@@ -768,8 +863,9 @@ function checkAndAutoEndExpiredSessions(): boolean {
     sessionEndSubmitted = false;
     siteOpenTracked = false;
     lastPageViewTracked = null;
+    lastPageViewTimestamp = 0;
     
-    return true;
+    return true; // Indicate session was ended
   }
   
   return false;
@@ -799,6 +895,10 @@ export function initializeAnalytics(): void {
     sessionEndSubmitted = true;
   }
   
+  // Check for expired sessions first (before getting/creating session)
+  // This catches sessions that expired while the tab was inactive
+  checkAndAutoEndExpiredSessions();
+  
   // Get or create session (will create new if expired)
   const sessionId = getOrCreateSessionId();
   console.log(`[Analytics] Initialized with session: ${sessionId}`);
@@ -816,34 +916,68 @@ export function initializeAnalytics(): void {
     lastTrackedPage = lastPage;
   }
   
-  // Track page unload (only once)
+  // Track page unload (only once) - consolidated to prevent multiple calls
   let unloadTracked = false;
-  window.addEventListener('beforeunload', () => {
+  const handleUnload = () => {
     if (!unloadTracked) {
       unloadTracked = true;
       trackSessionEnd();
       // Try to send remaining events synchronously (limited time)
       void processQueue();
     }
-  });
+  };
   
-  // Also track visibility change (tab close) - more reliable than beforeunload
+  // Use pagehide as primary (more reliable than beforeunload)
+  window.addEventListener('pagehide', handleUnload);
+  
+  // Fallback to beforeunload (less reliable but catches some cases)
+  window.addEventListener('beforeunload', handleUnload);
+  
+  // Track visibility change (tab close) - more reliable than beforeunload
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      // Check if session should be ended
+      // Check if session should be ended (but don't call trackSessionEnd here to avoid duplicates)
       checkAndAutoEndExpiredSessions();
       void processQueue();
     } else if (document.visibilityState === 'visible') {
-      // Tab became visible - update activity
-      updateLastActivity();
+      // Tab became visible - check if session expired while away
+      if (checkAndAutoEndExpiredSessions()) {
+        // Session was expired and ended, update activity for new session
+        updateLastActivity();
+      } else {
+        // Session still active, update activity
+        updateLastActivity();
+      }
     }
   });
   
-  // Track pagehide event (more reliable than beforeunload)
-  window.addEventListener('pagehide', () => {
-    trackSessionEnd();
-    void processQueue();
-  });
+  // Also check on user interaction (mouse move, click, keypress) to catch expired sessions
+  // This ensures we catch expired sessions even if the interval was throttled
+  if (typeof window !== 'undefined') {
+    const checkOnInteraction = () => {
+      // Only check if we have a session
+      const sessionId = getStorageItem(SESSION_ID_KEY);
+      if (sessionId) {
+        checkAndAutoEndExpiredSessions();
+      }
+    };
+    
+    // Throttle interaction checks to once per 30 seconds
+    let lastInteractionCheck = 0;
+    const INTERACTION_CHECK_THROTTLE = 30000;
+    
+    const throttledCheck = () => {
+      const now = Date.now();
+      if (now - lastInteractionCheck > INTERACTION_CHECK_THROTTLE) {
+        lastInteractionCheck = now;
+        checkOnInteraction();
+      }
+    };
+    
+    window.addEventListener('mousemove', throttledCheck, { passive: true });
+    window.addEventListener('click', throttledCheck, { passive: true });
+    window.addEventListener('keypress', throttledCheck, { passive: true });
+  }
   
   // Set up periodic activity check (every minute)
   activityCheckIntervalId = setInterval(() => {

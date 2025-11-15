@@ -57,11 +57,13 @@ export async function POST(request: NextRequest) {
 
   let user_email: string = '';
   let user_id: string | undefined;
+  let session_id: string | undefined;
   
   try {
     // Parse request body
     const body = await request.json();
-    const { access_token, password, force_refresh, types, session_id } = body;
+    const { access_token, password, force_refresh, types, session_id: bodySessionId } = body;
+    session_id = bodySessionId;
     
     const forceRefresh = force_refresh === true || force_refresh === 'true';
     
@@ -142,26 +144,11 @@ export async function POST(request: NextRequest) {
     const shouldFetchAttendance = !requestedTypes || requestedTypes.includes('attendance');
     const shouldFetchMarks = !requestedTypes || requestedTypes.includes('marks');
 
-    // Check Supabase cache only for requested data types
+    // Check Supabase cache only for requested data types (calendar is NOT cached, fetched from public.calendar table)
     console.log(`[API /data/all] 🔍 Checking Supabase cache...`);
-    let calendarInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     let timetableInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     let attendanceInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
     let marksInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
-    
-    if (shouldFetchCalendar) {
-      try {
-        calendarInfo = await getSupabaseCacheWithInfo(user_id, 'calendar', forceRefresh, session_id);
-      } catch (error) {
-        console.error(`[API /data/all] ❌ Error checking calendar cache:`, error);
-        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof Error && error.stack) {
-          console.error(`[API /data/all]   - Stack: ${error.stack}`);
-        }
-        calendarInfo = null;
-      }
-    }
     
     if (shouldFetchTimetable) {
       try {
@@ -206,31 +193,28 @@ export async function POST(request: NextRequest) {
     }
 
     // Safely extract cached data with null checks (only for requested types)
-    const cachedCalendar = shouldFetchCalendar && (calendarInfo && calendarInfo.data) ? calendarInfo.data : null;
+    // Note: Calendar is NOT cached, always fetched from public.calendar table
     const cachedTimetable = shouldFetchTimetable && (timetableInfo && timetableInfo.data) ? timetableInfo.data : null;
     const cachedAttendance = shouldFetchAttendance && (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
     const cachedMarks = shouldFetchMarks && (marksInfo && marksInfo.data) ? marksInfo.data : null;
 
     // Determine what needs to be fetched (only for requested types)
-    const needCalendar = shouldFetchCalendar && (!cachedCalendar || forceRefresh);
+    // Calendar is always fetched from public.calendar table (not from cache or backend)
     const needTimetable = shouldFetchTimetable && (!cachedTimetable || forceRefresh);
     const needAttendance = shouldFetchAttendance && (!cachedAttendance || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire));
     const needMarks = shouldFetchMarks && (!cachedMarks || forceRefresh || (marksInfo && marksInfo.isAboutToExpire));
-    const needStatic = needCalendar || needTimetable;
+    const needStatic = needTimetable; // Calendar is not part of static fetch anymore
     const needDynamic = needAttendance || needMarks;
     
-    // Count how many data types need fetching
-    const missingCount = [needCalendar, needTimetable, needAttendance, needMarks].filter(Boolean).length;
-    const allMissing = missingCount === 4;
+    // Count how many data types need fetching (calendar is always fetched from DB, not counted here)
+    const missingCount = [needTimetable, needAttendance, needMarks].filter(Boolean).length;
+    const allMissing = missingCount === 3;
 
     // If force refresh, clear caches first (similar to refresh endpoint)
+    // Note: Calendar is NOT cached, so no need to clear it
     if (forceRefresh) {
       console.log(`[API /data/all] 🔄 Force refresh requested - clearing caches...`);
       try {
-        if (needCalendar) {
-          await deleteSupabaseCache(user_id, 'calendar');
-          removeClientCache('calendar');
-        }
         if (needTimetable) {
           await deleteSupabaseCache(user_id, 'timetable');
           removeClientCache('timetable');
@@ -252,10 +236,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[API /data/all] 📊 Cache status:`);
-    console.log(`[API /data/all]   - Calendar: ${cachedCalendar ? "✓ Cached" : "✗ Need fetch"}`);
-    if (calendarInfo && calendarInfo.minutesUntilExpiry !== null) {
-      console.log(`[API /data/all]     Expires in: ${calendarInfo.minutesUntilExpiry} minutes`);
-    }
+    console.log(`[API /data/all]   - Calendar: Always fetched from public.calendar table (not cached)`);
     console.log(`[API /data/all]   - Timetable: ${cachedTimetable ? "✓ Cached" : "✗ Need fetch"}`);
     if (timetableInfo && timetableInfo.minutesUntilExpiry !== null) {
       console.log(`[API /data/all]     Expires in: ${timetableInfo.minutesUntilExpiry} minutes`);
@@ -352,39 +333,34 @@ export async function POST(request: NextRequest) {
         dynamicData = null;
       }
 
-      // Fetch static data (calendar + timetable together)
+      // Fetch timetable (calendar comes from public.calendar table, not from backend)
       try {
         backendWasCalled = true;
-        backendCallReasons.push('all data missing - fetching static data');
-        console.log(`[API /data/all] 🔄 Backend scraper call #2: Fetching static data (calendar + timetable)`);
+        backendCallReasons.push('all data missing - fetching timetable');
+        console.log(`[API /data/all] 🔄 Backend scraper call #2: Fetching timetable (calendar comes from public.calendar table)`);
         const staticStartTime = Date.now();
-        staticData = await callPythonStaticData(user_email, user_id, password);
+        // Fetch only timetable from backend (calendar is fetched from public.calendar table)
+        const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
         const staticDuration = Date.now() - staticStartTime;
-        console.log(`[API /data/all] ✅ Static data received (${staticDuration}ms)`);
+        console.log(`[API /data/all] ✅ Timetable received (${staticDuration}ms)`);
         
-        const staticDataData = staticData.data as { calendar?: unknown; timetable?: unknown } | undefined;
-        if (staticData.success && staticDataData) {
-          if (staticDataData.calendar && needCalendar) {
-            try {
-              await setSupabaseCache(user_id, 'calendar', staticDataData.calendar);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
+        if (timetableResult.success && timetableResult.data && needTimetable) {
+          // Set timetable in staticData
+          if (!staticData) {
+            staticData = { success: true, data: {} };
           }
-          if (staticDataData.timetable && needTimetable) {
-            try {
-              await setSupabaseCache(user_id, 'timetable', staticDataData.timetable);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
+          (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
+          
+          try {
+            await setSupabaseCache(user_id, 'timetable', timetableResult.data);
+          } catch (cacheError) {
+            console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
+            console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+            console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
           }
         }
       } catch (error) {
-        console.error(`[API /data/all] ❌ Static data request failed:`);
+        console.error(`[API /data/all] ❌ Timetable fetch failed:`);
         console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
         console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
         if (error instanceof Error && error.stack) {
@@ -397,10 +373,10 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/all] 🎯 Partial data missing (${missingCount} types) - Using individual fetch strategy`);
       
       // Initialize with cached data (only for requested types)
+      // Note: Calendar is fetched from public.calendar table, not from cache
       staticData = {
         success: true,
         data: {
-          ...(shouldFetchCalendar ? { calendar: cachedCalendar } : {}),
           ...(shouldFetchTimetable ? { timetable: cachedTimetable } : {}),
         },
         metadata: { source: 'supabase_cache' },
@@ -415,36 +391,11 @@ export async function POST(request: NextRequest) {
         metadata: { source: 'supabase_cache' },
       };
 
-      // Fetch only calendar if needed
-      if (needCalendar && !needTimetable) {
-        console.log(`[API /data/all] ⏳ Fetching only calendar...`);
-        try {
-          backendWasCalled = true;
-          backendCallReasons.push(`calendar ${forceRefresh ? 'force refresh' : 'cache miss'}`);
-          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching calendar`);
-          const calendarResult = await callPythonIndividualData(user_email, user_id, password, 'calendar');
-          if (calendarResult.success && calendarResult.data) {
-            (staticData.data as { calendar?: unknown }).calendar = calendarResult.data;
-            try {
-              await setSupabaseCache(user_id, 'calendar', calendarResult.data);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
-          }
-        } catch (error) {
-          console.error(`[API /data/all] ❌ Calendar fetch failed:`);
-          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-          if (error instanceof Error && error.stack) {
-            console.error(`[API /data/all]   - Stack: ${error.stack}`);
-          }
-        }
-      }
+      // Note: Calendar is NOT fetched from backend or cache, always from public.calendar table
+      // Calendar will be fetched later after we determine user's course and semester
 
       // Fetch only timetable if needed
-      if (needTimetable && !needCalendar) {
+      if (needTimetable) {
         console.log(`[API /data/all] ⏳ Fetching only timetable...`);
         try {
           backendWasCalled = true;
@@ -471,41 +422,26 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // If both static types needed, use grouped fetch
-      if (needCalendar && needTimetable) {
-        console.log(`[API /data/all] ⏳ Fetching static data (calendar + timetable)...`);
+      // If both static types needed, fetch only timetable (calendar comes from public.calendar table)
+      if (shouldFetchCalendar && needTimetable) {
+        console.log(`[API /data/all] ⏳ Fetching timetable (calendar will come from public.calendar table)...`);
         try {
           backendWasCalled = true;
-          backendCallReasons.push(`static data (calendar+timetable) ${forceRefresh ? 'force refresh' : 'cache miss'}`);
-          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching static data (calendar + timetable)`);
-          const staticResult = await callPythonStaticData(user_email, user_id, password);
-          if (staticResult.success) {
-            const staticDataData = staticResult.data as { calendar?: unknown; timetable?: unknown } | undefined;
-            if (staticDataData) {
-              (staticData.data as { calendar?: unknown; timetable?: unknown }).calendar = staticDataData.calendar;
-              (staticData.data as { calendar?: unknown; timetable?: unknown }).timetable = staticDataData.timetable;
-              if (staticDataData.calendar) {
-                try {
-                  await setSupabaseCache(user_id, 'calendar', staticDataData.calendar);
-                } catch (cacheError) {
-                  console.error(`[API /data/all] ❌ Failed to save calendar to cache:`);
-                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-                }
-              }
-              if (staticDataData.timetable) {
-                try {
-                  await setSupabaseCache(user_id, 'timetable', staticDataData.timetable);
-                } catch (cacheError) {
-                  console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
-                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-                }
-              }
+          backendCallReasons.push(`timetable ${forceRefresh ? 'force refresh' : 'cache miss'}`);
+          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching timetable`);
+          const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
+          if (timetableResult.success && timetableResult.data) {
+            (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
+            try {
+              await setSupabaseCache(user_id, 'timetable', timetableResult.data);
+            } catch (cacheError) {
+              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
+              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
+              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
             }
           }
         } catch (error) {
-          console.error(`[API /data/all] ❌ Static data fetch failed:`);
+          console.error(`[API /data/all] ❌ Timetable fetch failed:`);
           console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
           console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
           if (error instanceof Error && error.stack) {
@@ -700,61 +636,153 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/all] ✅ Semester from attendance: ${semester}`);
     }
     
-    // Fetch calendar from database if course and semester are available
+    // Fetch calendar from public.calendar table (ALWAYS, not from Supabase cache or backend)
+    // Calendar is fetched based on user's course and semester, then saved to client cache
     let course: string | null = courseFromAttendance || 'BTech'; // Default to BTech
-    // Fetch calendar if semester is available (including 0, but not null/undefined)
-    if (semester !== null && semester !== undefined && result.data && typeof result.data === 'object') {
-      try {
-        console.log(`[API /data/all] 🔍 Fetching calendar from database for course: ${course}, semester: ${semester}`);
-        
-        // First, try to get calendar for specific course and semester
-        let calendarDbData = null;
-        let calendarError = null;
-        
-        const { data: specificCalendarData, error: specificError } = await supabaseAdmin
-          .from('calendar')
-          .select('data')
-          .eq('course', course)
-          .eq('semester', semester)
-          .single();
-        
-        if (!specificError && specificCalendarData && specificCalendarData.data) {
-          calendarDbData = specificCalendarData;
-          console.log(`[API /data/all] ✅ Calendar fetched from database for course: ${course}, semester: ${semester}`);
-        } else if (specificError && specificError.code === 'PGRST116') {
-          // Not found for specific course/semester, try fallback: course='default', semester=0
-          console.log(`[API /data/all] ℹ️ No calendar found for course: ${course}, semester: ${semester} - trying fallback (default/0)`);
+    
+    console.log(`[API /data/all] 📋 CALENDAR FETCH DEBUG - Starting calendar fetch process`);
+    console.log(`[API /data/all]   - Course from attendance: ${courseFromAttendance || 'none'}`);
+    console.log(`[API /data/all]   - Final course to use: ${course}`);
+    console.log(`[API /data/all]   - Semester from attendance: ${semesterFromAttendance || 'none'}`);
+    
+    if (shouldFetchCalendar) {
+      // Fetch calendar if semester is available (including 0, but not null/undefined)
+      // If semester is not available yet, try to get it from database
+      let semesterForCalendar: number | null = semesterFromAttendance;
+      if (!semesterForCalendar) {
+        console.log(`[API /data/all] 🔍 Semester not in attendance data, fetching from database...`);
+        semesterForCalendar = await getSemesterFromDatabase(user_id);
+        console.log(`[API /data/all]   - Semester from database: ${semesterForCalendar || 'none'}`);
+      }
+      
+      if (semesterForCalendar !== null && semesterForCalendar !== undefined) {
+        try {
+          console.log(`[API /data/all] 🔍 ========================================`);
+          console.log(`[API /data/all] 🔍 CALENDAR FETCH: Attempting to fetch from public.calendar`);
+          console.log(`[API /data/all] 🔍   - Course: "${course}"`);
+          console.log(`[API /data/all] 🔍   - Semester: ${semesterForCalendar}`);
+          console.log(`[API /data/all] 🔍   - User ID: ${user_id}`);
+          console.log(`[API /data/all] 🔍 ========================================`);
           
-          const { data: fallbackCalendarData, error: fallbackError } = await supabaseAdmin
+          // First, try to get calendar for specific course and semester
+          let calendarDbData = null;
+          let recordSource = 'none';
+          
+          const { data: specificCalendarData, error: specificError } = await supabaseAdmin
             .from('calendar')
             .select('data')
-            .eq('course', 'default')
-            .eq('semester', 0)
+            .eq('course', course)
+            .eq('semester', semesterForCalendar)
             .single();
           
-          if (!fallbackError && fallbackCalendarData && fallbackCalendarData.data) {
-            calendarDbData = fallbackCalendarData;
-            console.log(`[API /data/all] ✅ Calendar fetched from database using fallback (default/0)`);
-          } else if (fallbackError && fallbackError.code === 'PGRST116') {
-            console.log(`[API /data/all] ℹ️ No calendar found in database (neither specific nor fallback) - using backend calendar`);
-            calendarError = fallbackError;
-          } else if (fallbackError) {
-            console.warn(`[API /data/all] ⚠️ Error fetching fallback calendar from database: ${fallbackError.message}`);
-            calendarError = fallbackError;
+          console.log(`[API /data/all] 🔍 Query result for course="${course}", semester=${semesterForCalendar}:`);
+          console.log(`[API /data/all]   - Has data: ${!!specificCalendarData}`);
+          console.log(`[API /data/all]   - Has error: ${!!specificError}`);
+          if (specificError) {
+            console.log(`[API /data/all]   - Error code: ${specificError.code}`);
+            console.log(`[API /data/all]   - Error message: ${specificError.message}`);
           }
-        } else if (specificError) {
-          console.warn(`[API /data/all] ⚠️ Error fetching calendar from database: ${specificError.message}`);
-          calendarError = specificError;
+          
+          if (!specificError && specificCalendarData && specificCalendarData.data) {
+            calendarDbData = specificCalendarData;
+            recordSource = `course="${course}", semester=${semesterForCalendar}`;
+            console.log(`[API /data/all] ✅ ✅ ✅ CALENDAR FOUND: Using record ${recordSource}`);
+            console.log(`[API /data/all]   - Data type: ${typeof specificCalendarData.data}`);
+            console.log(`[API /data/all]   - Is array: ${Array.isArray(specificCalendarData.data)}`);
+            if (Array.isArray(specificCalendarData.data)) {
+              console.log(`[API /data/all]   - Array length: ${specificCalendarData.data.length}`);
+              if (specificCalendarData.data.length > 0) {
+                console.log(`[API /data/all]   - First event sample:`, JSON.stringify(specificCalendarData.data[0], null, 2).substring(0, 200));
+              }
+            } else if (typeof specificCalendarData.data === 'object') {
+              console.log(`[API /data/all]   - Object keys:`, Object.keys(specificCalendarData.data));
+            }
+          } else if (specificError && specificError.code === 'PGRST116') {
+            // Not found for specific course/semester, try fallback: course='default', semester=0
+            console.log(`[API /data/all] ℹ️ Record not found for course="${course}", semester=${semesterForCalendar}`);
+            console.log(`[API /data/all] 🔍 Trying fallback: course="default", semester=0`);
+            
+            const { data: fallbackCalendarData, error: fallbackError } = await supabaseAdmin
+              .from('calendar')
+              .select('data')
+              .eq('course', 'default')
+              .eq('semester', 0)
+              .single();
+            
+            console.log(`[API /data/all] 🔍 Fallback query result:`);
+            console.log(`[API /data/all]   - Has data: ${!!fallbackCalendarData}`);
+            console.log(`[API /data/all]   - Has error: ${!!fallbackError}`);
+            if (fallbackError) {
+              console.log(`[API /data/all]   - Error code: ${fallbackError.code}`);
+              console.log(`[API /data/all]   - Error message: ${fallbackError.message}`);
+            }
+            
+            if (!fallbackError && fallbackCalendarData && fallbackCalendarData.data) {
+              calendarDbData = fallbackCalendarData;
+              recordSource = 'course="default", semester=0 (FALLBACK)';
+              console.log(`[API /data/all] ✅ ✅ ✅ CALENDAR FOUND: Using FALLBACK record ${recordSource}`);
+              console.log(`[API /data/all]   - Data type: ${typeof fallbackCalendarData.data}`);
+              console.log(`[API /data/all]   - Is array: ${Array.isArray(fallbackCalendarData.data)}`);
+              if (Array.isArray(fallbackCalendarData.data)) {
+                console.log(`[API /data/all]   - Array length: ${fallbackCalendarData.data.length}`);
+                if (fallbackCalendarData.data.length > 0) {
+                  console.log(`[API /data/all]   - First event sample:`, JSON.stringify(fallbackCalendarData.data[0], null, 2).substring(0, 200));
+                }
+              } else if (typeof fallbackCalendarData.data === 'object') {
+                console.log(`[API /data/all]   - Object keys:`, Object.keys(fallbackCalendarData.data));
+              }
+            } else if (fallbackError && fallbackError.code === 'PGRST116') {
+              console.log(`[API /data/all] ⚠️ ⚠️ ⚠️ No calendar found in database (neither specific nor fallback)`);
+              console.log(`[API /data/all]   - Tried: course="${course}", semester=${semesterForCalendar}`);
+              console.log(`[API /data/all]   - Tried fallback: course="default", semester=0`);
+            } else if (fallbackError) {
+              console.warn(`[API /data/all] ⚠️ Error fetching fallback calendar from database: ${fallbackError.message}`);
+            }
+          } else if (specificError) {
+            console.warn(`[API /data/all] ⚠️ Error fetching calendar from database: ${specificError.message}`);
+            console.warn(`[API /data/all]   - Error code: ${specificError.code}`);
+          }
+          
+          // Add calendar to result if fetched
+          if (calendarDbData && calendarDbData.data) {
+            console.log(`[API /data/all] ✅ ✅ ✅ FINAL: Calendar data being added to response`);
+            console.log(`[API /data/all]   - Source record: ${recordSource}`);
+            console.log(`[API /data/all]   - Data structure: ${typeof calendarDbData.data}`);
+            console.log(`[API /data/all]   - Is array: ${Array.isArray(calendarDbData.data)}`);
+            if (Array.isArray(calendarDbData.data)) {
+              console.log(`[API /data/all]   - Total events: ${calendarDbData.data.length}`);
+            }
+            
+            if (!result.data || typeof result.data !== 'object') {
+              result.data = {};
+            }
+            (result.data as { calendar?: unknown }).calendar = calendarDbData.data;
+            
+            console.log(`[API /data/all] ✅ Calendar successfully added to result.data.calendar`);
+            console.log(`[API /data/all]   - result.data.calendar type: ${typeof (result.data as { calendar?: unknown }).calendar}`);
+            console.log(`[API /data/all]   - result.data.calendar is array: ${Array.isArray((result.data as { calendar?: unknown }).calendar)}`);
+          } else {
+            console.warn(`[API /data/all] ⚠️ ⚠️ ⚠️ No calendar data available from public.calendar table`);
+            console.warn(`[API /data/all]   - calendarDbData: ${calendarDbData ? 'exists' : 'null'}`);
+            if (calendarDbData) {
+              console.warn(`[API /data/all]   - calendarDbData.data: ${calendarDbData.data ? 'exists' : 'null'}`);
+            }
+          }
+          console.log(`[API /data/all] 🔍 ========================================`);
+        } catch (err) {
+          console.error(`[API /data/all] ❌ ❌ ❌ ERROR fetching calendar from database:`, err);
+          console.error(`[API /data/all]   - Error type: ${err instanceof Error ? err.constructor.name : typeof err}`);
+          console.error(`[API /data/all]   - Error message: ${err instanceof Error ? err.message : String(err)}`);
+          if (err instanceof Error && err.stack) {
+            console.error(`[API /data/all]   - Stack: ${err.stack}`);
+          }
         }
-        
-        // Use calendar from database if found
-        if (calendarDbData && calendarDbData.data) {
-          console.log(`[API /data/all] ✅ Calendar fetched from database (overriding backend calendar)`);
-          (result.data as { calendar?: unknown }).calendar = calendarDbData.data;
-        }
-      } catch (err) {
-        console.warn(`[API /data/all] ⚠️ Error fetching calendar from database:`, err);
+      } else {
+        console.log(`[API /data/all] ℹ️ Semester not available yet, skipping calendar fetch`);
+        console.log(`[API /data/all]   - semesterForCalendar: ${semesterForCalendar}`);
       }
+    } else {
+      console.log(`[API /data/all] ℹ️ Calendar fetch skipped (shouldFetchCalendar: false)`);
     }
     
     // Include semester and course in response metadata
@@ -815,8 +843,30 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/all]   - Only cache_hit events will be tracked`);
     }
 
+    // Ensure result is a valid object before returning
+    if (!result || typeof result !== 'object') {
+      console.error(`[API /data/all] ❌ Invalid result object, returning error response`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid response data",
+          data: null
+        },
+        { status: 500 }
+      );
+    }
+    
+    // Ensure result has required structure
+    const safeResult = {
+      success: finalResultTyped.success ?? false,
+      data: (result as { data?: unknown }).data ?? {},
+      error: (result as { error?: string }).error,
+      metadata: (result as { metadata?: unknown }).metadata ?? {},
+      ...(result as Record<string, unknown>)
+    };
+    
     // Return the unified data
-    return NextResponse.json(result, { status: finalResultTyped.success ? 200 : 500 });
+    return NextResponse.json(safeResult, { status: finalResultTyped.success ? 200 : 500 });
 
   } catch (error) {
     const totalTime = Date.now() - requestStartTime;
@@ -830,21 +880,45 @@ export async function POST(request: NextRequest) {
     }
     console.error("===========================================");
     
-    // Track error (async, non-blocking)
+    // Track error (async, non-blocking) - safely handle undefined variables
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorType = error instanceof Error ? error.constructor.name : typeof error;
-    void trackServerError(errorMessage, errorType, user_id, '/api/data/all', session_id);
-    // Track API request for error case (backend was attempted)
-    void trackApiRequest('/api/data/all', user_id, 'all', totalTime, false, undefined, undefined, session_id);
     
-    return NextResponse.json(
-      {
-        success: false,
-        error: "Internal server error",
-        details: errorMessage
-      },
-      { status: 500 }
-    );
+    // Safely track errors (handle undefined user_id and session_id)
+    try {
+      void trackServerError(errorMessage, errorType, user_id || undefined, '/api/data/all', session_id || undefined);
+      void trackApiRequest('/api/data/all', user_id || undefined, 'all', totalTime, false, undefined, undefined, session_id || undefined);
+    } catch (trackError) {
+      console.error(`[API /data/all] ❌ Error tracking failed:`, trackError);
+      // Continue even if tracking fails
+    }
+    
+    // Always return a valid JSON response, even on error
+    try {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Internal server error",
+          details: errorMessage,
+          data: null
+        },
+        { status: 500 }
+      );
+    } catch (jsonError) {
+      // If even JSON creation fails, return a minimal response
+      console.error(`[API /data/all] ❌ Failed to create JSON response:`, jsonError);
+      return new NextResponse(
+        JSON.stringify({
+          success: false,
+          error: "Internal server error",
+          details: "Failed to serialize error response"
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
   } finally {
     // Unregister request from queue tracker
     if (user_email) {
@@ -1213,7 +1287,9 @@ function mergeSplitDataResults(
   const dataObject: Record<string, unknown> = {};
   
   if (shouldFetchCalendar) {
-    dataObject.calendar = (staticData?.data as { calendar?: unknown } | undefined)?.calendar ?? null;
+    // Calendar should NOT come from staticData (backend scraper)
+    // It will be fetched from public.calendar table later in the API route
+    dataObject.calendar = null;
   }
   
   if (shouldFetchTimetable) {
