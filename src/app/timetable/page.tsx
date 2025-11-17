@@ -54,6 +54,7 @@ export default function TimetablePage() {
   useErrorTracking(error, '/timetable');
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
+  const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -237,6 +238,44 @@ export default function TimetablePage() {
           throw new Error(result.error || 'Failed to fetch data');
         }
 
+        // Process calendar data for day order stats (do this first, before timetable processing)
+        // Handle multiple formats: direct array, {success: true, data: [...]}, or {data: [...]}
+        if (result.data && typeof result.data === 'object' && 'calendar' in result.data) {
+          const calendarDataFromResult = (result.data as { calendar?: unknown }).calendar;
+          let calendarArray: CalendarEvent[] | null = null;
+          
+          if (Array.isArray(calendarDataFromResult)) {
+            // Direct array format
+            calendarArray = calendarDataFromResult;
+          } else if (calendarDataFromResult && typeof calendarDataFromResult === 'object') {
+            const calendarObj = calendarDataFromResult as Record<string, unknown>;
+            // Handle {success: true, data: [...]} format (old API format)
+            if ('success' in calendarObj && calendarObj.success && 'data' in calendarObj && Array.isArray(calendarObj.data)) {
+              calendarArray = calendarObj.data as CalendarEvent[];
+            }
+            // Handle {data: [...]} format
+            else if ('data' in calendarObj && Array.isArray(calendarObj.data)) {
+              calendarArray = calendarObj.data as CalendarEvent[];
+            }
+            // Handle nested {success: {data: [...]}} format
+            else if ('success' in calendarObj && typeof calendarObj.success === 'object' && calendarObj.success !== null) {
+              const successObj = calendarObj.success as { data?: CalendarEvent[] };
+              if (Array.isArray(successObj.data)) {
+                calendarArray = successObj.data;
+              }
+            }
+          }
+          
+          if (calendarArray) {
+            setCalendarData(calendarArray);
+            const stats = getDayOrderStats(calendarArray);
+            setDayOrderStats(stats);
+            console.log('[Timetable] ✅ Day order stats calculated:', stats);
+          } else {
+            console.warn('[Timetable] ⚠️ Calendar data format not recognized');
+          }
+        }
+
         // Process timetable data from unified endpoint
         // Unified endpoint returns: { success: boolean, data: { timetable: TimetableData, ... }, error?: string }
         let timetableDataObj: TimetableData | null = null;
@@ -249,31 +288,38 @@ export default function TimetablePage() {
         if (result.data && typeof result.data === 'object' && 'timetable' in result.data) {
           const timetableData = (result.data as { timetable?: unknown }).timetable;
           
-          if (timetableData && typeof timetableData === 'object') {
+          if (timetableData && typeof timetableData === 'object' && timetableData !== null) {
             // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
             let dataToProcess: unknown = timetableData;
             
             // Check if data is wrapped in a 'data' property (API response format from cache)
-            if ('data' in dataToProcess && typeof (dataToProcess as { data?: unknown }).data === 'object' && (dataToProcess as { data?: unknown }).data !== null) {
+            const dataToProcessObj = dataToProcess as Record<string, unknown>;
+            if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
               console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
-              const wrappedData = (dataToProcess as { data?: TimetableData }).data;
+              const wrappedData = dataToProcessObj.data as TimetableData;
               if (wrappedData && 'timetable' in wrappedData) {
                 dataToProcess = wrappedData;
               }
             }
             // Check if it's already in TimetableData format (has timetable property at root)
-            else if ('timetable' in dataToProcess || 'time_slots' in dataToProcess) {
+            else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
               // Already in correct format
               dataToProcess = dataToProcess;
             }
             
             // Verify it's the expected TimetableData format
-            if (dataToProcess && typeof dataToProcess === 'object' && ('timetable' in dataToProcess || 'time_slots' in dataToProcess)) {
-              timetableDataObj = dataToProcess as TimetableData;
-              console.log('[Timetable] ✅ Timetable data loaded');
+            if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
+              const dataObj = dataToProcess as Record<string, unknown>;
+              if ('timetable' in dataObj || 'time_slots' in dataObj) {
+                timetableDataObj = dataToProcess as TimetableData;
+                console.log('[Timetable] ✅ Timetable data loaded');
+              } else {
+                console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+                console.warn('[Timetable] Available keys:', Object.keys(dataObj));
+              }
             } else {
               console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-              console.warn('[Timetable] Available keys:', dataToProcess && typeof dataToProcess === 'object' ? Object.keys(dataToProcess) : 'not an object');
+              console.warn('[Timetable] dataToProcess is not an object');
             }
           }
         } else {
@@ -310,6 +356,76 @@ export default function TimetablePage() {
           setRawTimetableData(null);
           setTimetableData([]);
           // Don't throw error, just log it so page remains visible
+        }
+      } else {
+        // Timetable was cached, but we still need calendar data for stats
+        // Try to get calendar from unified cache or fetch it
+        const cachedUnified = getClientCache('unified');
+        if (cachedUnified && typeof cachedUnified === 'object' && cachedUnified !== null && 'data' in cachedUnified) {
+          const unifiedData = (cachedUnified as { data?: { calendar?: unknown } }).data;
+          if (unifiedData && typeof unifiedData === 'object' && 'calendar' in unifiedData) {
+            const calendarDataFromCache = (unifiedData as { calendar?: unknown }).calendar;
+            let calendarArray: CalendarEvent[] | null = null;
+            
+            if (Array.isArray(calendarDataFromCache)) {
+              calendarArray = calendarDataFromCache;
+            } else if (calendarDataFromCache && typeof calendarDataFromCache === 'object') {
+              const calendarObj = calendarDataFromCache as Record<string, unknown>;
+              // Handle {success: true, data: [...]} format
+              if ('success' in calendarObj && calendarObj.success && 'data' in calendarObj && Array.isArray(calendarObj.data)) {
+                calendarArray = calendarObj.data as CalendarEvent[];
+              }
+              // Handle {data: [...]} format
+              else if ('data' in calendarObj && Array.isArray(calendarObj.data)) {
+                calendarArray = calendarObj.data as CalendarEvent[];
+              }
+            }
+            
+            if (calendarArray) {
+              setCalendarData(calendarArray);
+              const stats = getDayOrderStats(calendarArray);
+              setDayOrderStats(stats);
+              console.log('[Timetable] ✅ Day order stats calculated from unified cache:', stats);
+            }
+          }
+        } else {
+          // Fetch calendar data separately if not in cache
+          console.log('[Timetable] 📅 Fetching calendar data for day order stats...');
+          try {
+            const calendarResponse = await fetch('/api/data/all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
+            });
+            const calendarResult = await calendarResponse.json();
+            if (calendarResult.success && calendarResult.data?.calendar) {
+              let calendarArray: CalendarEvent[] | null = null;
+              const calendarData = calendarResult.data.calendar;
+              
+              if (Array.isArray(calendarData)) {
+                calendarArray = calendarData;
+              } else if (calendarData && typeof calendarData === 'object') {
+                const calendarObj = calendarData as Record<string, unknown>;
+                // Handle {success: true, data: [...]} format
+                if ('success' in calendarObj && calendarObj.success && 'data' in calendarObj && Array.isArray(calendarObj.data)) {
+                  calendarArray = calendarObj.data as CalendarEvent[];
+                }
+                // Handle {data: [...]} format
+                else if ('data' in calendarObj && Array.isArray(calendarObj.data)) {
+                  calendarArray = calendarObj.data as CalendarEvent[];
+                }
+              }
+              
+              if (calendarArray) {
+                setCalendarData(calendarArray);
+                const stats = getDayOrderStats(calendarArray);
+                setDayOrderStats(stats);
+                console.log('[Timetable] ✅ Day order stats calculated from calendar fetch:', stats);
+              }
+            }
+          } catch (calendarErr) {
+            console.error('[Timetable] ❌ Error fetching calendar for stats:', calendarErr);
+          }
         }
       }
 
@@ -582,7 +698,20 @@ export default function TimetablePage() {
           {/* Day Order Statistics */}
           {dayOrderStats && (
             <div className="mb-6 sm:mb-7 md:mb-8 lg:mb-8">
-              
+              <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-3 sm:mb-4">Day Order Distribution</div>
+              <div className="grid grid-cols-5 gap-2 sm:gap-3 md:gap-4">
+                {[1, 2, 3, 4, 5].map((doNumber) => (
+                  <div
+                    key={doNumber}
+                    className="bg-white/10 border border-white/20 rounded-xl p-3 sm:p-4 text-center"
+                  >
+                    <div className="text-white/70 text-xs sm:text-sm md:text-base mb-1">DO {doNumber}</div>
+                    <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-bold">
+                      {dayOrderStats[doNumber] || 0}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

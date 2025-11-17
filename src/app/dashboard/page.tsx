@@ -324,7 +324,42 @@ export default function Dashboard() {
         }
         if (cachedTimetable) {
           console.log('[Dashboard] ✅ Using client-side cache for timetable');
-          setTimetableData(cachedTimetable);
+          // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+          let timetableDataToUse: typeof timetableData | null = null;
+          
+          if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
+            // Check if cached data has 'data' property (wrapped API response format)
+            if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
+              const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
+              if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
+                timetableDataToUse = cachedData;
+                console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
+              }
+            }
+            // Check if cached data is already in direct format (has timetable property at root)
+            else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
+              timetableDataToUse = cachedTimetable as typeof timetableData;
+              console.log('[Dashboard] ✅ Using timetable in direct format');
+            }
+          }
+          
+          if (timetableDataToUse) {
+            setTimetableData(timetableDataToUse);
+            // Also set slot occurrences for day order stats
+            try {
+              const timetableForUtils = {
+                timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
+                slot_mapping: timetableDataToUse.slot_mapping,
+              } as TimetableData;
+              const occurrences = getSlotOccurrences(timetableForUtils);
+              setSlotOccurrences(occurrences);
+              console.log('[Dashboard] ✅ Timetable slot occurrences loaded:', occurrences.length);
+            } catch (err) {
+              console.error('[Dashboard] ❌ Error processing cached timetable:', err);
+            }
+          } else {
+            console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
+          }
         }
       } else {
         // Force refresh: clear client caches
@@ -693,11 +728,16 @@ export default function Dashboard() {
     if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
       setAttendanceData(attendanceDataObj);
       console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
-    } else {
+    } else if (result.data.attendance !== undefined && result.data.attendance !== null) {
+      // Only overwrite if attendance was explicitly provided in result (not undefined/null)
+      // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No attendance data found');
       console.warn('[Dashboard] Attendance data type:', typeof result.data.attendance);
       console.warn('[Dashboard] Attendance data value:', result.data.attendance);
       setAttendanceData(null);
+    } else {
+      // result.data.attendance is undefined/null - don't overwrite existing state (likely from cache)
+      console.log('[Dashboard] ℹ️ Attendance not in API response, keeping existing state (likely from cache)');
     }
 
     // Process marks data - handle both direct format and wrapped format
@@ -733,11 +773,16 @@ export default function Dashboard() {
     if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
       setMarksData(marksDataObj);
       console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
-    } else {
+    } else if (result.data.marks !== undefined && result.data.marks !== null) {
+      // Only overwrite if marks was explicitly provided in result (not undefined/null)
+      // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No marks data found');
       console.warn('[Dashboard] Marks data type:', typeof result.data.marks);
       console.warn('[Dashboard] Marks data value:', result.data.marks);
       setMarksData(null);
+    } else {
+      // result.data.marks is undefined/null - don't overwrite existing state (likely from cache)
+      console.log('[Dashboard] ℹ️ Marks not in API response, keeping existing state (likely from cache)');
     }
 
     // Process timetable data - handle both direct format and wrapped format
@@ -788,11 +833,16 @@ export default function Dashboard() {
       } catch (err) {
         console.error('[Dashboard] ❌ Error processing timetable:', err);
       }
-    } else {
+    } else if (result.data.timetable !== undefined && result.data.timetable !== null) {
+      // Only overwrite if timetable was explicitly provided in result (not undefined/null)
+      // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No timetable data found');
       console.warn('[Dashboard] Timetable data type:', typeof result.data.timetable);
       console.warn('[Dashboard] Timetable data value:', result.data.timetable);
       setTimetableData(null);
+    } else {
+      // result.data.timetable is undefined/null - don't overwrite existing state (likely from cache)
+      console.log('[Dashboard] ℹ️ Timetable not in API response, keeping existing state (likely from cache)');
     }
 
     // Process day order stats using modified calendar data
