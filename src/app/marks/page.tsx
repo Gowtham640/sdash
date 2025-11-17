@@ -10,6 +10,8 @@ import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
 
 interface Assessment {
   assessment_name: string;
@@ -122,13 +124,17 @@ export default function MarksPage() {
       }
 
       // If refresh endpoint returns data directly, set it immediately
-      if (result.data && typeof result.data === 'object' && ('all_courses' in result.data || 'summary' in result.data)) {
-        console.log('[Marks] Setting marks data directly from refresh response');
-        const marksDataObj = result.data as MarksData;
-        
-        setMarksData(marksDataObj);
-        setLoading(false);
-        console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses from refresh');
+      // Extract marks from wrapped format: { data: { marks: MarksData } }
+      if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
+        const marksData = (result.data as { marks?: unknown }).marks;
+        if (marksData && typeof marksData === 'object' && ('all_courses' in marksData || 'summary' in marksData)) {
+          console.log('[Marks] Setting marks data directly from refresh response');
+          const marksDataObj = marksData as MarksData;
+          
+          setMarksData(marksDataObj);
+          setLoading(false);
+          console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses from refresh');
+        }
       } else {
         // After refresh, fetch unified data to get updated marks
         await fetchUnifiedData(false);
@@ -154,70 +160,118 @@ export default function MarksPage() {
         return;
       }
 
-      // ✅ STEP 1: Fetch from API
-      console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, 'marks'))
-      });
-
-      const result = await response.json();
-      console.log('[Marks] Unified API response:', result);
-
-      // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Marks] Session expired or invalid');
-        setError('Your session has expired. Please re-enter your password.');
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
-      }
-
-      // Process marks data
-      // Handle both formats: direct object or wrapped in {success, data}
-      let marksDataObj: MarksData | null = null;
+      // Check client-side cache first (unless force refresh)
+      let cachedMarks: MarksData | null = null;
       
-      if (result.data.marks && typeof result.data.marks === 'object') {
-        // Check if it's direct format (has all_courses, summary, metadata at root)
-        if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
-          // Direct format
-          marksDataObj = result.data.marks as MarksData;
-          console.log('[Marks] Marks data is direct format');
-        } 
-        // Check if it's wrapped format: {success: true, data: {...}}
-        else if ('success' in result.data.marks && 'data' in result.data.marks) {
-          const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
-          const successValue = marksWrapper.success;
-          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-          if (isSuccess && marksWrapper.data) {
-            marksDataObj = marksWrapper.data;
-            console.log('[Marks] Marks data is wrapped format');
-          }
+      if (!forceRefresh) {
+        cachedMarks = getClientCache<MarksData>('marks');
+        
+        // Use cached data immediately (stale-while-revalidate)
+        if (cachedMarks) {
+          console.log('[Marks] ✅ Using client-side cache for marks');
+          setMarksData(cachedMarks);
         }
-      }
-      
-      if (marksDataObj && (marksDataObj.all_courses || marksDataObj.summary)) {
-        setMarksData(marksDataObj);
-        console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses');
       } else {
-        // Keep page visible even when marks data is unavailable
-        // User can use refresh button to fetch data
-        console.warn('[Marks] Marks data unavailable - keeping page visible for refresh');
-        console.warn('[Marks] Marks data type:', typeof result.data.marks);
-        console.warn('[Marks] Marks data value:', result.data.marks);
-        setMarksData(null);
-        // Don't throw error, just log it so page remains visible
+        // Force refresh: clear client cache
+        removeClientCache('marks');
+        console.log('[Marks] 🗑️ Cleared client cache for force refresh');
       }
       
-      // Register attendance/marks fetch for smart prefetch scheduling
-      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-        registerAttendanceFetch();
+      // Only fetch if cache is missing or force refresh
+      if (!cachedMarks || forceRefresh) {
+        console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
+        
+        // Use request deduplication
+        const requestKey = `fetch_marks_${access_token.substring(0, 10)}`;
+        const apiResult = await deduplicateRequest(requestKey, async () => {
+          const response = await fetch('/api/data/marks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          });
+          
+          const result = await response.json();
+          return { response, result };
+        });
+        
+        const response = apiResult.response;
+        const result = apiResult.result;
+        console.log('[Marks] API response:', result);
+
+        // Handle session expiry
+        if (!response.ok || (result.error === 'session_expired')) {
+          console.error('[Marks] Session expired or invalid');
+          setError('Your session has expired. Please re-enter your password.');
+          setShowPasswordModal(true);
+          setLoading(false);
+          return;
+        }
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to fetch data');
+        }
+
+        // Process marks data from individual endpoint
+        // Individual endpoint now returns: { success: boolean, data: { marks: MarksData }, error?: string }
+        // This matches the unified endpoint format for consistency
+        let marksDataObj: MarksData | null = null;
+        
+        console.log('[Marks] Processing marks data from API response');
+        console.log('[Marks] result.data type:', typeof result.data);
+        console.log('[Marks] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+        
+        // Extract marks from wrapped format: { data: { marks: MarksData } }
+        if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
+          const marksData = (result.data as { marks?: unknown }).marks;
+          
+          if (marksData && typeof marksData === 'object') {
+            // Handle both unwrapped and wrapped data structures within marks
+            let dataToProcess = marksData;
+            
+            // Check if data is wrapped in an extra 'data' property (legacy format)
+            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
+              console.log('[Marks] 🔄 Unwrapping nested data structure in frontend');
+              dataToProcess = (dataToProcess as { data: unknown }).data as typeof marksData;
+            }
+            
+            // Check if it's the expected MarksData format
+            if ('all_courses' in dataToProcess || 'summary' in dataToProcess) {
+              marksDataObj = dataToProcess as MarksData;
+              console.log('[Marks] ✅ Marks data loaded');
+              console.log('[Marks]   - all_courses count:', marksDataObj.all_courses?.length || 0);
+              console.log('[Marks]   - summary exists:', !!marksDataObj.summary);
+            } else {
+              console.warn('[Marks] ⚠️ Marks data doesn\'t match expected format');
+              console.warn('[Marks] Available keys:', Object.keys(dataToProcess));
+            }
+          }
+        } else {
+          console.warn('[Marks] ⚠️ result.data.marks is not available');
+          console.warn('[Marks] result.data structure:', result.data);
+        }
+        
+        if (marksDataObj && (marksDataObj.all_courses || marksDataObj.summary)) {
+          setMarksData(marksDataObj);
+          console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses');
+          
+          // Save to client cache
+          setClientCache('marks', marksDataObj);
+        } else {
+          // Keep page visible even when marks data is unavailable
+          // User can use refresh button to fetch data
+          console.warn('[Marks] Marks data unavailable - keeping page visible for refresh');
+          if (result && result.data) {
+            console.warn('[Marks] Marks data type:', typeof result.data);
+            console.warn('[Marks] Marks data value:', result.data);
+          }
+          setMarksData(null);
+          // Don't throw error, just log it so page remains visible
+        }
+        
+        // Register marks fetch for smart prefetch scheduling
+        if (result.success && marksDataObj) {
+          registerAttendanceFetch();
+        }
       }
 
     } catch (err) {
@@ -392,11 +446,22 @@ export default function MarksPage() {
       {/* Individual Course Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
         {(() => {
+          // Safety check: ensure marksData and all_courses exist
+          if (!marksData || !marksData.all_courses || !Array.isArray(marksData.all_courses) || marksData.all_courses.length === 0) {
+            return (
+              <div className="text-white/70 text-center p-8">
+                <p>No marks data available. Please refresh to fetch your marks.</p>
+              </div>
+            );
+          }
+
           // Deduplicate courses based on course_code + subject_type combination
           // If same course_code + subject_type appears multiple times, keep the one with more assessments
           const deduplicatedCourses = marksData.all_courses.reduce((acc, course) => {
+            if (!course) return acc; // Skip null/undefined courses
+            
             const existing = acc.find(c => 
-              c.course_code === course.course_code && 
+              c && c.course_code === course.course_code && 
               c.subject_type === course.subject_type
             );
             
@@ -408,7 +473,9 @@ export default function MarksPage() {
               if (currentAssessments > existingAssessments) {
                 // Replace with the one with more assessments
                 const index = acc.indexOf(existing);
-                acc[index] = course;
+                if (index !== -1) {
+                  acc[index] = course;
+                }
               }
               // Otherwise keep existing (don't add duplicate)
             } else {
@@ -426,6 +493,7 @@ export default function MarksPage() {
           });
           
           return deduplicatedCourses.map((course, index) => {
+            if (!course) return null; // Skip null courses
             const lineChartData = createLineChartData(course);
             const courseTitle = getCourseTitle(course);
             

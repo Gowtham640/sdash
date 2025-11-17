@@ -8,6 +8,8 @@ import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
 
 interface TimeSlot {
   time: string;
@@ -152,113 +154,133 @@ export default function TimetablePage() {
         return;
       }
 
-      // ✅ STEP 1: Fetch from API
-      const apiStartTime = Date.now();
-      const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
-      console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, 'timetable'))
-      });
-
-      const apiDuration = Date.now() - apiStartTime;
-      const result = await response.json();
+      // Check client-side cache first (unless force refresh)
+      let cachedTimetable: TimetableData | null = null;
       
-      console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
-      console.log(`[Timetable]   - Success: ${result.success}`);
-      console.log(`[Timetable]   - Status: ${response.status}`);
-
-      // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Timetable] Session expired or invalid');
-        setError('Your session has expired. Please re-enter your password.');
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
-      }
-
-
-      // Process timetable data
-      // Handle both formats: direct object or wrapped in {success, data}
-      let timetableDataObj: TimetableData | null = null;
-      
-      if (result.data.timetable && typeof result.data.timetable === 'object') {
-        // Check if it's direct format (has timetable, time_slots, metadata at root)
-        if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
-          // Direct format
-          timetableDataObj = result.data.timetable as TimetableData;
-          console.log('[Timetable] Timetable data is direct format');
-        } 
-        // Check if it's wrapped format: {success: true, data: {...}}
-        else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
-          const timetableWrapper = result.data.timetable as { success?: boolean | { data?: TimetableData }; data?: TimetableData };
-          const successValue = timetableWrapper.success;
-          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-          if (isSuccess && timetableWrapper.data) {
-            timetableDataObj = timetableWrapper.data;
-            console.log('[Timetable] Timetable data is wrapped format');
-          }
+      if (!forceRefresh) {
+        cachedTimetable = getClientCache<TimetableData>('timetable');
+        
+        // Use cached data immediately (stale-while-revalidate)
+        if (cachedTimetable) {
+          console.log('[Timetable] ✅ Using client-side cache for timetable');
+          setRawTimetableData(cachedTimetable);
+          const convertedData = convertTimetableDataToTimeSlots(cachedTimetable);
+          setTimetableData(convertedData);
         }
-      }
-      
-      if (timetableDataObj && timetableDataObj.timetable) {
-        console.log('[Timetable] Timetable response data:', timetableDataObj);
-        console.log('[Timetable] DO 1 time_slots sample:', timetableDataObj.timetable['DO 1']?.time_slots);
-        
-        setRawTimetableData(timetableDataObj);
-        const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
-        console.log('[Timetable] Converted time slots:', convertedData);
-        
-        setTimetableData(convertedData);
-
-        const occurrences = getSlotOccurrences(timetableDataObj);
-        console.log('[Timetable] Slot occurrences:', occurrences);
-        
-        setSlotOccurrences(occurrences);
-        console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
       } else {
-        // Keep page visible even when timetable data is unavailable
-        // User can use refresh button to fetch data
-        console.warn('[Timetable] Timetable data unavailable - keeping page visible for refresh');
-        console.warn('[Timetable] Timetable data type:', typeof result.data.timetable);
-        console.warn('[Timetable] Timetable data value:', result.data.timetable);
-        setRawTimetableData(null);
-        setTimetableData([]);
-        // Don't throw error, just log it so page remains visible
+        // Force refresh: clear client cache
+        removeClientCache('timetable');
+        console.log('[Timetable] 🗑️ Cleared client cache for force refresh');
       }
+      
+      // Only fetch if cache is missing or force refresh
+      if (!cachedTimetable || forceRefresh) {
+        const apiStartTime = Date.now();
+        const fetchType = forceRefresh ? '(force refresh)' : '(fetching fresh data)';
+        console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
+        
+        // Use request deduplication
+        const requestKey = `fetch_timetable_${access_token.substring(0, 10)}`;
+        const apiResult = await deduplicateRequest(requestKey, async () => {
+          const response = await fetch('/api/data/timetable', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          });
+          
+          const result = await response.json();
+          return { response, result };
+        });
+        
+        const response = apiResult.response;
+        const result = apiResult.result;
+        const apiDuration = Date.now() - apiStartTime;
+        
+        console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
+        console.log(`[Timetable]   - Success: ${result.success}`);
+        console.log(`[Timetable]   - Status: ${response.status}`);
 
-      // Process calendar data for day order stats
-      // Handle both formats for calendar too
-      let calendarEvents: unknown[] | null = null;
-      
-      if (Array.isArray(result.data.calendar)) {
-        // Direct array format
-        calendarEvents = result.data.calendar;
-      } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
-        // Wrapped format
-        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
-        const successValue = calendarWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && Array.isArray(calendarWrapper.data)) {
-          calendarEvents = calendarWrapper.data;
+        // Handle session expiry
+        if (!response.ok || (result.error === 'session_expired')) {
+          console.error('[Timetable] Session expired or invalid');
+          setError('Your session has expired. Please re-enter your password.');
+          setShowPasswordModal(true);
+          setLoading(false);
+          return;
         }
-      }
-      
-      if (calendarEvents && calendarEvents.length > 0) {
-        const stats = getDayOrderStats(calendarEvents as CalendarEvent[]);
-        setDayOrderStats(stats);
-        console.log('[Timetable] Day order stats calculated');
-      }
-      
-      // Register attendance/marks fetch for smart prefetch scheduling
-      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-        registerAttendanceFetch();
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to fetch data');
+        }
+
+
+        // Process timetable data from individual endpoint
+        // Individual endpoint now returns: { success: boolean, data: { timetable: TimetableData }, error?: string }
+        // This matches the unified endpoint format for consistency
+        let timetableDataObj: TimetableData | null = null;
+        
+        console.log('[Timetable] Processing timetable data from API response');
+        console.log('[Timetable] result.data type:', typeof result.data);
+        console.log('[Timetable] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+        
+        // Extract timetable from wrapped format: { data: { timetable: TimetableData } }
+        if (result.data && typeof result.data === 'object' && 'timetable' in result.data) {
+          const timetableData = (result.data as { timetable?: unknown }).timetable;
+          
+          if (timetableData && typeof timetableData === 'object') {
+            // Handle both unwrapped and wrapped data structures within timetable
+            let dataToProcess = timetableData;
+            
+            // Check if data is wrapped in an extra 'data' property (legacy format)
+            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
+              console.log('[Timetable] 🔄 Unwrapping nested data structure in frontend');
+              dataToProcess = (dataToProcess as { data: unknown }).data as typeof timetableData;
+            }
+            
+            // Check if it's the expected TimetableData format
+            if ('timetable' in dataToProcess || 'time_slots' in dataToProcess) {
+              timetableDataObj = dataToProcess as TimetableData;
+              console.log('[Timetable] ✅ Timetable data loaded');
+            } else {
+              console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+              console.warn('[Timetable] Available keys:', Object.keys(dataToProcess));
+            }
+          }
+        } else {
+          console.warn('[Timetable] ⚠️ result.data.timetable is not available');
+          console.warn('[Timetable] result.data structure:', result.data);
+        }
+        
+        if (timetableDataObj && timetableDataObj.timetable) {
+          console.log('[Timetable] Timetable response data:', timetableDataObj);
+          console.log('[Timetable] DO 1 time_slots sample:', timetableDataObj.timetable['DO 1']?.time_slots);
+          
+          setRawTimetableData(timetableDataObj);
+          const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
+          console.log('[Timetable] Converted time slots:', convertedData);
+          
+          // Save to client cache
+          setClientCache('timetable', timetableDataObj);
+          
+          setTimetableData(convertedData);
+
+          const occurrences = getSlotOccurrences(timetableDataObj);
+          console.log('[Timetable] Slot occurrences:', occurrences);
+          
+          setSlotOccurrences(occurrences);
+          console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
+        } else {
+          // Keep page visible even when timetable data is unavailable
+          // User can use refresh button to fetch data
+          console.warn('[Timetable] Timetable data unavailable - keeping page visible for refresh');
+          if (result && result.data) {
+            console.warn('[Timetable] Timetable data type:', typeof result.data);
+            console.warn('[Timetable] Timetable data value:', result.data);
+          }
+          setRawTimetableData(null);
+          setTimetableData([]);
+          // Don't throw error, just log it so page remains visible
+        }
       }
 
     } catch (err) {

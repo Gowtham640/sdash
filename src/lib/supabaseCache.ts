@@ -99,12 +99,8 @@ export async function getSupabaseCacheWithInfo(
     // Check if cache is expired
     if (expiresAt && now > expiresAt) {
       console.log(`[SupabaseCache] Cache expired for ${dataType} (expired at: ${expiresAt.toISOString()})`);
-      // Optionally delete expired cache
-      await supabaseAdmin
-        .from('user_cache')
-        .delete()
-        .eq('user_id', user_id)
-        .eq('data_type', dataType);
+      // Cache expired - return null to trigger fresh fetch, but don't delete the entry
+      // The cache will be updated when fresh data is fetched
       return null;
     }
 
@@ -192,55 +188,67 @@ export async function setSupabaseCache(
 }
 
 /**
- * Delete cached data from Supabase
+ * "Delete" cached data from Supabase (actually just marks as expired by updating expires_at to past)
+ * Note: We never actually delete cache entries, only update them
  */
 export async function deleteSupabaseCache(
   user_id: string,
   dataType: CacheDataType
 ): Promise<boolean> {
   try {
-    console.log(`[SupabaseCache] 🗑️ Deleting cache for ${dataType} (user: ${user_id})`);
+    console.log(`[SupabaseCache] 🔄 Marking cache as expired for ${dataType} (user: ${user_id})`);
     
+    // Instead of deleting, update expires_at to past to mark as expired
+    // This way the cache entry remains but will be treated as expired
     const { error } = await supabaseAdmin
       .from('user_cache')
-      .delete()
+      .update({
+        expires_at: new Date(Date.now() - 1000).toISOString(), // Set to 1 second ago
+        updated_at: new Date().toISOString(),
+      })
       .eq('user_id', user_id)
       .eq('data_type', dataType);
 
     if (error) {
-      console.error(`[SupabaseCache] ❌ Error deleting cache for ${dataType}:`, error);
+      console.error(`[SupabaseCache] ❌ Error marking cache as expired for ${dataType}:`, error);
       return false;
     }
 
-    console.log(`[SupabaseCache] ✅ Cache deleted for ${dataType}`);
+    console.log(`[SupabaseCache] ✅ Cache marked as expired for ${dataType}`);
     return true;
   } catch (error) {
-    console.error(`[SupabaseCache] Exception deleting cache for ${dataType}:`, error);
+    console.error(`[SupabaseCache] Exception marking cache as expired for ${dataType}:`, error);
     return false;
   }
 }
 
 /**
- * Clear all caches for a user
+ * Clear all caches for a user (actually just marks all as expired by updating expires_at to past)
+ * Note: We never actually delete cache entries, only update them
  */
 export async function clearAllSupabaseCache(user_id: string): Promise<boolean> {
   try {
-    console.log(`[SupabaseCache] 🗑️ Clearing all caches for user: ${user_id}`);
+    console.log(`[SupabaseCache] 🔄 Marking all caches as expired for user: ${user_id}`);
     
+    // Instead of deleting, update expires_at to past to mark as expired
+    // This way the cache entries remain but will be treated as expired
     const { error } = await supabaseAdmin
       .from('user_cache')
-      .delete()
+      .update({
+        expires_at: new Date(Date.now() - 1000).toISOString(), // Set to 1 second ago
+        updated_at: new Date().toISOString(),
+      })
       .eq('user_id', user_id);
 
     if (error) {
-      console.error(`[SupabaseCache] ❌ Error clearing all caches:`, error);
+      console.error(`[SupabaseCache] ❌ Error marking all caches as expired:`, error);
       return false;
     }
 
-    console.log(`[SupabaseCache] ✅ All caches cleared`);
+    console.log(`[SupabaseCache] ✅ All caches marked as expired`);
     return true;
   } catch (error) {
-    console.error(`[SupabaseCache] Exception clearing all caches:`, error);
+    console.error(`[SupabaseCache] Exception marking all caches as expired:`, error);
     return false;
   }
 }

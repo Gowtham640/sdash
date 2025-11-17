@@ -8,6 +8,7 @@ import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
 
 interface CalendarEvent {
   date: string;
@@ -141,45 +142,47 @@ export default function CalendarPage() {
       // Fetch all data (like dashboard) to get attendance data for semester extraction
       console.log(`[Calendar] 🚀 Fetching calendar data from API (always fresh from public.calendar)`);
 
-      // Fetch all data to ensure attendance data is available for semester extraction
+      // Use request deduplication for unified API calls
       // Calendar is always fetched fresh from public.calendar table regardless
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
-      });
-
-      // Check if response is OK and has content before parsing JSON
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        console.error(`[Calendar] ❌ API error response (${response.status}):`, errorText);
-        throw new Error(`API request failed with status ${response.status}: ${errorText}`);
-      }
-      
-      // Check if response has content
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error(`[Calendar] ❌ Invalid response content type:`, contentType);
-        console.error(`[Calendar]   - Response body:`, text.substring(0, 200));
-        throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
-      }
-      
-      // Parse JSON with error handling
-      let result;
-      try {
-        const responseText = await response.text();
-        if (!responseText || responseText.trim().length === 0) {
-          console.error(`[Calendar] ❌ Empty response body`);
-          throw new Error('Empty response from server');
+      const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await fetch('/api/data/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
+        });
+        
+        // Check if response is OK and has content before parsing JSON
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          throw new Error(`API request failed with status ${response.status}: ${errorText}`);
         }
-        result = JSON.parse(responseText);
-      } catch (jsonError) {
-        console.error(`[Calendar] ❌ JSON parse error:`, jsonError);
-        console.error(`[Calendar]   - Response status: ${response.status}`);
-        throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
-      }
+        
+        // Check if response has content
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
+        }
+        
+        // Parse JSON with error handling
+        let result;
+        try {
+          const responseText = await response.text();
+          if (!responseText || responseText.trim().length === 0) {
+            throw new Error('Empty response from server');
+          }
+          result = JSON.parse(responseText);
+        } catch (jsonError) {
+          throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+        }
+        
+        return { response, result };
+      });
       
+      const response = apiResult.response;
+      const result = apiResult.result;
+
       console.log('[Calendar] ========================================');
       console.log('[Calendar] 📥 FRONTEND: Received API response');
       console.log('[Calendar]   - Response status:', response.status);
@@ -192,7 +195,7 @@ export default function CalendarPage() {
       console.log('[Calendar] ========================================');
 
       // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
+      if (!response.ok || (result?.error === 'session_expired')) {
         console.error('[Calendar] ❌ Session expired');
         setError('Your session has expired. Please re-enter your password.');
         setShowPasswordModal(true);
@@ -200,9 +203,9 @@ export default function CalendarPage() {
         return;
       }
 
-      if (!result.success) {
-        console.error('[Calendar] ❌ API response not successful:', result.error);
-        throw new Error(result.error || 'Failed to fetch data');
+      if (!result?.success) {
+        console.error('[Calendar] ❌ API response not successful:', result?.error);
+        throw new Error(result?.error || 'Failed to fetch data');
       }
 
       // Process calendar data

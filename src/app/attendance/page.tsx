@@ -18,6 +18,8 @@ import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { trackFeatureClick } from "@/lib/analytics";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 
 interface AttendanceSubject {
@@ -196,6 +198,9 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
 
   // Use the EXACT SAME calculation method as calculateSubjectHoursInDateRange (proven working)
   let totalRemainingHours = 0;
+  if (!slotData || !slotData.dayOrderHours || typeof slotData.dayOrderHours !== 'object') {
+    return <span className="text-red-400">0 hours (no slot data)</span>;
+  }
   Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
     const doNumber = parseInt(dayOrder);
     const dayCount = dayOrderStats[doNumber] || 0;
@@ -377,15 +382,19 @@ export default function AttendancePage() {
       }
 
       // If refresh endpoint returns data directly, set it immediately
-      if (result.data && typeof result.data === 'object' && ('all_subjects' in result.data || 'summary' in result.data)) {
-        console.log('[Attendance] Setting attendance data directly from refresh response');
-        const attendanceDataObj = result.data as AttendanceData;
-        const extractedSemester = attendanceDataObj.metadata?.semester || 1;
-        
-        setAttendanceData(attendanceDataObj);
-        setSemester(extractedSemester);
-        setLoading(false);
-        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects from refresh');
+      // Extract attendance from wrapped format: { data: { attendance: AttendanceData } }
+      if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
+        const attendanceData = (result.data as { attendance?: unknown }).attendance;
+        if (attendanceData && typeof attendanceData === 'object' && ('all_subjects' in attendanceData || 'summary' in attendanceData)) {
+          console.log('[Attendance] Setting attendance data directly from refresh response');
+          const attendanceDataObj = attendanceData as AttendanceData;
+          const extractedSemester = attendanceDataObj.metadata?.semester || 1;
+          
+          setAttendanceData(attendanceDataObj);
+          setSemester(extractedSemester);
+          setLoading(false);
+          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects from refresh');
+        }
       } else {
         // After refresh, fetch unified data to get updated attendance
         await fetchUnifiedData(false);
@@ -411,189 +420,123 @@ export default function AttendancePage() {
         return;
       }
 
-      // ✅ STEP 1: Fetch from API
-      console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh, 'attendance'))
-      });
-
-      const result = await response.json();
-      console.log('[Attendance] Unified API response:', result);
-
-      // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Attendance] Session expired');
-        setError('Your session has expired. Please re-enter your password.');
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
-      }
-
-      // Process attendance data
-      // Handle both formats: direct object or wrapped in {success, data}
-      let attendanceDataObj: AttendanceData | null = null;
-      let extractedSemester: number = 1;
+      // Check client-side cache first (unless force refresh)
+      let cachedAttendance: AttendanceData | null = null;
       
-      console.log('[Attendance] Processing attendance data from API response');
-      console.log('[Attendance] result.data.attendance type:', typeof result.data.attendance);
-      console.log('[Attendance] result.data.attendance keys:', result.data.attendance ? Object.keys(result.data.attendance) : 'null/undefined');
-      console.log('[Attendance] result.data.attendance sample:', result.data.attendance ? JSON.stringify(result.data.attendance).substring(0, 500) : 'null/undefined');
+      if (!forceRefresh) {
+        cachedAttendance = getClientCache<AttendanceData>('attendance');
+        
+        // Use cached data immediately (stale-while-revalidate)
+        if (cachedAttendance) {
+          console.log('[Attendance] ✅ Using client-side cache for attendance');
+          setAttendanceData(cachedAttendance);
+          setSemester(cachedAttendance.metadata?.semester || 1);
+        }
+      } else {
+        // Force refresh: clear client cache
+        removeClientCache('attendance');
+        console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
+      }
       
-      if (result.data.attendance && typeof result.data.attendance === 'object') {
-        // Check if it's direct format (has all_subjects, summary, metadata at root)
-        if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
-          // Direct format
-          attendanceDataObj = result.data.attendance as AttendanceData;
-          extractedSemester = (result.data.attendance as { metadata?: { semester?: number } }).metadata?.semester || 1;
-          console.log('[Attendance] ✅ Attendance data is direct format');
-          console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
-          console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
-        } 
-        // Check if it's wrapped format: {success: true, data: {...}}
-        else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
-          const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData; semester?: number };
-          const successValue = attendanceWrapper.success;
-          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-          if (isSuccess && attendanceWrapper.data) {
-            attendanceDataObj = attendanceWrapper.data;
-            extractedSemester = attendanceWrapper.semester || attendanceWrapper.data.metadata?.semester || 1;
-            console.log('[Attendance] ✅ Attendance data is wrapped format');
-            console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
-            console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
-          } else {
-            console.warn('[Attendance] ⚠️ Wrapped format but no valid data found');
+      // Only fetch if cache is missing or force refresh
+      if (!cachedAttendance || forceRefresh) {
+        console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
+        
+        // Use request deduplication
+        const requestKey = `fetch_attendance_${access_token.substring(0, 10)}`;
+        const apiResult = await deduplicateRequest(requestKey, async () => {
+          const response = await fetch('/api/data/attendance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          });
+          
+          const result = await response.json();
+          return { response, result };
+        });
+        
+        const response = apiResult.response;
+        const result = apiResult.result;
+        console.log('[Attendance] API response:', result);
+
+        // Handle session expiry
+        if (!response.ok || (result.error === 'session_expired')) {
+          console.error('[Attendance] Session expired');
+          setError('Your session has expired. Please re-enter your password.');
+          setShowPasswordModal(true);
+          setLoading(false);
+          return;
+        }
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to fetch data');
+        }
+
+        // Process attendance data from individual endpoint
+        // Individual endpoint now returns: { success: boolean, data: { attendance: AttendanceData }, error?: string }
+        // This matches the unified endpoint format for consistency
+        let attendanceDataObj: AttendanceData | null = null;
+        let extractedSemester: number = 1;
+        
+        console.log('[Attendance] Processing attendance data from API response');
+        console.log('[Attendance] result.data type:', typeof result.data);
+        console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+        
+        // Extract attendance from wrapped format: { data: { attendance: AttendanceData } }
+        if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
+          const attendanceData = (result.data as { attendance?: unknown }).attendance;
+          
+          if (attendanceData && typeof attendanceData === 'object') {
+            // Handle both unwrapped and wrapped data structures within attendance
+            let dataToProcess = attendanceData;
+            
+            // Check if data is wrapped in an extra 'data' property (legacy format)
+            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
+              console.log('[Attendance] 🔄 Unwrapping nested data structure in frontend');
+              dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
+            }
+            
+            // Check if it's the expected AttendanceData format
+            if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
+              attendanceDataObj = dataToProcess as AttendanceData;
+              extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || 1;
+              console.log('[Attendance] ✅ Attendance data loaded');
+              console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
+              console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
+            } else {
+              console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
+              console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
+            }
           }
         } else {
-          console.warn('[Attendance] ⚠️ Attendance data object exists but doesn\'t match expected formats');
-          console.warn('[Attendance]   - Has all_subjects:', 'all_subjects' in result.data.attendance);
-          console.warn('[Attendance]   - Has summary:', 'summary' in result.data.attendance);
-          console.warn('[Attendance]   - Has success:', 'success' in result.data.attendance);
-          console.warn('[Attendance]   - Has data:', 'data' in result.data.attendance);
+          console.warn('[Attendance] ⚠️ result.data.attendance is not available');
+          console.warn('[Attendance] result.data structure:', result.data);
         }
-      } else {
-        console.warn('[Attendance] ⚠️ result.data.attendance is not an object or is null/undefined');
-      }
-      
-      if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
-        setAttendanceData(attendanceDataObj);
-        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
-        console.log('[Attendance] Extracted semester:', extractedSemester);
-        setSemester(extractedSemester);
-      } else {
-        // Keep page visible even when attendance data is unavailable
-        // User can use refresh button to fetch data
-        console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
-        console.warn('[Attendance] Attendance data type:', typeof result.data.attendance);
-        console.warn('[Attendance] Attendance data value:', result.data.attendance);
-        setAttendanceData(null);
-        // Don't throw error, just log it so page remains visible
-      }
-
-      // Also process timetable data from unified endpoint
-      if (result.data.timetable?.success && result.data.timetable.data) {
-        try {
-          const timetableData = result.data.timetable.data;
-          const calendarData = result.data.calendar?.data || [];
-          
-          // Enhanced validation for timetable data
-          console.log('[Attendance] Timetable data received:', timetableData);
-          console.log('[Attendance] Timetable data type:', typeof timetableData);
-          console.log('[Attendance] Timetable data keys:', Object.keys(timetableData || {}));
-          
-          // Handle empty timetable data gracefully
-          if (!timetableData || 
-              Array.isArray(timetableData) || 
-              Object.keys(timetableData).length === 0 ||
-              !timetableData.timetable ||
-              Object.keys(timetableData.timetable).length === 0) {
-            
-            console.warn('[Attendance] Timetable data is empty or invalid');
-            console.warn('[Attendance] This may indicate no timetable assigned or session issues');
-            
-            // Apply holiday logic even without timetable data
-            const extractedSemester = result.data.attendance?.semester || 
-                                     result.data.attendance?.data?.metadata?.semester || 
-                                     1;
-            const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-            
-            setSlotOccurrences([]);
-            setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
-            setCalendarData(modifiedCalendarData);
-            
-            // Continue processing - attendance will still work without timetable
-            console.log('[Attendance] Continuing without timetable data - attendance functionality preserved');
-            return;
-          }
-          
-          // Use the PROVEN utility functions from timetableUtils (same as timetable page)
-          console.log('[Attendance] Using proven utility functions for timetable processing');
-          
-          // Get slot occurrences using the proven function
-          const occurrences = getSlotOccurrences(timetableData);
-          console.log('[Attendance] Slot occurrences from getSlotOccurrences:', occurrences.map(s => ({
-              courseTitle: s.courseTitle,
-              category: s.category,
-              slot: s.slot,
-            dayOrders: s.dayOrders,
-            dayOrderHours: s.dayOrderHours,
-            totalOccurrences: s.totalOccurrences
-            })));
-          setSlotOccurrences(occurrences);
-          
-          // Apply holiday logic based on semester (Saturdays after 26/10, all days after 10/11)
-          const extractedSemester = result.data.attendance?.semester || 
-                                   result.data.attendance?.data?.metadata?.semester || 
-                                   1;
-          const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-          console.log('[Attendance] Applied holiday logic for semester:', extractedSemester);
-          
-          // Get day order stats using the MODIFIED calendar data (holidays already excluded in getDayOrderStats)
-          const stats = getDayOrderStats(modifiedCalendarData);
-          console.log('[Attendance] Day order stats from getDayOrderStats:', stats);
-          setDayOrderStats(stats);
-          setCalendarData(modifiedCalendarData);
-          
-          console.log('[Attendance] Timetable data processed using proven functions:', {
-            slotOccurrences: occurrences.length,
-            dayOrderStats: stats
-          });
-        } catch (timetableErr) {
-          console.error('[Attendance] Error processing timetable data:', timetableErr);
-          // Set empty data gracefully on error
-          const calendarData = result.data.calendar?.data || [];
-          const extractedSemester = result.data.attendance?.semester || 
-                                   result.data.attendance?.data?.metadata?.semester || 
-                                   1;
-          const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-          
-          setSlotOccurrences([]);
-          setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
-          setCalendarData(modifiedCalendarData);
-        }
-      } else {
-        console.warn('[Attendance] No timetable data available from API');
-        // Set empty data gracefully when no timetable data
-        const calendarData = result.data.calendar?.data || [];
-        const extractedSemester = result.data.attendance?.semester || 
-                                 result.data.attendance?.data?.metadata?.semester || 
-                                 1;
-        const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
         
-        setSlotOccurrences([]);
-        setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
-        setCalendarData(modifiedCalendarData);
-      }
-      
-      // Register attendance/marks fetch for smart prefetch scheduling
-      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-        registerAttendanceFetch();
+        if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
+          setAttendanceData(attendanceDataObj);
+          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
+          console.log('[Attendance] Extracted semester:', extractedSemester);
+          setSemester(extractedSemester);
+          
+          // Save to client cache
+          setClientCache('attendance', attendanceDataObj);
+        } else {
+          // Keep page visible even when attendance data is unavailable
+          // User can use refresh button to fetch data
+          console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
+          if (result && result.data) {
+            console.warn('[Attendance] Attendance data type:', typeof result.data);
+            console.warn('[Attendance] Attendance data value:', result.data);
+          }
+          setAttendanceData(null);
+          // Don't throw error, just log it so page remains visible
+        }
+        
+        // Register attendance fetch for smart prefetch scheduling
+        if (result.success && attendanceDataObj) {
+          registerAttendanceFetch();
+        }
       }
 
     } catch (err) {
@@ -949,7 +892,9 @@ export default function AttendancePage() {
 
       {/* Individual Subject Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
-        {attendanceData.all_subjects.map((subject, index) => {
+        {attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
+          attendanceData.all_subjects.map((subject, index) => {
+            if (!subject) return null; // Skip null subjects
           // Get prediction data if in prediction mode or OD/ML mode
           const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p => 
             p.subject.subject_code === subject.subject_code && 
@@ -1230,11 +1175,13 @@ export default function AttendancePage() {
 
                             // Calculate original remaining hours
                             let originalRemainingHours = 0;
-                            Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
-                              const doNumber = parseInt(dayOrder);
-                              const dayCount = dayOrderStats[doNumber] || 0;
-                              originalRemainingHours += dayCount * hoursPerDay;
-                            });
+                            if (slotData && slotData.dayOrderHours && typeof slotData.dayOrderHours === 'object') {
+                              Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
+                                const doNumber = parseInt(dayOrder);
+                                const dayCount = dayOrderStats[doNumber] || 0;
+                                originalRemainingHours += dayCount * hoursPerDay;
+                              });
+                            }
                             
                             // Calculate new remaining hours: original - future hours being added
                             const newRemainingHours = originalRemainingHours - futureHours;
@@ -1273,36 +1220,43 @@ export default function AttendancePage() {
               )}
             </div>
           );
-        })}
+          })
+        ) : (
+          <div className="text-white/70 text-center p-8">
+            <p>No attendance data available. Please refresh to fetch your attendance.</p>
+          </div>
+        )}
+      </div>
         {/* Summary Stats */}
-        <div className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6">
+        {attendanceData && attendanceData.summary ? (
+          <div className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6">
             <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl mb-3 sm:mb-4">
               {isPredictionMode ? 'Predicted Summary' : 'Overall Summary'}
             </div>
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 text-white font-sora items-center justify-center">
-            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
+              <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
                 <div className="text-blue-400 text-xs sm:text-sm">Total Subjects</div>
-                <div className="text-base sm:text-lg font-bold">{attendanceData.summary.total_subjects}</div>
-            </div>
-            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
+                <div className="text-base sm:text-lg font-bold">{attendanceData.summary.total_subjects || 0}</div>
+              </div>
+              <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
                 <div className="text-green-400 text-xs sm:text-sm">
                   {isPredictionMode ? 'Predicted Attendance' : 'Overall Attendance'}
                 </div>
                 <div className="text-lg font-bold">
-                  {isPredictionMode && predictionResults.length > 0 ? 
-                    `${(predictionResults.reduce((sum, p) => sum + p.predictedAttendance, 0) / predictionResults.length).toFixed(1)}%` :
-                    attendanceData.summary.overall_attendance_percentage
+                  {isPredictionMode && predictionResults && predictionResults.length > 0 ? 
+                    `${(predictionResults.reduce((sum, p) => sum + (p?.predictedAttendance || 0), 0) / predictionResults.length).toFixed(1)}%` :
+                    attendanceData.summary.overall_attendance_percentage || '0%'
                   }
                 </div>
-                {isPredictionMode && predictionResults.length > 0 && (
+                {isPredictionMode && predictionResults && predictionResults.length > 0 && (
                   <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                    Current: {attendanceData.summary.overall_attendance_percentage}
+                    Current: {attendanceData.summary.overall_attendance_percentage || '0%'}
                   </div>
                 )}
+              </div>
             </div>
           </div>
-        </div>
-        </div>
+        ) : null}
       
       {/* Attendance Prediction Modal */}
       {attendanceData && (
