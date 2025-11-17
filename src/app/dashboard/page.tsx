@@ -6,7 +6,6 @@ import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
-import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
@@ -286,6 +285,25 @@ export default function Dashboard() {
 
       // Check individual client-side caches first (unless force refresh)
       // Note: Calendar is always fetched fresh from public.calendar table, not from cache
+      // Remove any old calendar cache that might exist
+      removeClientCache('calendar');
+      console.log('[Dashboard] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
+      
+      // Also check and clean unified cache if it contains calendar data
+      const unifiedCache = getClientCache('unified');
+      if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
+        const unifiedData = unifiedCache as { data?: { calendar?: unknown } };
+        if (unifiedData.data?.calendar) {
+          console.log('[Dashboard] 🗑️ Found calendar in unified cache, removing it');
+          // Remove calendar from unified cache data
+          if (unifiedData.data) {
+            delete unifiedData.data.calendar;
+            setClientCache('unified', unifiedCache);
+            console.log('[Dashboard] ✅ Cleaned calendar from unified cache');
+          }
+        }
+      }
+      
       let cachedAttendance: AttendanceData | null = null;
       let cachedMarks: MarksData | null = null;
       let cachedTimetable: unknown | null = null;
@@ -321,7 +339,6 @@ export default function Dashboard() {
       const needAttendance = !cachedAttendance || forceRefresh;
       const needMarks = !cachedMarks || forceRefresh;
       const needTimetable = !cachedTimetable || forceRefresh;
-      const allMissing = needAttendance && needMarks && needTimetable;
       const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
       
       console.log('[Dashboard] 📊 Cache status:');
@@ -330,83 +347,8 @@ export default function Dashboard() {
       console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
       
-      // If all data is cached (except calendar which is always fetched), only fetch calendar
-      if (missingCount === 0 && !forceRefresh) {
-        console.log('[Dashboard] ✅ All data cached, only fetching calendar from API');
-        // Continue to fetch calendar from API below
-      } else if (missingCount === 1) {
-        // Only one missing - fetch individual type
-        console.log('[Dashboard] 🎯 Only one data type missing, fetching individually...');
-        
-        if (needAttendance && !needMarks && !needTimetable) {
-          // Only attendance missing
-          const requestKey = `fetch_attendance_${access_token.substring(0, 10)}`;
-          await deduplicateRequest(requestKey, async () => {
-            const response = await fetch('/api/data/attendance', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-            });
-            const result = await response.json();
-            if (result.success && result.data && typeof result.data === 'object' && 'attendance' in result.data) {
-              const attendanceData = (result.data as { attendance?: unknown }).attendance;
-              if (attendanceData) {
-                setAttendanceData(attendanceData as AttendanceData);
-                setClientCache('attendance', attendanceData);
-              }
-            }
-            return result;
-          });
-        } else if (needMarks && !needAttendance && !needTimetable) {
-          // Only marks missing
-          const requestKey = `fetch_marks_${access_token.substring(0, 10)}`;
-          await deduplicateRequest(requestKey, async () => {
-            const response = await fetch('/api/data/marks', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-            });
-            const result = await response.json();
-            if (result.success && result.data && typeof result.data === 'object' && 'marks' in result.data) {
-              const marksData = (result.data as { marks?: unknown }).marks;
-              if (marksData) {
-                setMarksData(marksData as MarksData);
-                setClientCache('marks', marksData);
-              }
-            }
-            return result;
-          });
-        } else if (needTimetable && !needAttendance && !needMarks) {
-          // Only timetable missing
-          const requestKey = `fetch_timetable_${access_token.substring(0, 10)}`;
-          await deduplicateRequest(requestKey, async () => {
-            const response = await fetch('/api/data/timetable', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-            });
-            const result = await response.json();
-            if (result.success && result.data && typeof result.data === 'object' && 'timetable' in result.data) {
-              const timetableData = (result.data as { timetable?: unknown }).timetable;
-              if (timetableData) {
-                setTimetableData(timetableData as typeof timetableData);
-                setClientCache('timetable', timetableData);
-              }
-            }
-            return result;
-          });
-        }
-        
-        // After fetching individual type, still need to fetch calendar
-        // Continue to unified API call below for calendar
-      } else if (allMissing) {
-        // All 3 missing - fetch unified data
-        console.log('[Dashboard] 🎯 All data types missing, fetching unified data...');
-      } else {
-        // Multiple missing but not all - fetch unified data
-        console.log('[Dashboard] 🎯 Multiple data types missing, fetching unified data...');
-      }
-
+      // Always use unified API endpoint with request deduplication
+      // This ensures only one page calls the backend at a time
       // Ensure password is available (handles race condition after login redirect)
       const password = await waitForPassword();
       
@@ -414,17 +356,15 @@ export default function Dashboard() {
         console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
       }
 
-      // Only call unified API if all 3 are missing OR multiple are missing (not just 1)
-      // If only 1 was missing, we already fetched it above
-      if (missingCount > 1 || allMissing) {
+      if (missingCount > 0 || forceRefresh) {
         // Fetch from API with automatic retry on password-related session_expired
         let response: Response | null = null;
         let result: any = null;
         let apiStartTime = Date.now();
         const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
         
-        // Use request deduplication for unified API calls
-        const requestKey = `fetch_unified_${access_token.substring(0, 10)}`;
+        // Use request deduplication for unified API calls - ensures only ONE call at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
           // First attempt
           let attempt = 1;
@@ -581,6 +521,7 @@ export default function Dashboard() {
       
       // Register attendance/marks fetch for smart prefetch scheduling
       // Only register if we fetched unified data (result is defined)
+      const allMissing = missingCount === 3;
       if (missingCount > 1 || allMissing) {
         if (result && result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
           registerAttendanceFetch();
@@ -610,12 +551,27 @@ export default function Dashboard() {
     console.log('[Dashboard] Marks data:', result.data.marks);
     
     // Process calendar data - handle both direct format and wrapped format
+    console.log('[Dashboard] 📋 ========================================');
+    console.log('[Dashboard] 📋 CALENDAR PROCESSING - Starting calendar data processing');
+    console.log('[Dashboard] 📋   - result.data.calendar exists:', !!result.data.calendar);
+    console.log('[Dashboard] 📋   - result.data.calendar type:', typeof result.data.calendar);
+    console.log('[Dashboard] 📋   - result.data.calendar is array:', Array.isArray(result.data.calendar));
+    if (result.data.calendar && Array.isArray(result.data.calendar)) {
+      console.log('[Dashboard] 📋   - Calendar array length:', result.data.calendar.length);
+      if (result.data.calendar.length > 0) {
+        console.log('[Dashboard] 📋   - First event sample:', JSON.stringify(result.data.calendar[0], null, 2).substring(0, 200));
+        console.log('[Dashboard] 📋   - Last event sample:', JSON.stringify(result.data.calendar[result.data.calendar.length - 1], null, 2).substring(0, 200));
+      }
+    }
+    console.log('[Dashboard] 📋 ========================================');
+    
     let calendarEvents: CalendarEvent[] | null = null;
     
     if (Array.isArray(result.data.calendar)) {
       // Direct array format
       calendarEvents = result.data.calendar;
-      console.log('[Dashboard] Calendar data is direct array format');
+      console.log('[Dashboard] ✅ Calendar data is direct array format');
+      console.log('[Dashboard]   - Total events:', calendarEvents.length);
     } else if (result.data.calendar && typeof result.data.calendar === 'object') {
       // Check if it's wrapped format: {success: true, data: [...]}
       if ('success' in result.data.calendar && 'data' in result.data.calendar) {
@@ -624,13 +580,15 @@ export default function Dashboard() {
         const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
         if (isSuccess && Array.isArray(calendarWrapper.data)) {
           calendarEvents = calendarWrapper.data;
-          console.log('[Dashboard] Calendar data is wrapped format');
+          console.log('[Dashboard] ✅ Calendar data is wrapped format');
+          console.log('[Dashboard]   - Total events:', calendarEvents.length);
         }
       }
       // Check legacy nested format: {data: [...]}
       else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
         calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
-        console.log('[Dashboard] Calendar data is legacy nested format');
+        console.log('[Dashboard] ✅ Calendar data is legacy nested format');
+        console.log('[Dashboard]   - Total events:', calendarEvents.length);
       }
     }
     
@@ -687,10 +645,14 @@ export default function Dashboard() {
         console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
       
-      const modifiedCalendarData = markSaturdaysAsHolidays(calendarEvents, finalSemester);
-      console.log('[Dashboard] Applied holiday logic for semester:', finalSemester);
-      setCalendarData(modifiedCalendarData);
-      console.log('[Dashboard] ✅ Calendar data loaded:', modifiedCalendarData.length);
+      console.log('[Dashboard] 📋 Calendar events count:', calendarEvents.length);
+      if (calendarEvents.length > 0) {
+        console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
+        console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
+      }
+      // Display calendar data as-is without holiday modifications
+      setCalendarData(calendarEvents);
+      console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', calendarEvents.length, 'events');
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
       console.warn('[Dashboard] Calendar data type:', typeof result.data.calendar);
@@ -855,9 +817,8 @@ export default function Dashboard() {
           }
         }
         
-        const finalSemester = extractedSemester || 1;
-        const modifiedCalendarForStats = markSaturdaysAsHolidays(calendarForStats as CalendarEvent[], finalSemester);
-        const stats = getDayOrderStats(modifiedCalendarForStats);
+        // Use calendar data as-is without holiday modifications
+        const stats = getDayOrderStats(calendarForStats as CalendarEvent[]);
         setDayOrderStats(stats);
         console.log('[Dashboard] ✅ Day order stats loaded:', stats);
       } catch (err) {

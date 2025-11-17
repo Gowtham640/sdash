@@ -143,6 +143,58 @@ export async function getSupabaseCacheWithInfo(
 }
 
 /**
+ * Get cached data even if expired (for stale-while-revalidate pattern)
+ * Returns the cache entry data regardless of expiry status
+ */
+export async function getSupabaseCacheEvenIfExpired(
+  user_id: string,
+  dataType: CacheDataType
+): Promise<unknown | null> {
+  try {
+    console.log(`[SupabaseCache] 🔍 Fetching cache for ${dataType} (even if expired) (user: ${user_id})`);
+    
+    const { data, error } = await supabaseAdmin
+      .from('user_cache')
+      .select('data, expires_at')
+      .eq('user_id', user_id)
+      .eq('data_type', dataType)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // No rows returned (cache doesn't exist)
+        console.log(`[SupabaseCache] No cache found for ${dataType} (even expired)`);
+        return null;
+      }
+      console.error(`[SupabaseCache] Error fetching cache for ${dataType}:`, error);
+      return null;
+    }
+
+    if (!data) {
+      console.log(`[SupabaseCache] No cache found for ${dataType} (even expired)`);
+      return null;
+    }
+
+    const entry = data as { data: unknown; expires_at: string | null };
+    const now = new Date();
+    const expiresAt = entry.expires_at ? new Date(entry.expires_at) : null;
+    
+    if (expiresAt && now > expiresAt) {
+      const msSinceExpiry = now.getTime() - expiresAt.getTime();
+      const minutesSinceExpiry = Math.round(msSinceExpiry / 1000 / 60);
+      console.log(`[SupabaseCache] ⚠️ Cache expired for ${dataType} (expired ${minutesSinceExpiry} minutes ago), but returning stale data for fallback`);
+    } else {
+      console.log(`[SupabaseCache] ✅ Cache found for ${dataType} (valid)`);
+    }
+
+    return entry.data;
+  } catch (error) {
+    console.error(`[SupabaseCache] Exception fetching cache (even if expired) for ${dataType}:`, error);
+    return null;
+  }
+}
+
+/**
  * Save or update cached data in Supabase
  */
 export async function setSupabaseCache(

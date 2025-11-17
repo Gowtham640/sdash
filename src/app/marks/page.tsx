@@ -124,7 +124,7 @@ export default function MarksPage() {
       }
 
       // If refresh endpoint returns data directly, set it immediately
-      // Extract marks from wrapped format: { data: { marks: MarksData } }
+      // Extract marks from unified endpoint response: { data: { marks: MarksData, ... } }
       if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
         const marksData = (result.data as { marks?: unknown }).marks;
         if (marksData && typeof marksData === 'object' && ('all_courses' in marksData || 'summary' in marksData)) {
@@ -181,10 +181,10 @@ export default function MarksPage() {
       if (!cachedMarks || forceRefresh) {
         console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
         
-        // Use request deduplication
-        const requestKey = `fetch_marks_${access_token.substring(0, 10)}`;
+        // Use request deduplication - ensures only ONE page calls backend at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/marks', {
+          const response = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
@@ -211,16 +211,15 @@ export default function MarksPage() {
           throw new Error(result.error || 'Failed to fetch data');
         }
 
-        // Process marks data from individual endpoint
-        // Individual endpoint now returns: { success: boolean, data: { marks: MarksData }, error?: string }
-        // This matches the unified endpoint format for consistency
+        // Process marks data from unified endpoint
+        // Unified endpoint returns: { success: boolean, data: { marks: MarksData, ... }, error?: string }
         let marksDataObj: MarksData | null = null;
         
         console.log('[Marks] Processing marks data from API response');
         console.log('[Marks] result.data type:', typeof result.data);
         console.log('[Marks] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
         
-        // Extract marks from wrapped format: { data: { marks: MarksData } }
+        // Extract marks from unified response: { data: { marks: MarksData, ... } }
         if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
           const marksData = (result.data as { marks?: unknown }).marks;
           

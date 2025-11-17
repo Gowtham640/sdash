@@ -195,13 +195,32 @@ export async function POST(request: NextRequest) {
     // Safely extract cached data with null checks (only for requested types)
     // Note: Calendar is NOT cached, always fetched from public.calendar table
     const cachedTimetable = shouldFetchTimetable && (timetableInfo && timetableInfo.data) ? timetableInfo.data : null;
-    const cachedAttendance = shouldFetchAttendance && (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
+    let cachedAttendance = shouldFetchAttendance && (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
     const cachedMarks = shouldFetchMarks && (marksInfo && marksInfo.data) ? marksInfo.data : null;
+    
+    // Track if we have expired cache (for fallback use, but still need to fetch fresh data)
+    let hasExpiredAttendanceCache = false;
+    
+    // If attendance cache is expired (attendanceInfo is null but cache might exist), fetch expired cache for fallback
+    if (shouldFetchAttendance && !cachedAttendance && !forceRefresh) {
+      try {
+        const { getSupabaseCacheEvenIfExpired } = await import('@/lib/supabaseCache');
+        const expiredAttendance = await getSupabaseCacheEvenIfExpired(user_id, 'attendance');
+        if (expiredAttendance) {
+          cachedAttendance = expiredAttendance;
+          hasExpiredAttendanceCache = true;
+          console.log(`[API /data/all] ⚠️ Using expired attendance cache as fallback (stale-while-revalidate)`);
+        }
+      } catch (error) {
+        console.error(`[API /data/all] ❌ Error fetching expired attendance cache:`, error);
+      }
+    }
 
     // Determine what needs to be fetched (only for requested types)
     // Calendar is always fetched from public.calendar table (not from cache or backend)
+    // Note: If we only have expired cache (hasExpiredAttendanceCache), we still need to fetch fresh data
     const needTimetable = shouldFetchTimetable && (!cachedTimetable || forceRefresh);
-    const needAttendance = shouldFetchAttendance && (!cachedAttendance || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire));
+    const needAttendance = shouldFetchAttendance && ((!cachedAttendance || hasExpiredAttendanceCache) || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire));
     const needMarks = shouldFetchMarks && (!cachedMarks || forceRefresh || (marksInfo && marksInfo.isAboutToExpire));
     const needStatic = needTimetable; // Calendar is not part of static fetch anymore
     const needDynamic = needAttendance || needMarks;
@@ -304,6 +323,15 @@ export async function POST(request: NextRequest) {
         
         const dynamicDataData = dynamicData.data as { attendance?: unknown; marks?: unknown } | undefined;
         if (dynamicData.success && dynamicDataData) {
+          // If backend returned null attendance but we have cached attendance (including expired), preserve cached attendance in dynamicData
+          if (!dynamicDataData.attendance && cachedAttendance && needAttendance) {
+            if (hasExpiredAttendanceCache) {
+              console.log(`[API /data/all] ⚠️ Backend returned null attendance, but expired cached attendance exists - preserving expired cached attendance`);
+            } else {
+              console.log(`[API /data/all] ⚠️ Backend returned null attendance, but cached attendance exists - preserving cached attendance`);
+            }
+            dynamicDataData.attendance = cachedAttendance;
+          }
           if (dynamicDataData.attendance && needAttendance) {
             try {
               await setSupabaseCache(user_id, 'attendance', dynamicDataData.attendance);
@@ -559,6 +587,9 @@ export async function POST(request: NextRequest) {
       shouldFetchTimetable,
       shouldFetchAttendance,
       shouldFetchMarks,
+      cachedTimetable,
+      cachedAttendance,
+      cachedMarks,
     });
     
     console.log(`[API /data/all] 📊 Merged result:`);
@@ -1266,6 +1297,9 @@ function mergeSplitDataResults(
     shouldFetchTimetable?: boolean;
     shouldFetchAttendance?: boolean;
     shouldFetchMarks?: boolean;
+    cachedTimetable?: unknown;
+    cachedAttendance?: unknown;
+    cachedMarks?: unknown;
   }
 ): Record<string, unknown> {
   const staticSuccess = staticData && staticData.success;
@@ -1293,17 +1327,69 @@ function mergeSplitDataResults(
   }
   
   if (shouldFetchTimetable) {
-    dataObject.timetable = (staticData?.data as { timetable?: unknown } | undefined)?.timetable ?? null;
+    // Try to get timetable from staticData first, then fallback to cached data
+    const timetableFromStatic = (staticData?.data as { timetable?: unknown } | undefined)?.timetable;
+    if (timetableFromStatic) {
+      dataObject.timetable = timetableFromStatic;
+    } else if (options?.cachedTimetable) {
+      // Use cached timetable - handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+      const cached = options.cachedTimetable;
+      if (typeof cached === 'object' && cached !== null) {
+        // Check if cached data has 'data' property with timetable structure (API response format)
+        if ('data' in cached && typeof (cached as { data?: unknown }).data === 'object' && (cached as { data?: unknown }).data !== null) {
+          const cachedData = (cached as { data?: { timetable?: unknown; time_slots?: unknown; slot_mapping?: unknown } }).data;
+          // Extract the data object which has the correct TimetableData structure
+          dataObject.timetable = cachedData;
+          console.log(`[API /data/all] ✅ Using cached timetable from wrapped format (extracted from data property)`);
+        }
+        // Check if cached data has 'timetable' property directly (direct format)
+        else if ('timetable' in cached) {
+          dataObject.timetable = (cached as { timetable?: unknown }).timetable;
+          console.log(`[API /data/all] ✅ Using cached timetable from direct format`);
+        }
+        // Cached data is already in timetable format (has timetable, time_slots, slot_mapping at root)
+        else if ('timetable' in cached || 'time_slots' in cached) {
+          dataObject.timetable = cached;
+          console.log(`[API /data/all] ✅ Using cached timetable as-is (already in correct format)`);
+        } else {
+          dataObject.timetable = null;
+          console.warn(`[API /data/all] ⚠️ Cached timetable has unexpected structure`);
+        }
+      } else {
+        dataObject.timetable = cached;
+      }
+    } else {
+      dataObject.timetable = null;
+    }
   }
   
   if (shouldFetchAttendance) {
-    // Get attendance from dynamicData - it might be directly in data.attendance or wrapped
+    // Get attendance from dynamicData first, then fallback to cached data
     const attendanceFromDynamic = (dynamicData?.data as { attendance?: unknown } | undefined)?.attendance;
-    dataObject.attendance = attendanceFromDynamic ?? null;
+    if (attendanceFromDynamic && attendanceFromDynamic !== null) {
+      dataObject.attendance = attendanceFromDynamic;
+      console.log(`[API /data/all] ✅ Using attendance from dynamicData`);
+    } else if (options?.cachedAttendance) {
+      // Use cached attendance when dynamicData doesn't have it or it's null
+      dataObject.attendance = options.cachedAttendance;
+      console.log(`[API /data/all] ✅ Using cached attendance (dynamicData had null or missing attendance)`);
+    } else {
+      dataObject.attendance = null;
+      console.warn(`[API /data/all] ⚠️ No attendance data available (neither from dynamicData nor cache)`);
+    }
   }
   
   if (shouldFetchMarks) {
-    dataObject.marks = (dynamicData?.data as { marks?: unknown } | undefined)?.marks ?? null;
+    // Get marks from dynamicData first, then fallback to cached data
+    const marksFromDynamic = (dynamicData?.data as { marks?: unknown } | undefined)?.marks;
+    if (marksFromDynamic) {
+      dataObject.marks = marksFromDynamic;
+    } else if (options?.cachedMarks) {
+      // Use cached marks
+      dataObject.marks = options.cachedMarks;
+    } else {
+      dataObject.marks = null;
+    }
   }
   
   const merged: Record<string, unknown> = {

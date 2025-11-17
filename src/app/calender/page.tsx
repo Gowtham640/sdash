@@ -1,7 +1,6 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Link from 'next/link';
-import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
@@ -9,6 +8,7 @@ import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
+import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
 
 interface CalendarEvent {
   date: string;
@@ -139,6 +139,25 @@ export default function CalendarPage() {
       }
 
       // Calendar is always fetched fresh from public.calendar table
+      // Remove any old calendar cache that might exist
+      removeClientCache('calendar');
+      console.log('[Calendar] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
+      
+      // Also check and clean unified cache if it contains calendar data
+      const unifiedCache = getClientCache('unified');
+      if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
+        const unifiedData = unifiedCache as { data?: { calendar?: unknown } };
+        if (unifiedData.data?.calendar) {
+          console.log('[Calendar] 🗑️ Found calendar in unified cache, removing it');
+          // Remove calendar from unified cache data
+          if (unifiedData.data) {
+            delete unifiedData.data.calendar;
+            setClientCache('unified', unifiedCache);
+            console.log('[Calendar] ✅ Cleaned calendar from unified cache');
+          }
+        }
+      }
+      
       // Fetch all data (like dashboard) to get attendance data for semester extraction
       console.log(`[Calendar] 🚀 Fetching calendar data from API (always fresh from public.calendar)`);
 
@@ -210,12 +229,27 @@ export default function CalendarPage() {
 
       // Process calendar data
       // Handle both direct format and wrapped format
+      console.log('[Calendar] 📋 ========================================');
+      console.log('[Calendar] 📋 CALENDAR PROCESSING - Starting calendar data processing');
+      console.log('[Calendar] 📋   - result.data.calendar exists:', !!result.data.calendar);
+      console.log('[Calendar] 📋   - result.data.calendar type:', typeof result.data.calendar);
+      console.log('[Calendar] 📋   - result.data.calendar is array:', Array.isArray(result.data.calendar));
+      if (result.data.calendar && Array.isArray(result.data.calendar)) {
+        console.log('[Calendar] 📋   - Calendar array length:', result.data.calendar.length);
+        if (result.data.calendar.length > 0) {
+          console.log('[Calendar] 📋   - First event sample:', JSON.stringify(result.data.calendar[0], null, 2).substring(0, 200));
+          console.log('[Calendar] 📋   - Last event sample:', JSON.stringify(result.data.calendar[result.data.calendar.length - 1], null, 2).substring(0, 200));
+        }
+      }
+      console.log('[Calendar] 📋 ========================================');
+      
       let calendarEvents: CalendarEvent[] | null = null;
       
       if (Array.isArray(result.data.calendar)) {
         // Direct array format
         calendarEvents = result.data.calendar;
-        console.log('[Calendar] Calendar data is direct array format');
+        console.log('[Calendar] ✅ Calendar data is direct array format');
+        console.log('[Calendar]   - Total events:', calendarEvents.length);
       } else if (result.data.calendar && typeof result.data.calendar === 'object') {
         // Check if it's wrapped format: {success: true, data: [...]}
         if ('success' in result.data.calendar && 'data' in result.data.calendar) {
@@ -224,13 +258,15 @@ export default function CalendarPage() {
           const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
           if (isSuccess && Array.isArray(calendarWrapper.data)) {
             calendarEvents = calendarWrapper.data;
-            console.log('[Calendar] Calendar data is wrapped format');
+            console.log('[Calendar] ✅ Calendar data is wrapped format');
+            console.log('[Calendar]   - Total events:', calendarEvents.length);
           }
         }
         // Check legacy nested format: {data: [...]}
         else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
           calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
-          console.log('[Calendar] Calendar data is legacy nested format');
+          console.log('[Calendar] ✅ Calendar data is legacy nested format');
+          console.log('[Calendar]   - Total events:', calendarEvents.length);
         }
       }
       
@@ -287,10 +323,14 @@ export default function CalendarPage() {
           console.log('[Calendar] 💾 Stored semester in storage:', extractedSemester);
         }
         
-        const modifiedCalendarData = markSaturdaysAsHolidays(calendarEvents, finalSemester);
-        console.log('[Calendar] Applied holiday logic for semester:', finalSemester);
-        setCalendarData(modifiedCalendarData);
-        console.log('[Calendar] ✅ Calendar data loaded:', modifiedCalendarData.length);
+        console.log('[Calendar] 📋 Calendar events count:', calendarEvents.length);
+        if (calendarEvents.length > 0) {
+          console.log('[Calendar] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
+          console.log('[Calendar] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
+        }
+        // Display calendar data as-is without holiday modifications
+        setCalendarData(calendarEvents);
+        console.log('[Calendar] ✅ ✅ ✅ Calendar data loaded and set:', calendarEvents.length, 'events');
       } else {
         // Keep page visible even when calendar data is unavailable
         console.warn('[Calendar] ⚠️ ⚠️ ⚠️ CALENDAR DATA UNAVAILABLE');

@@ -156,16 +156,40 @@ export default function TimetablePage() {
 
       // Check client-side cache first (unless force refresh)
       let cachedTimetable: TimetableData | null = null;
+      let hasValidCache = false;
       
       if (!forceRefresh) {
-        cachedTimetable = getClientCache<TimetableData>('timetable');
+        const cachedTimetableRaw = getClientCache('timetable');
         
-        // Use cached data immediately (stale-while-revalidate)
-        if (cachedTimetable) {
-          console.log('[Timetable] ✅ Using client-side cache for timetable');
-          setRawTimetableData(cachedTimetable);
-          const convertedData = convertTimetableDataToTimeSlots(cachedTimetable);
-          setTimetableData(convertedData);
+        // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+        if (cachedTimetableRaw) {
+          let timetableDataToUse: TimetableData | null = null;
+          
+          if (typeof cachedTimetableRaw === 'object' && cachedTimetableRaw !== null) {
+            // Check if cached data has 'data' property (wrapped API response format)
+            if ('data' in cachedTimetableRaw && typeof (cachedTimetableRaw as { data?: unknown }).data === 'object' && (cachedTimetableRaw as { data?: unknown }).data !== null) {
+              const cachedData = (cachedTimetableRaw as { data?: TimetableData }).data;
+              if (cachedData && 'timetable' in cachedData) {
+                timetableDataToUse = cachedData;
+                console.log('[Timetable] ✅ Using client-side cache for timetable (extracted from data property)');
+              }
+            }
+            // Check if cached data is already in TimetableData format (has timetable property at root)
+            else if ('timetable' in cachedTimetableRaw || 'time_slots' in cachedTimetableRaw) {
+              timetableDataToUse = cachedTimetableRaw as TimetableData;
+              console.log('[Timetable] ✅ Using client-side cache for timetable (direct format)');
+            }
+          }
+          
+          if (timetableDataToUse) {
+            cachedTimetable = timetableDataToUse;
+            hasValidCache = true;
+            setRawTimetableData(timetableDataToUse);
+            const convertedData = convertTimetableDataToTimeSlots(timetableDataToUse);
+            setTimetableData(convertedData);
+          } else {
+            console.warn('[Timetable] ⚠️ Cached timetable has unexpected structure, will fetch fresh data');
+          }
         }
       } else {
         // Force refresh: clear client cache
@@ -174,15 +198,15 @@ export default function TimetablePage() {
       }
       
       // Only fetch if cache is missing or force refresh
-      if (!cachedTimetable || forceRefresh) {
+      if (!hasValidCache || forceRefresh) {
         const apiStartTime = Date.now();
         const fetchType = forceRefresh ? '(force refresh)' : '(fetching fresh data)';
         console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
         
-        // Use request deduplication
-        const requestKey = `fetch_timetable_${access_token.substring(0, 10)}`;
+        // Use request deduplication - ensures only ONE page calls backend at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/timetable', {
+          const response = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
@@ -213,37 +237,43 @@ export default function TimetablePage() {
           throw new Error(result.error || 'Failed to fetch data');
         }
 
-
-        // Process timetable data from individual endpoint
-        // Individual endpoint now returns: { success: boolean, data: { timetable: TimetableData }, error?: string }
-        // This matches the unified endpoint format for consistency
+        // Process timetable data from unified endpoint
+        // Unified endpoint returns: { success: boolean, data: { timetable: TimetableData, ... }, error?: string }
         let timetableDataObj: TimetableData | null = null;
         
         console.log('[Timetable] Processing timetable data from API response');
         console.log('[Timetable] result.data type:', typeof result.data);
         console.log('[Timetable] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
         
-        // Extract timetable from wrapped format: { data: { timetable: TimetableData } }
+        // Extract timetable from unified response: { data: { timetable: TimetableData, ... } }
         if (result.data && typeof result.data === 'object' && 'timetable' in result.data) {
           const timetableData = (result.data as { timetable?: unknown }).timetable;
           
           if (timetableData && typeof timetableData === 'object') {
-            // Handle both unwrapped and wrapped data structures within timetable
-            let dataToProcess = timetableData;
+            // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+            let dataToProcess: unknown = timetableData;
             
-            // Check if data is wrapped in an extra 'data' property (legacy format)
-            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
-              console.log('[Timetable] 🔄 Unwrapping nested data structure in frontend');
-              dataToProcess = (dataToProcess as { data: unknown }).data as typeof timetableData;
+            // Check if data is wrapped in a 'data' property (API response format from cache)
+            if ('data' in dataToProcess && typeof (dataToProcess as { data?: unknown }).data === 'object' && (dataToProcess as { data?: unknown }).data !== null) {
+              console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
+              const wrappedData = (dataToProcess as { data?: TimetableData }).data;
+              if (wrappedData && 'timetable' in wrappedData) {
+                dataToProcess = wrappedData;
+              }
+            }
+            // Check if it's already in TimetableData format (has timetable property at root)
+            else if ('timetable' in dataToProcess || 'time_slots' in dataToProcess) {
+              // Already in correct format
+              dataToProcess = dataToProcess;
             }
             
-            // Check if it's the expected TimetableData format
-            if ('timetable' in dataToProcess || 'time_slots' in dataToProcess) {
+            // Verify it's the expected TimetableData format
+            if (dataToProcess && typeof dataToProcess === 'object' && ('timetable' in dataToProcess || 'time_slots' in dataToProcess)) {
               timetableDataObj = dataToProcess as TimetableData;
               console.log('[Timetable] ✅ Timetable data loaded');
             } else {
               console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-              console.warn('[Timetable] Available keys:', Object.keys(dataToProcess));
+              console.warn('[Timetable] Available keys:', dataToProcess && typeof dataToProcess === 'object' ? Object.keys(dataToProcess) : 'not an object');
             }
           }
         } else {
@@ -314,6 +344,12 @@ export default function TimetablePage() {
   const convertTimetableDataToTimeSlots = (data: TimetableData): TimeSlot[] => {
     const timeSlots: TimeSlot[] = [];
 
+    // Check if timetable data exists
+    if (!data || !data.timetable || typeof data.timetable !== 'object') {
+      console.warn('[Timetable] ⚠️ Invalid timetable data structure:', data);
+      return timeSlots;
+    }
+
     const timeSlotKeys = data.time_slots || [
       "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
       "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
@@ -330,13 +366,17 @@ export default function TimetablePage() {
       };
 
       ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach((doName, index) => {
-        const doData = data.timetable[doName];
-        if (doData && doData.time_slots && doData.time_slots[timeSlot]) {
-          const slotInfo = doData.time_slots[timeSlot];
-          const courseTitle = slotInfo.course_title || "";
+        // Safely access timetable data
+        const doData = data.timetable && typeof data.timetable === 'object' ? (data.timetable as Record<string, unknown>)[doName] : null;
+        if (doData && typeof doData === 'object' && doData !== null) {
+          const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string }> };
+          if (doDataTyped.time_slots && doDataTyped.time_slots[timeSlot]) {
+            const slotInfo = doDataTyped.time_slots[timeSlot];
+            const courseTitle = slotInfo.course_title || "";
 
-          const doKey = `do${index + 1}` as keyof TimeSlot;
-          timeSlotEntry[doKey] = courseTitle || "";
+            const doKey = `do${index + 1}` as keyof TimeSlot;
+            timeSlotEntry[doKey] = courseTitle || "";
+          }
         }
       });
 

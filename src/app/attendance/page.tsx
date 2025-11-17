@@ -382,7 +382,7 @@ export default function AttendancePage() {
       }
 
       // If refresh endpoint returns data directly, set it immediately
-      // Extract attendance from wrapped format: { data: { attendance: AttendanceData } }
+      // Extract attendance from unified endpoint response: { data: { attendance: AttendanceData, ... } }
       if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
         const attendanceData = (result.data as { attendance?: unknown }).attendance;
         if (attendanceData && typeof attendanceData === 'object' && ('all_subjects' in attendanceData || 'summary' in attendanceData)) {
@@ -442,10 +442,10 @@ export default function AttendancePage() {
       if (!cachedAttendance || forceRefresh) {
         console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
         
-        // Use request deduplication
-        const requestKey = `fetch_attendance_${access_token.substring(0, 10)}`;
+        // Use request deduplication - ensures only ONE page calls backend at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/attendance', {
+          const response = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
@@ -472,9 +472,8 @@ export default function AttendancePage() {
           throw new Error(result.error || 'Failed to fetch data');
         }
 
-        // Process attendance data from individual endpoint
-        // Individual endpoint now returns: { success: boolean, data: { attendance: AttendanceData }, error?: string }
-        // This matches the unified endpoint format for consistency
+        // Process attendance data from unified endpoint
+        // Unified endpoint returns: { success: boolean, data: { attendance: AttendanceData, ... }, error?: string }
         let attendanceDataObj: AttendanceData | null = null;
         let extractedSemester: number = 1;
         
@@ -482,7 +481,7 @@ export default function AttendancePage() {
         console.log('[Attendance] result.data type:', typeof result.data);
         console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
         
-        // Extract attendance from wrapped format: { data: { attendance: AttendanceData } }
+        // Extract attendance from unified response: { data: { attendance: AttendanceData, ... } }
         if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
           const attendanceData = (result.data as { attendance?: unknown }).attendance;
           
