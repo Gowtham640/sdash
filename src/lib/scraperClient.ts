@@ -5,7 +5,7 @@
 
 import { requestQueueTracker } from "@/lib/requestQueue";
 
-const BACKEND_URL = 'http://localhost:5000';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 console.log('[Backend Client] BACKEND_URL:', BACKEND_URL);
 
 export interface ScraperRequest {
