@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
@@ -17,6 +17,10 @@ import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
+import { trackFeatureClick } from "@/lib/analytics";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
+import { useErrorTracking } from "@/lib/useErrorTracking";
 
 interface AttendanceSubject {
   row_number: number;
@@ -194,6 +198,9 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
 
   // Use the EXACT SAME calculation method as calculateSubjectHoursInDateRange (proven working)
   let totalRemainingHours = 0;
+  if (!slotData || !slotData.dayOrderHours || typeof slotData.dayOrderHours !== 'object') {
+    return <span className="text-red-400">0 hours (no slot data)</span>;
+  }
   Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
     const doNumber = parseInt(dayOrder);
     const dayCount = dayOrderStats[doNumber] || 0;
@@ -214,6 +221,9 @@ export default function AttendancePage() {
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/attendance');
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
@@ -231,6 +241,10 @@ export default function AttendancePage() {
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+  
+  // Refs to prevent duplicate button clicks
+  const isOpeningPredictionModal = useRef(false);
+  const isOpeningOdmlModal = useRef(false);
 
   useEffect(() => {
     fetchUnifiedData();
@@ -247,12 +261,24 @@ export default function AttendancePage() {
     return () => clearInterval(interval);
   }, [loading]);
 
+  // Use ref to prevent duplicate calls
+  const isCalculatingRef = useRef(false);
+  
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
+    // Prevent duplicate calls
+    if (isCalculatingRef.current) {
+      console.log('[Attendance] Prediction calculation already in progress, skipping duplicate call');
+      return;
+    }
+    
     if (!attendanceData) {
       return;
     }
 
+    // Mark as calculating
+    isCalculatingRef.current = true;
     setIsCalculating(true);
+    
     try {
       const results = calculatePredictedAttendance(
         attendanceData,
@@ -268,15 +294,28 @@ export default function AttendancePage() {
       console.error('Prediction calculation error:', err);
     } finally {
       setIsCalculating(false);
+      isCalculatingRef.current = false;
     }
   };
 
+  // Use ref to prevent duplicate calls for ODML
+  const isOdmlCalculatingRef = useRef(false);
+  
   const handleODMLCalculate = async (periods: LeavePeriod[]) => {
+    // Prevent duplicate calls
+    if (isOdmlCalculatingRef.current) {
+      console.log('[Attendance] OD/ML calculation already in progress, skipping duplicate call');
+      return;
+    }
+    
     if (!attendanceData) {
       return;
     }
 
+    // Mark as calculating
+    isOdmlCalculatingRef.current = true;
     setIsCalculating(true);
+    
     try {
       const results = calculateODMLAdjustedAttendance(
         attendanceData,
@@ -292,6 +331,7 @@ export default function AttendancePage() {
       console.error('OD/ML calculation error:', err);
     } finally {
       setIsCalculating(false);
+      isOdmlCalculatingRef.current = false;
     }
   };
 
@@ -342,15 +382,19 @@ export default function AttendancePage() {
       }
 
       // If refresh endpoint returns data directly, set it immediately
-      if (result.data && typeof result.data === 'object' && ('all_subjects' in result.data || 'summary' in result.data)) {
-        console.log('[Attendance] Setting attendance data directly from refresh response');
-        const attendanceDataObj = result.data as AttendanceData;
-        const extractedSemester = attendanceDataObj.metadata?.semester || 1;
-        
-        setAttendanceData(attendanceDataObj);
-        setSemester(extractedSemester);
-        setLoading(false);
-        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects from refresh');
+      // Extract attendance from unified endpoint response: { data: { attendance: AttendanceData, ... } }
+      if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
+        const attendanceData = (result.data as { attendance?: unknown }).attendance;
+        if (attendanceData && typeof attendanceData === 'object' && ('all_subjects' in attendanceData || 'summary' in attendanceData)) {
+          console.log('[Attendance] Setting attendance data directly from refresh response');
+          const attendanceDataObj = attendanceData as AttendanceData;
+          const extractedSemester = attendanceDataObj.metadata?.semester || 1;
+          
+          setAttendanceData(attendanceDataObj);
+          setSemester(extractedSemester);
+          setLoading(false);
+          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects from refresh');
+        }
       } else {
         // After refresh, fetch unified data to get updated attendance
         await fetchUnifiedData(false);
@@ -376,170 +420,122 @@ export default function AttendancePage() {
         return;
       }
 
-      // ✅ STEP 1: Fetch from API
-      console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-      });
-
-      const result = await response.json();
-      console.log('[Attendance] Unified API response:', result);
-
-      // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Attendance] Session expired');
-        setError('Your session has expired. Please re-enter your password.');
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
-      }
-
-      // Process attendance data
-      // Handle both formats: direct object or wrapped in {success, data}
-      let attendanceDataObj: AttendanceData | null = null;
-      let extractedSemester: number = 1;
+      // Check client-side cache first (unless force refresh)
+      let cachedAttendance: AttendanceData | null = null;
       
-      if (result.data.attendance && typeof result.data.attendance === 'object') {
-        // Check if it's direct format (has all_subjects, summary, metadata at root)
-        if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
-          // Direct format
-          attendanceDataObj = result.data.attendance as AttendanceData;
-          extractedSemester = (result.data.attendance as { metadata?: { semester?: number } }).metadata?.semester || 1;
-          console.log('[Attendance] Attendance data is direct format');
-        } 
-        // Check if it's wrapped format: {success: true, data: {...}}
-        else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
-          const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData; semester?: number };
-          const successValue = attendanceWrapper.success;
-          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-          if (isSuccess && attendanceWrapper.data) {
-            attendanceDataObj = attendanceWrapper.data;
-            extractedSemester = attendanceWrapper.semester || attendanceWrapper.data.metadata?.semester || 1;
-            console.log('[Attendance] Attendance data is wrapped format');
-          }
-        }
-      }
-      
-      if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
-        setAttendanceData(attendanceDataObj);
-        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
-        console.log('[Attendance] Extracted semester:', extractedSemester);
-        setSemester(extractedSemester);
-      } else {
-        // Keep page visible even when attendance data is unavailable
-        // User can use refresh button to fetch data
-        console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
-        console.warn('[Attendance] Attendance data type:', typeof result.data.attendance);
-        console.warn('[Attendance] Attendance data value:', result.data.attendance);
-        setAttendanceData(null);
-        // Don't throw error, just log it so page remains visible
-      }
-
-      // Also process timetable data from unified endpoint
-      if (result.data.timetable?.success && result.data.timetable.data) {
-        try {
-          const timetableData = result.data.timetable.data;
-          const calendarData = result.data.calendar?.data || [];
-          
-          // Enhanced validation for timetable data
-          console.log('[Attendance] Timetable data received:', timetableData);
-          console.log('[Attendance] Timetable data type:', typeof timetableData);
-          console.log('[Attendance] Timetable data keys:', Object.keys(timetableData || {}));
-          
-          // Handle empty timetable data gracefully
-          if (!timetableData || 
-              Array.isArray(timetableData) || 
-              Object.keys(timetableData).length === 0 ||
-              !timetableData.timetable ||
-              Object.keys(timetableData.timetable).length === 0) {
-            
-            console.warn('[Attendance] Timetable data is empty or invalid');
-            console.warn('[Attendance] This may indicate no timetable assigned or session issues');
-            
-            // Apply holiday logic even without timetable data
-            const extractedSemester = result.data.attendance?.semester || 
-                                     result.data.attendance?.data?.metadata?.semester || 
-                                     1;
-            const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-            
-            setSlotOccurrences([]);
-            setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
-            setCalendarData(modifiedCalendarData);
-            
-            // Continue processing - attendance will still work without timetable
-            console.log('[Attendance] Continuing without timetable data - attendance functionality preserved');
-            return;
-          }
-          
-          // Use the PROVEN utility functions from timetableUtils (same as timetable page)
-          console.log('[Attendance] Using proven utility functions for timetable processing');
-          
-          // Get slot occurrences using the proven function
-          const occurrences = getSlotOccurrences(timetableData);
-          console.log('[Attendance] Slot occurrences from getSlotOccurrences:', occurrences.map(s => ({
-              courseTitle: s.courseTitle,
-              category: s.category,
-              slot: s.slot,
-            dayOrders: s.dayOrders,
-            dayOrderHours: s.dayOrderHours,
-            totalOccurrences: s.totalOccurrences
-            })));
-          setSlotOccurrences(occurrences);
-          
-          // Apply holiday logic based on semester (Saturdays after 26/10, all days after 10/11)
-          const extractedSemester = result.data.attendance?.semester || 
-                                   result.data.attendance?.data?.metadata?.semester || 
-                                   1;
-          const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-          console.log('[Attendance] Applied holiday logic for semester:', extractedSemester);
-          
-          // Get day order stats using the MODIFIED calendar data (holidays already excluded in getDayOrderStats)
-          const stats = getDayOrderStats(modifiedCalendarData);
-          console.log('[Attendance] Day order stats from getDayOrderStats:', stats);
-          setDayOrderStats(stats);
-          setCalendarData(modifiedCalendarData);
-          
-          console.log('[Attendance] Timetable data processed using proven functions:', {
-            slotOccurrences: occurrences.length,
-            dayOrderStats: stats
-          });
-        } catch (timetableErr) {
-          console.error('[Attendance] Error processing timetable data:', timetableErr);
-          // Set empty data gracefully on error
-          const calendarData = result.data.calendar?.data || [];
-          const extractedSemester = result.data.attendance?.semester || 
-                                   result.data.attendance?.data?.metadata?.semester || 
-                                   1;
-          const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
-          
-          setSlotOccurrences([]);
-          setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
-          setCalendarData(modifiedCalendarData);
-        }
-      } else {
-        console.warn('[Attendance] No timetable data available from API');
-        // Set empty data gracefully when no timetable data
-        const calendarData = result.data.calendar?.data || [];
-        const extractedSemester = result.data.attendance?.semester || 
-                                 result.data.attendance?.data?.metadata?.semester || 
-                                 1;
-        const modifiedCalendarData = markSaturdaysAsHolidays(calendarData, extractedSemester);
+      if (!forceRefresh) {
+        cachedAttendance = getClientCache<AttendanceData>('attendance');
         
-        setSlotOccurrences([]);
-        setDayOrderStats({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
-        setCalendarData(modifiedCalendarData);
+        // Use cached data immediately (stale-while-revalidate)
+        if (cachedAttendance) {
+          console.log('[Attendance] ✅ Using client-side cache for attendance');
+          setAttendanceData(cachedAttendance);
+          setSemester(cachedAttendance.metadata?.semester || 1);
+        }
+      } else {
+        // Force refresh: clear client cache
+        removeClientCache('attendance');
+        console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
       }
       
-      // Register attendance/marks fetch for smart prefetch scheduling
-      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-        registerAttendanceFetch();
+      // Only fetch if cache is missing or force refresh
+      if (!cachedAttendance || forceRefresh) {
+        console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
+        
+        // Use request deduplication - ensures only ONE page calls backend at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+        const apiResult = await deduplicateRequest(requestKey, async () => {
+          const response = await fetch('/api/data/all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          });
+          
+          const result = await response.json();
+          return { response, result };
+        });
+        
+        const response = apiResult.response;
+        const result = apiResult.result;
+        console.log('[Attendance] API response:', result);
+
+        // Handle session expiry
+        if (!response.ok || (result.error === 'session_expired')) {
+          console.error('[Attendance] Session expired');
+          setError('Your session has expired. Please re-enter your password.');
+          setShowPasswordModal(true);
+          setLoading(false);
+          return;
+        }
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to fetch data');
+        }
+
+        // Process attendance data from unified endpoint
+        // Unified endpoint returns: { success: boolean, data: { attendance: AttendanceData, ... }, error?: string }
+        let attendanceDataObj: AttendanceData | null = null;
+        let extractedSemester: number = 1;
+        
+        console.log('[Attendance] Processing attendance data from API response');
+        console.log('[Attendance] result.data type:', typeof result.data);
+        console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+        
+        // Extract attendance from unified response: { data: { attendance: AttendanceData, ... } }
+        if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
+          const attendanceData = (result.data as { attendance?: unknown }).attendance;
+          
+          if (attendanceData && typeof attendanceData === 'object') {
+            // Handle both unwrapped and wrapped data structures within attendance
+            let dataToProcess = attendanceData;
+            
+            // Check if data is wrapped in an extra 'data' property (legacy format)
+            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
+              console.log('[Attendance] 🔄 Unwrapping nested data structure in frontend');
+              dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
+            }
+            
+            // Check if it's the expected AttendanceData format
+            if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
+              attendanceDataObj = dataToProcess as AttendanceData;
+              extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || 1;
+              console.log('[Attendance] ✅ Attendance data loaded');
+              console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
+              console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
+            } else {
+              console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
+              console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
+            }
+          }
+        } else {
+          console.warn('[Attendance] ⚠️ result.data.attendance is not available');
+          console.warn('[Attendance] result.data structure:', result.data);
+        }
+        
+        if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
+          setAttendanceData(attendanceDataObj);
+          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
+          console.log('[Attendance] Extracted semester:', extractedSemester);
+          setSemester(extractedSemester);
+          
+          // Save to client cache
+          setClientCache('attendance', attendanceDataObj);
+        } else {
+          // Keep page visible even when attendance data is unavailable
+          // User can use refresh button to fetch data
+          console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
+          if (result && result.data) {
+            console.warn('[Attendance] Attendance data type:', typeof result.data);
+            console.warn('[Attendance] Attendance data value:', result.data);
+          }
+          setAttendanceData(null);
+          // Don't throw error, just log it so page remains visible
+        }
+        
+        // Register attendance fetch for smart prefetch scheduling
+        if (result.success && attendanceDataObj) {
+          registerAttendanceFetch();
+        }
       }
 
     } catch (err) {
@@ -823,7 +819,21 @@ export default function AttendancePage() {
         {!isPredictionMode && !isOdmlMode ? (
           <div className="flex gap-4 items-center">
               <button
-                  onClick={() => setShowPredictionModal(true)}
+                  onClick={() => {
+                    // Prevent duplicate clicks
+                    if (isOpeningPredictionModal.current) {
+                      return;
+                    }
+                    isOpeningPredictionModal.current = true;
+                    
+                    trackFeatureClick('predict_attendance', '/attendance');
+                    setShowPredictionModal(true);
+                    
+                    // Reset after a short delay
+                    setTimeout(() => {
+                      isOpeningPredictionModal.current = false;
+                    }, 500);
+                  }}
                   className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
                   >
                   <ShinyText 
@@ -834,7 +844,21 @@ export default function AttendancePage() {
                   />
               </button>
               <button
-                  onClick={() => setShowODMLModal(true)}
+                  onClick={() => {
+                    // Prevent duplicate clicks
+                    if (isOpeningOdmlModal.current) {
+                      return;
+                    }
+                    isOpeningOdmlModal.current = true;
+                    
+                    trackFeatureClick('predict_odml', '/attendance');
+                    setShowODMLModal(true);
+                    
+                    // Reset after a short delay
+                    setTimeout(() => {
+                      isOpeningOdmlModal.current = false;
+                    }, 500);
+                  }}
                   className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
                   >
                   <ShinyText 
@@ -867,7 +891,9 @@ export default function AttendancePage() {
 
       {/* Individual Subject Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
-        {attendanceData.all_subjects.map((subject, index) => {
+        {attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
+          attendanceData.all_subjects.map((subject, index) => {
+            if (!subject) return null; // Skip null subjects
           // Get prediction data if in prediction mode or OD/ML mode
           const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p => 
             p.subject.subject_code === subject.subject_code && 
@@ -1007,45 +1033,77 @@ export default function AttendancePage() {
                 </div>
 
                 {/* Right Side - Pie Chart */}
-                <div className="flex flex-col items-center justify-center  w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
-                  {pieChartData.length > 0 ? (
-                    <div className="relative w-full h-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={pieChartData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius="55%"
-                            outerRadius="85%"
-                            paddingAngle={5}
-                            dataKey="value"
-                          >
-                            {pieChartData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="text-center">
-                          <div className="text-white font-sora text-xl sm:text-2xl md:text-3xl lg:text-3xl font-bold">
-                            {attendancePercentage.toFixed(1)}%
-                          </div>
-                          <div className="text-gray-400 font-sora text-xs sm:text-sm">
-                            {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
-                          </div>
-                          {prediction && (
-                            <div className="text-gray-500 font-sora text-[10px] sm:text-xs mt-1">
-                              Current: {currentAttendance.toFixed(1)}%
-                            </div>
-                          )}
+                <div className="flex flex-col items-center justify-center w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
+                  {(() => {
+                    console.log('[PIE CHART DEBUG] Subject:', subject.subject_code);
+                    console.log('[PIE CHART DEBUG] pieChartData:', pieChartData);
+                    console.log('[PIE CHART DEBUG] pieChartData type:', typeof pieChartData);
+                    console.log('[PIE CHART DEBUG] pieChartData length:', pieChartData?.length);
+                    console.log('[PIE CHART DEBUG] pieChartData values:', pieChartData?.map(e => ({ name: e.name, value: e.value, color: e.color })));
+                    console.log('[PIE CHART DEBUG] hours_conducted:', subject.hours_conducted);
+                    console.log('[PIE CHART DEBUG] hours_absent:', subject.hours_absent);
+                    return null;
+                  })()}
+                  <div 
+                    className="relative w-full h-full flex items-center justify-center" 
+                    style={{ minWidth: '200px', minHeight: '200px' }}
+                    ref={(el) => {
+                      if (el) {
+                        const rect = el.getBoundingClientRect();
+                        const computed = window.getComputedStyle(el);
+                        console.log('[PIE CHART DEBUG] Container actual dimensions:', {
+                          width: rect.width,
+                          height: rect.height,
+                          clientWidth: el.clientWidth,
+                          clientHeight: el.clientHeight,
+                          computedWidth: computed.width,
+                          computedHeight: computed.height,
+                          display: computed.display,
+                          position: computed.position
+                        });
+                      }
+                    }}
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      {(() => {
+                        console.log('[PIE CHART DEBUG] ResponsiveContainer rendering with data:', pieChartData || []);
+                        console.log('[PIE CHART DEBUG] Data sum:', pieChartData?.reduce((sum, e) => sum + (e.value || 0), 0));
+                        return (
+                          <PieChart>
+                            <Pie
+                              data={pieChartData || []}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius="55%"
+                              outerRadius="85%"
+                              paddingAngle={5}
+                              dataKey="value"
+                            >
+                              {(pieChartData || []).map((entry, index) => {
+                                console.log(`[PIE CHART DEBUG] Rendering Cell ${index}:`, entry);
+                                return <Cell key={`cell-${index}`} fill={entry.color} />;
+                              })}
+                            </Pie>
+                          </PieChart>
+                        );
+                      })()}
+                    </ResponsiveContainer>
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="text-center">
+                        <div className="text-white font-sora text-xl sm:text-2xl md:text-3xl lg:text-3xl font-bold">
+                          {attendancePercentage.toFixed(1)}%
                         </div>
+                        <div className="text-gray-400 font-sora text-xs sm:text-sm">
+                          {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
+                        </div>
+                        {prediction && (
+                          <div className="text-gray-500 font-sora text-[10px] sm:text-xs mt-1">
+                            Current: {currentAttendance.toFixed(1)}%
+                          </div>
+                        )}
                       </div>
                     </div>
-                  ) : (
-                    <div className="text-gray-400 font-sora">No data available</div>
-                  )}
+                  </div>
                 </div>
               </div>
 
@@ -1116,11 +1174,13 @@ export default function AttendancePage() {
 
                             // Calculate original remaining hours
                             let originalRemainingHours = 0;
-                            Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
-                              const doNumber = parseInt(dayOrder);
-                              const dayCount = dayOrderStats[doNumber] || 0;
-                              originalRemainingHours += dayCount * hoursPerDay;
-                            });
+                            if (slotData && slotData.dayOrderHours && typeof slotData.dayOrderHours === 'object') {
+                              Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
+                                const doNumber = parseInt(dayOrder);
+                                const dayCount = dayOrderStats[doNumber] || 0;
+                                originalRemainingHours += dayCount * hoursPerDay;
+                              });
+                            }
                             
                             // Calculate new remaining hours: original - future hours being added
                             const newRemainingHours = originalRemainingHours - futureHours;
@@ -1159,36 +1219,43 @@ export default function AttendancePage() {
               )}
             </div>
           );
-        })}
+          })
+        ) : (
+          <div className="text-white/70 text-center p-8">
+            <p>No attendance data available. Please refresh to fetch your attendance.</p>
+          </div>
+        )}
+      </div>
         {/* Summary Stats */}
-        <div className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6">
+        {attendanceData && attendanceData.summary ? (
+          <div className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6">
             <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl mb-3 sm:mb-4">
               {isPredictionMode ? 'Predicted Summary' : 'Overall Summary'}
             </div>
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 text-white font-sora items-center justify-center">
-            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
+              <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
                 <div className="text-blue-400 text-xs sm:text-sm">Total Subjects</div>
-                <div className="text-base sm:text-lg font-bold">{attendanceData.summary.total_subjects}</div>
-            </div>
-            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
+                <div className="text-base sm:text-lg font-bold">{attendanceData.summary.total_subjects || 0}</div>
+              </div>
+              <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
                 <div className="text-green-400 text-xs sm:text-sm">
                   {isPredictionMode ? 'Predicted Attendance' : 'Overall Attendance'}
                 </div>
                 <div className="text-lg font-bold">
-                  {isPredictionMode && predictionResults.length > 0 ? 
-                    `${(predictionResults.reduce((sum, p) => sum + p.predictedAttendance, 0) / predictionResults.length).toFixed(1)}%` :
-                    attendanceData.summary.overall_attendance_percentage
+                  {isPredictionMode && predictionResults && predictionResults.length > 0 ? 
+                    `${(predictionResults.reduce((sum, p) => sum + (p?.predictedAttendance || 0), 0) / predictionResults.length).toFixed(1)}%` :
+                    attendanceData.summary.overall_attendance_percentage || '0%'
                   }
                 </div>
-                {isPredictionMode && predictionResults.length > 0 && (
+                {isPredictionMode && predictionResults && predictionResults.length > 0 && (
                   <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                    Current: {attendanceData.summary.overall_attendance_percentage}
+                    Current: {attendanceData.summary.overall_attendance_percentage || '0%'}
                   </div>
                 )}
+              </div>
             </div>
           </div>
-        </div>
-        </div>
+        ) : null}
       
       {/* Attendance Prediction Modal */}
       {attendanceData && (

@@ -6,11 +6,12 @@ import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
-import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import NavigationButton from "@/components/NavigationButton";
+import { useErrorTracking } from "@/lib/useErrorTracking";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
 
 // Import types
 interface CalendarEvent {
@@ -67,6 +68,9 @@ export default function Dashboard() {
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/dashboard');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [factOpacity, setFactOpacity] = useState(1);
@@ -116,8 +120,11 @@ export default function Dashboard() {
 
   // Get current day's day order
   const getCurrentDayOrder = () => {
+    if (!calendarData || !Array.isArray(calendarData) || calendarData.length === 0) {
+      return null;
+    }
     const currentDate = getCurrentDateString();
-    const currentEvent = calendarData.find(event => event.date === currentDate);
+    const currentEvent = calendarData.find(event => event && event.date === currentDate);
     return currentEvent?.day_order || null;
   };
 
@@ -146,6 +153,9 @@ export default function Dashboard() {
 
     // Convert to array of {time, course_title, category}
     const timeSlots: TimeSlot[] = [];
+    if (!dayTimetable || !dayTimetable.time_slots || typeof dayTimetable.time_slots !== 'object') {
+      return timeSlots;
+    }
     Object.entries(dayTimetable.time_slots).forEach(([time, slot]: [string, unknown]) => {
       const typedSlot = slot as { slot_code?: string; slot_type?: string };
       if (typedSlot?.slot_code) {
@@ -273,37 +283,107 @@ export default function Dashboard() {
         return;
       }
 
-      // Check client-side cache first (unless force refresh)
+      // Check individual client-side caches first (unless force refresh)
+      // Note: Calendar is always fetched fresh from public.calendar table, not from cache
+      // Remove any old calendar cache that might exist
+      removeClientCache('calendar');
+      console.log('[Dashboard] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
+      
+      // Also check and clean unified cache if it contains calendar data
+      const unifiedCache = getClientCache('unified');
+      if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
+        const unifiedData = unifiedCache as { data?: { calendar?: unknown } };
+        if (unifiedData.data?.calendar) {
+          console.log('[Dashboard] 🗑️ Found calendar in unified cache, removing it');
+          // Remove calendar from unified cache data
+          if (unifiedData.data) {
+            delete unifiedData.data.calendar;
+            setClientCache('unified', unifiedCache);
+            console.log('[Dashboard] ✅ Cleaned calendar from unified cache');
+          }
+        }
+      }
+      
+      let cachedAttendance: AttendanceData | null = null;
+      let cachedMarks: MarksData | null = null;
+      let cachedTimetable: unknown | null = null;
+      
       if (!forceRefresh) {
-        const cachedData = getClientCache('unified');
-        if (cachedData) {
-          console.log('[Dashboard] ✅ Using client-side cache (instant load)');
-          const cached = cachedData as {
-            data?: {
-              calendar?: CalendarEvent[];
-              attendance?: AttendanceData;
-              marks?: MarksData;
-              timetable?: unknown;
-            };
-          };
+        cachedAttendance = getClientCache<AttendanceData>('attendance');
+        cachedMarks = getClientCache<MarksData>('marks');
+        cachedTimetable = getClientCache('timetable');
+        
+        // Use cached data immediately (stale-while-revalidate)
+        if (cachedAttendance) {
+          console.log('[Dashboard] ✅ Using client-side cache for attendance');
+          setAttendanceData(cachedAttendance);
+        }
+        if (cachedMarks) {
+          console.log('[Dashboard] ✅ Using client-side cache for marks');
+          setMarksData(cachedMarks);
+        }
+        if (cachedTimetable) {
+          console.log('[Dashboard] ✅ Using client-side cache for timetable');
+          // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+          let timetableDataToUse: typeof timetableData | null = null;
           
-          if (cached.data) {
-            if (cached.data.calendar) setCalendarData(cached.data.calendar);
-            if (cached.data.attendance) setAttendanceData(cached.data.attendance);
-            if (cached.data.marks) setMarksData(cached.data.marks);
-            if (cached.data.timetable) setTimetableData(cached.data.timetable);
+          if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
+            // Check if cached data has 'data' property (wrapped API response format)
+            if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
+              const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
+              if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
+                timetableDataToUse = cachedData;
+                console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
+              }
+            }
+            // Check if cached data is already in direct format (has timetable property at root)
+            else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
+              timetableDataToUse = cachedTimetable as typeof timetableData;
+              console.log('[Dashboard] ✅ Using timetable in direct format');
+            }
           }
           
-          setLoading(false);
-          registerAttendanceFetch();
-          return;
+          if (timetableDataToUse) {
+            setTimetableData(timetableDataToUse);
+            // Also set slot occurrences for day order stats
+            try {
+              const timetableForUtils = {
+                timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
+                slot_mapping: timetableDataToUse.slot_mapping,
+              } as TimetableData;
+              const occurrences = getSlotOccurrences(timetableForUtils);
+              setSlotOccurrences(occurrences);
+              console.log('[Dashboard] ✅ Timetable slot occurrences loaded:', occurrences.length);
+            } catch (err) {
+              console.error('[Dashboard] ❌ Error processing cached timetable:', err);
+            }
+          } else {
+            console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
+          }
         }
       } else {
-        // Force refresh: clear client cache
+        // Force refresh: clear client caches
+        removeClientCache('attendance');
+        removeClientCache('marks');
+        removeClientCache('timetable');
         removeClientCache('unified');
-        console.log('[Dashboard] 🗑️ Cleared client cache for force refresh');
+        console.log('[Dashboard] 🗑️ Cleared client caches for force refresh');
       }
-
+      
+      // Determine what needs to be fetched
+      const needAttendance = !cachedAttendance || forceRefresh;
+      const needMarks = !cachedMarks || forceRefresh;
+      const needTimetable = !cachedTimetable || forceRefresh;
+      const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
+      
+      console.log('[Dashboard] 📊 Cache status:');
+      console.log(`[Dashboard]   - Attendance: ${cachedAttendance ? '✓ Cached' : '✗ Need fetch'}`);
+      console.log(`[Dashboard]   - Marks: ${cachedMarks ? '✓ Cached' : '✗ Need fetch'}`);
+      console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
+      console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
+      
+      // Always use unified API endpoint with request deduplication
+      // This ensures only one page calls the backend at a time
       // Ensure password is available (handles race condition after login redirect)
       const password = await waitForPassword();
       
@@ -311,107 +391,181 @@ export default function Dashboard() {
         console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
       }
 
-      // Fetch from API with automatic retry on password-related session_expired
-      let response: Response | null = null;
+      // Declare result at function scope so it's accessible in all branches
       let result: any = null;
-      let apiStartTime = Date.now();
-      const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
+      let response: Response | null = null;
       
-      // First attempt
-      let attempt = 1;
-      const maxRetries = 3;
-      let shouldRetry = true;
-      
-      while (shouldRetry && attempt <= maxRetries) {
-        console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
-        apiStartTime = Date.now();
+      if (missingCount > 0 || forceRefresh) {
+        // Fetch from API with automatic retry on password-related session_expired
+        let apiStartTime = Date.now();
+        const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
         
-        response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-      });
-
-      const apiDuration = Date.now() - apiStartTime;
-        result = await response.json();
-      
-      console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
-      console.log(`[Dashboard]   - Success: ${result.success}`);
-      console.log(`[Dashboard]   - Status: ${response.status}`);
-        console.log(`[Dashboard]   - Error: ${result.error || 'none'}`);
-        
-        // Check if session_expired is due to missing password (retryable)
-        const isSessionExpiredDueToPassword = 
-          (result.error === 'session_expired' || !response.ok) && 
-          attempt < maxRetries && 
-          !password; // Only retry if password wasn't available initially
-        
-        if (isSessionExpiredDueToPassword) {
-          console.log(`[Dashboard] 🔄 session_expired detected, waiting for password to be stored...`);
-          // Wait a bit longer for password storage to complete
-          const retryDelay = 500 * attempt; // 500ms, 1000ms, 1500ms
-          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        // Use request deduplication for unified API calls - ensures only ONE call at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+        const apiResult = await deduplicateRequest(requestKey, async () => {
+          // First attempt
+          let attempt = 1;
+          const maxRetries = 3;
+          let shouldRetry = true;
+          let finalResponse: Response | null = null;
+          let finalResult: any = null;
           
-          // Check if password is now available
-          const retryPassword = await waitForPassword(3); // Quick check with fewer attempts
-          if (retryPassword) {
-            console.log(`[Dashboard] ✅ Password now available, retrying API call...`);
-            attempt++;
-            continue; // Retry the API call
-          } else {
-            console.warn(`[Dashboard] ⚠️ Password still not available after wait`);
+          while (shouldRetry && attempt <= maxRetries) {
+            console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
+            apiStartTime = Date.now();
+            
+            finalResponse = await fetch('/api/data/all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+            });
+
+            const apiDuration = Date.now() - apiStartTime;
+            
+            // Check if response is OK and has content before parsing JSON
+            if (!finalResponse.ok) {
+              const errorText = await finalResponse.text().catch(() => 'Unknown error');
+              console.error(`[Dashboard] ❌ API error response (${finalResponse.status}):`, errorText);
+              throw new Error(`API request failed with status ${finalResponse.status}: ${errorText}`);
+            }
+            
+            // Check if response has content
+            const contentType = finalResponse.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+              const text = await finalResponse.text();
+              console.error(`[Dashboard] ❌ Invalid response content type:`, contentType);
+              console.error(`[Dashboard]   - Response body:`, text.substring(0, 200));
+              throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
+            }
+            
+            // Parse JSON with error handling
+            try {
+              const responseText = await finalResponse.text();
+              if (!responseText || responseText.trim().length === 0) {
+                console.error(`[Dashboard] ❌ Empty response body`);
+                throw new Error('Empty response from server');
+              }
+              finalResult = JSON.parse(responseText);
+            } catch (jsonError) {
+              console.error(`[Dashboard] ❌ JSON parse error:`, jsonError);
+              console.error(`[Dashboard]   - Response status: ${finalResponse.status}`);
+              throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+            }
+            
+            console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
+            console.log(`[Dashboard]   - Success: ${finalResult.success}`);
+            console.log(`[Dashboard]   - Status: ${finalResponse.status}`);
+            console.log(`[Dashboard]   - Error: ${finalResult.error || 'none'}`);
+            
+            // Check if session_expired is due to missing password (retryable)
+            const isSessionExpiredDueToPassword = 
+              (finalResult.error === 'session_expired' || !finalResponse.ok) && 
+              attempt < maxRetries && 
+              !password; // Only retry if password wasn't available initially
+            
+            if (isSessionExpiredDueToPassword) {
+              console.log(`[Dashboard] 🔄 session_expired detected, waiting for password to be stored...`);
+              // Wait a bit longer for password storage to complete
+              const retryDelay = 500 * attempt; // 500ms, 1000ms, 1500ms
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              
+              // Check if password is now available
+              const retryPassword = await waitForPassword(3); // Quick check with fewer attempts
+              if (retryPassword) {
+                console.log(`[Dashboard] ✅ Password now available, retrying API call...`);
+                attempt++;
+                continue; // Retry the API call
+              } else {
+                console.warn(`[Dashboard] ⚠️ Password still not available after wait`);
+              }
+            }
+            
+            shouldRetry = false; // Exit retry loop
+          }
+          
+          // Ensure response and result are set
+          if (!finalResponse || !finalResult) {
+            throw new Error('Failed to fetch data from API');
+          }
+
+          // Only show session_expired error if all retries failed and password is confirmed unavailable
+          if (!finalResponse.ok || (finalResult.error === 'session_expired')) {
+            const finalPasswordCheck = await waitForPassword(2); // Quick final check
+            if (!finalPasswordCheck) {
+              // Password is definitely not available - legitimate session expired
+              console.error('[Dashboard] ❌ Session expired - password not available after all retries');
+              throw new Error('Your session has expired. Please re-enter your password.');
+            } else {
+              // Password became available - retry one more time
+              console.log('[Dashboard] 🔄 Password available on final check, retrying...');
+              const retryResponse = await fetch('/api/data/all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+              });
+              const retryResult = await retryResponse.json();
+              
+              if (!retryResponse.ok || (retryResult.error === 'session_expired')) {
+                throw new Error('Your session has expired. Please re-enter your password.');
+              }
+              // Success on final retry - update result and continue processing
+              finalResponse = retryResponse;
+              finalResult = retryResult;
+            }
+          }
+
+          if (!finalResult.success) {
+            throw new Error(finalResult.error || 'Failed to fetch data');
+          }
+
+          return { response: finalResponse, result: finalResult };
+        });
+        
+        response = apiResult.response;
+        result = apiResult.result;
+        
+        processUnifiedData(result);
+        
+        // Save individual caches from unified response
+        if (result.data) {
+          if (result.data.attendance) {
+            setClientCache('attendance', result.data.attendance);
+          }
+          if (result.data.marks) {
+            setClientCache('marks', result.data.marks);
+          }
+          if (result.data.timetable) {
+            setClientCache('timetable', result.data.timetable);
           }
         }
-        
-        shouldRetry = false; // Exit retry loop
-      }
-      
-      // Ensure response and result are set
-      if (!response || !result) {
-        throw new Error('Failed to fetch data from API');
-      }
-
-      // Only show session_expired error if all retries failed and password is confirmed unavailable
-      if (!response.ok || (result.error === 'session_expired')) {
-        const finalPasswordCheck = await waitForPassword(2); // Quick final check
-        if (!finalPasswordCheck) {
-          // Password is definitely not available - legitimate session expired
-          console.error('[Dashboard] ❌ Session expired - password not available after all retries');
-          setError('Your session has expired. Please re-enter your password.');
-          setShowPasswordModal(true);
-          setLoading(false);
-          return;
-        } else {
-          // Password became available - retry one more time
-          console.log('[Dashboard] 🔄 Password available on final check, retrying...');
-          const finalResponse = await fetch('/api/data/all', {
+      } else if (missingCount === 0) {
+        // All cached, but still need calendar - fetch only calendar
+        console.log('[Dashboard] ✅ All data cached, fetching only calendar...');
+        const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
+        const calendarResult = await deduplicateRequest(requestKey, async () => {
+          const response = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
           });
-          const finalResult = await finalResponse.json();
-          
-          if (!finalResponse.ok || (finalResult.error === 'session_expired')) {
-        setError('Your session has expired. Please re-enter your password.');
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
+          const result = await response.json();
+          if (result.success && result.data?.calendar) {
+            processUnifiedData(result);
           }
-          // Success on final retry - update result and continue processing
-          response = finalResponse;
-          result = finalResult;
-        }
+          return result;
+        });
+        
+        // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
+        result = calendarResult;
       }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
-      }
-
-      processUnifiedData(result);
       
       // Register attendance/marks fetch for smart prefetch scheduling
-      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-        registerAttendanceFetch();
+      // Only register if we fetched unified data (result is defined)
+      const allMissing = missingCount === 3;
+      if (missingCount > 1 || allMissing) {
+        if (result && result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
+          registerAttendanceFetch();
+        }
       }
 
     } catch (err) {
@@ -437,12 +591,27 @@ export default function Dashboard() {
     console.log('[Dashboard] Marks data:', result.data.marks);
     
     // Process calendar data - handle both direct format and wrapped format
+    console.log('[Dashboard] 📋 ========================================');
+    console.log('[Dashboard] 📋 CALENDAR PROCESSING - Starting calendar data processing');
+    console.log('[Dashboard] 📋   - result.data.calendar exists:', !!result.data.calendar);
+    console.log('[Dashboard] 📋   - result.data.calendar type:', typeof result.data.calendar);
+    console.log('[Dashboard] 📋   - result.data.calendar is array:', Array.isArray(result.data.calendar));
+    if (result.data.calendar && Array.isArray(result.data.calendar)) {
+      console.log('[Dashboard] 📋   - Calendar array length:', result.data.calendar.length);
+      if (result.data.calendar.length > 0) {
+        console.log('[Dashboard] 📋   - First event sample:', JSON.stringify(result.data.calendar[0], null, 2).substring(0, 200));
+        console.log('[Dashboard] 📋   - Last event sample:', JSON.stringify(result.data.calendar[result.data.calendar.length - 1], null, 2).substring(0, 200));
+      }
+    }
+    console.log('[Dashboard] 📋 ========================================');
+    
     let calendarEvents: CalendarEvent[] | null = null;
     
     if (Array.isArray(result.data.calendar)) {
       // Direct array format
       calendarEvents = result.data.calendar;
-      console.log('[Dashboard] Calendar data is direct array format');
+      console.log('[Dashboard] ✅ Calendar data is direct array format');
+      console.log('[Dashboard]   - Total events:', calendarEvents.length);
     } else if (result.data.calendar && typeof result.data.calendar === 'object') {
       // Check if it's wrapped format: {success: true, data: [...]}
       if ('success' in result.data.calendar && 'data' in result.data.calendar) {
@@ -451,13 +620,15 @@ export default function Dashboard() {
         const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
         if (isSuccess && Array.isArray(calendarWrapper.data)) {
           calendarEvents = calendarWrapper.data;
-          console.log('[Dashboard] Calendar data is wrapped format');
+          console.log('[Dashboard] ✅ Calendar data is wrapped format');
+          console.log('[Dashboard]   - Total events:', calendarEvents.length);
         }
       }
       // Check legacy nested format: {data: [...]}
       else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
         calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
-        console.log('[Dashboard] Calendar data is legacy nested format');
+        console.log('[Dashboard] ✅ Calendar data is legacy nested format');
+        console.log('[Dashboard]   - Total events:', calendarEvents.length);
       }
     }
     
@@ -514,10 +685,14 @@ export default function Dashboard() {
         console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
       
-      const modifiedCalendarData = markSaturdaysAsHolidays(calendarEvents, finalSemester);
-      console.log('[Dashboard] Applied holiday logic for semester:', finalSemester);
-      setCalendarData(modifiedCalendarData);
-      console.log('[Dashboard] ✅ Calendar data loaded:', modifiedCalendarData.length);
+      console.log('[Dashboard] 📋 Calendar events count:', calendarEvents.length);
+      if (calendarEvents.length > 0) {
+        console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
+        console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
+      }
+      // Display calendar data as-is without holiday modifications
+      setCalendarData(calendarEvents);
+      console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', calendarEvents.length, 'events');
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
       console.warn('[Dashboard] Calendar data type:', typeof result.data.calendar);
@@ -558,11 +733,16 @@ export default function Dashboard() {
     if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
       setAttendanceData(attendanceDataObj);
       console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
-    } else {
+    } else if (result.data.attendance !== undefined && result.data.attendance !== null) {
+      // Only overwrite if attendance was explicitly provided in result (not undefined/null)
+      // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No attendance data found');
       console.warn('[Dashboard] Attendance data type:', typeof result.data.attendance);
       console.warn('[Dashboard] Attendance data value:', result.data.attendance);
       setAttendanceData(null);
+    } else {
+      // result.data.attendance is undefined/null - don't overwrite existing state (likely from cache)
+      console.log('[Dashboard] ℹ️ Attendance not in API response, keeping existing state (likely from cache)');
     }
 
     // Process marks data - handle both direct format and wrapped format
@@ -598,11 +778,16 @@ export default function Dashboard() {
     if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
       setMarksData(marksDataObj);
       console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
-    } else {
+    } else if (result.data.marks !== undefined && result.data.marks !== null) {
+      // Only overwrite if marks was explicitly provided in result (not undefined/null)
+      // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No marks data found');
       console.warn('[Dashboard] Marks data type:', typeof result.data.marks);
       console.warn('[Dashboard] Marks data value:', result.data.marks);
       setMarksData(null);
+    } else {
+      // result.data.marks is undefined/null - don't overwrite existing state (likely from cache)
+      console.log('[Dashboard] ℹ️ Marks not in API response, keeping existing state (likely from cache)');
     }
 
     // Process timetable data - handle both direct format and wrapped format
@@ -653,11 +838,16 @@ export default function Dashboard() {
       } catch (err) {
         console.error('[Dashboard] ❌ Error processing timetable:', err);
       }
-    } else {
+    } else if (result.data.timetable !== undefined && result.data.timetable !== null) {
+      // Only overwrite if timetable was explicitly provided in result (not undefined/null)
+      // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No timetable data found');
       console.warn('[Dashboard] Timetable data type:', typeof result.data.timetable);
       console.warn('[Dashboard] Timetable data value:', result.data.timetable);
       setTimetableData(null);
+    } else {
+      // result.data.timetable is undefined/null - don't overwrite existing state (likely from cache)
+      console.log('[Dashboard] ℹ️ Timetable not in API response, keeping existing state (likely from cache)');
     }
 
     // Process day order stats using modified calendar data
@@ -682,9 +872,8 @@ export default function Dashboard() {
           }
         }
         
-        const finalSemester = extractedSemester || 1;
-        const modifiedCalendarForStats = markSaturdaysAsHolidays(calendarForStats as CalendarEvent[], finalSemester);
-        const stats = getDayOrderStats(modifiedCalendarForStats);
+        // Use calendar data as-is without holiday modifications
+        const stats = getDayOrderStats(calendarForStats as CalendarEvent[]);
         setDayOrderStats(stats);
         console.log('[Dashboard] ✅ Day order stats loaded:', stats);
       } catch (err) {
@@ -693,26 +882,16 @@ export default function Dashboard() {
     }
 
     // Save to client-side cache (1 hour TTL)
-    // Use processed data from result, not state (state may not be updated yet)
-    const processedCalendar = calendarEvents && calendarEvents.length > 0 ? 
-      markSaturdaysAsHolidays(calendarEvents, 
-        result.data.attendance?.semester || 
-        result.data.attendance?.data?.metadata?.semester || 
-        result.metadata?.semester || 
-        (result as { semester?: number }).semester || 
-        parseInt(getStorageItem('user_semester') || '1', 10) || 1
-      ) : null;
-    
+    // Note: Calendar is NOT cached - it's always fetched fresh from public.calendar table
     const cacheData = {
       data: {
-        calendar: processedCalendar || calendarData,
         attendance: attendanceDataObj || attendanceData,
         marks: marksDataObj || marksData,
         timetable: timetableDataObj || timetableData,
       },
     };
     setClientCache('unified', cacheData);
-    console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL)');
+    console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL) - calendar excluded (always fresh)');
   };
 
   const calculatePresentHours = (conducted: string, absent: string): number => {
@@ -795,9 +974,9 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-col gap-3 w-full">
           {threeDayDates.map((dayInfo) => {
-            const event = calendarData.find(e => e.date === dayInfo.dateStr);
+            const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
             const isToday = dayInfo.dateStr === getCurrentDateString();
-            const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || event?.content.toLowerCase().includes('holiday');
+            const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
             
             let bgColor = 'bg-white/10';
             let textColor = 'text-white';
@@ -873,9 +1052,10 @@ export default function Dashboard() {
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Attendance Overview
         </div>
-        {attendanceData?.all_subjects && attendanceData.all_subjects.length > 0 ? (
+        {attendanceData?.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
           <div className="flex flex-col gap-3 w-full">
             {attendanceData.all_subjects.map((subject, index) => {
+              if (!subject || !subject.attendance_percentage) return null; // Skip null/invalid subjects
               const attendancePercent = parseFloat(subject.attendance_percentage.replace('%', ''));
               
               return (
@@ -912,26 +1092,28 @@ export default function Dashboard() {
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Marks Overview
         </div>
-        {marksData?.all_courses && marksData.all_courses.length > 0 ? (
+        {marksData?.all_courses && Array.isArray(marksData.all_courses) && marksData.all_courses.length > 0 ? (
           <div className="flex flex-col gap-3 w-full">
             {marksData.all_courses
-              .filter(course => course.assessments && course.assessments.length > 0)
+              .filter(course => course && course.assessments && Array.isArray(course.assessments) && course.assessments.length > 0)
               .filter((course, index, self) => 
-                index === self.findIndex(c => 
-                  c.course_code === course.course_code && c.subject_type === course.subject_type
+                course && index === self.findIndex(c => 
+                  c && c.course_code === course.course_code && c.subject_type === course.subject_type
                 )
               )
               .map((course, index) => {
-              const getCourseTitle = (course: MarksCourse): string => {
-                return course.course_title || course.course_code;
-              };
+                if (!course) return null;
+                
+                const getCourseTitle = (course: MarksCourse): string => {
+                  return course.course_title || course.course_code;
+                };
 
-              const getTotalMarks = () => {
-                if (!course.assessments || course.assessments.length === 0) return { obtained: 0, total: 0 };
-                const obtained = course.assessments.reduce((sum, a) => sum + (parseFloat(a.marks_obtained) || 0), 0);
-                const total = course.assessments.reduce((sum, a) => sum + (parseFloat(a.total_marks) || 0), 0);
-                return { obtained, total };
-              };
+                const getTotalMarks = () => {
+                  if (!course.assessments || !Array.isArray(course.assessments) || course.assessments.length === 0) return { obtained: 0, total: 0 };
+                  const obtained = course.assessments.reduce((sum, a) => sum + (a ? (parseFloat(a.marks_obtained) || 0) : 0), 0);
+                  const total = course.assessments.reduce((sum, a) => sum + (a ? (parseFloat(a.total_marks) || 0) : 0), 0);
+                  return { obtained, total };
+                };
 
               const { obtained, total } = getTotalMarks();
               

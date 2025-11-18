@@ -130,14 +130,22 @@ const normalizeCategory = (cat: string): string => {
 // Debug function to log all data structures
 export const debugDataStructures = (attendanceData: AttendanceData, slotOccurrences: SlotOccurrence[]) => {
   console.log(`[DEBUG] === ATTENDANCE DATA ===`);
-  attendanceData.all_subjects.forEach((subject, index) => {
-    console.log(`[DEBUG] Attendance ${index}: "${subject.course_title}" (${subject.category}) -> normalized: "${normalizeCategory(subject.category)}"`);
-  });
+  if (attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects)) {
+    attendanceData.all_subjects.forEach((subject, index) => {
+      if (subject) {
+        console.log(`[DEBUG] Attendance ${index}: "${subject.course_title}" (${subject.category}) -> normalized: "${normalizeCategory(subject.category)}"`);
+      }
+    });
+  }
   
   console.log(`[DEBUG] === TIMETABLE SLOT OCCURRENCES ===`);
-  slotOccurrences.forEach((occurrence, index) => {
-    console.log(`[DEBUG] Timetable ${index}: "${occurrence.courseTitle}" (${occurrence.category}) -> normalized: "${normalizeCategory(occurrence.category)}"`);
-  });
+  if (slotOccurrences && Array.isArray(slotOccurrences)) {
+    slotOccurrences.forEach((occurrence, index) => {
+      if (occurrence) {
+        console.log(`[DEBUG] Timetable ${index}: "${occurrence.courseTitle}" (${occurrence.category}) -> normalized: "${normalizeCategory(occurrence.category)}"`);
+      }
+    });
+  }
   
   console.log(`[DEBUG] === CATEGORY MAPPING TEST ===`);
   const testCategories = ['Theory', 'Lab', 'Practical', 'theory', 'lab', 'practical'];
@@ -146,8 +154,10 @@ export const debugDataStructures = (attendanceData: AttendanceData, slotOccurren
   });
   
   console.log(`[DEBUG] === MATCHING ANALYSIS ===`);
-  attendanceData.all_subjects.forEach(subject => {
-    const subjectTitle = subject.course_title.toLowerCase().trim();
+  if (attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects)) {
+    attendanceData.all_subjects.forEach(subject => {
+      if (!subject || !subject.course_title) return;
+      const subjectTitle = subject.course_title.toLowerCase().trim();
     const subjectCategory = normalizeCategory(subject.category);
     
     const exactMatches = slotOccurrences.filter(occ => 
@@ -167,10 +177,11 @@ export const debugDataStructures = (attendanceData: AttendanceData, slotOccurren
       return overlapPercentage >= 90;
     });
     
-    console.log(`[DEBUG] "${subject.course_title}" (${subject.category}):`);
-    console.log(`[DEBUG]   Exact matches: ${exactMatches.length}`, exactMatches.map(m => `"${m.courseTitle}" (${m.category})`));
-    console.log(`[DEBUG]   Fuzzy matches: ${fuzzyMatches.length}`, fuzzyMatches.map(m => `"${m.courseTitle}" (${m.category})`));
-  });
+      console.log(`[DEBUG] "${subject.course_title}" (${subject.category}):`);
+      console.log(`[DEBUG]   Exact matches: ${exactMatches.length}`, exactMatches.map(m => `"${m.courseTitle}" (${m.category})`));
+      console.log(`[DEBUG]   Fuzzy matches: ${fuzzyMatches.length}`, fuzzyMatches.map(m => `"${m.courseTitle}" (${m.category})`));
+    });
+  }
 };
 
 // Find slot data for a subject with improved matching logic
@@ -290,7 +301,12 @@ export const calculateODMLAdjustedAttendance = (
 ): PredictionResult[] => {
   const results: PredictionResult[] = [];
 
+  if (!attendanceData || !attendanceData.all_subjects || !Array.isArray(attendanceData.all_subjects)) {
+    return results;
+  }
+
   attendanceData.all_subjects.forEach(subject => {
+    if (!subject) return;
     // Get current attendance data
     const currentConducted = parseInt(subject.hours_conducted) || 0;
     const currentAbsent = parseInt(subject.hours_absent) || 0;
@@ -351,8 +367,9 @@ export const calculatePredictedAttendance = (
   // Specific debug for problematic subjects
   const problematicSubjects = ['Operating Systems', 'Data Structures and Algorithms'];
   problematicSubjects.forEach(problemSubject => {
+    if (!attendanceData || !attendanceData.all_subjects || !Array.isArray(attendanceData.all_subjects)) return;
     const attendanceSubjects = attendanceData.all_subjects.filter(s => 
-      s.course_title.toLowerCase().includes(problemSubject.toLowerCase())
+      s && s.course_title && s.course_title.toLowerCase().includes(problemSubject.toLowerCase())
     );
     const timetableSubjects = slotOccurrences.filter(s => 
       s.courseTitle.toLowerCase().includes(problemSubject.toLowerCase())
@@ -364,6 +381,7 @@ export const calculatePredictedAttendance = (
     
     // Test matching for each attendance subject
     attendanceSubjects.forEach(attSubject => {
+      if (!attSubject) return;
       const matches = timetableSubjects.filter(timetableSubject => 
         normalizeCategory(attSubject.category) === normalizeCategory(timetableSubject.category)
       );
@@ -382,7 +400,12 @@ export const calculatePredictedAttendance = (
   // Calculate total hours till end date
   const dayOrderStatsTillEnd = getDayOrderStatsForDateRange(calendarData, currentDate, endDate);
 
+  if (!attendanceData || !attendanceData.all_subjects || !Array.isArray(attendanceData.all_subjects)) {
+    return results;
+  }
+
   attendanceData.all_subjects.forEach(subject => {
+    if (!subject) return;
     let totalPresentHours = 0;
     let totalAbsentHours = 0;
     let lastEndDate = currentDate;

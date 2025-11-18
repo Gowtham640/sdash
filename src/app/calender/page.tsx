@@ -1,14 +1,14 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import Image from "next/image";
 import Link from 'next/link';
-import { Calendar } from "@/components/ui/calendar";
-import { markSaturdaysAsHolidays } from "@/lib/calendarHolidays";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
+import { useErrorTracking } from "@/lib/useErrorTracking";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
+import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
 
 interface CalendarEvent {
   date: string;
@@ -21,15 +21,15 @@ interface CalendarEvent {
 }
 
 export default function CalendarPage() {
-  const [date, setDate] = useState<Date | undefined>(new Date());
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/calender');
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
-  const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Get current date in DD/MM/YYYY format
   const getCurrentDateString = () => {
@@ -124,78 +124,10 @@ export default function CalendarPage() {
     setShowPasswordModal(false);
   };
 
-  const refreshCalendarData = async () => {
+  const fetchUnifiedData = async () => {
     try {
       setLoading(true);
       setError(null);
-      setIsRefreshing(true);
-
-      const access_token = getStorageItem('access_token');
-      
-      if (!access_token) {
-        console.error('[Calendar] No access token found');
-        setError('Please sign in to view calendar');
-        setLoading(false);
-        setIsRefreshing(false);
-        return;
-      }
-
-      console.log('[Calendar] 🔄 Force refreshing calendar data...');
-
-      const response = await fetch('/api/data/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...getRequestBodyWithPassword(access_token, false),
-          data_type: 'calendar'
-        })
-      });
-
-      const result = await response.json();
-      console.log('[Calendar] Refresh API response:', result);
-      console.log('[Calendar] Refresh API response data:', result.data);
-      console.log('[Calendar] Refresh API response data type:', typeof result.data);
-      console.log('[Calendar] Refresh API response data is array:', Array.isArray(result.data));
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to refresh calendar data');
-      }
-
-      // If refresh endpoint returns data directly, set it immediately
-      if (result.data && Array.isArray(result.data)) {
-        console.log('[Calendar] Setting calendar data directly from refresh response');
-        let calendarEvents = result.data as CalendarEvent[];
-        
-        // Extract semester (try to get from storage or default to 1)
-        const cachedSemester = getStorageItem('user_semester');
-        const semester = cachedSemester ? parseInt(cachedSemester, 10) : 1;
-        
-        // Mark Saturdays as holidays if not semester 1
-        calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
-        
-        setCalendarData(calendarEvents);
-        setLoading(false);
-        setIsRefreshing(false);
-        console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events from refresh');
-      } else {
-        // After refresh, fetch unified data to get updated calendar
-        await fetchUnifiedData(false);
-      }
-    } catch (err) {
-      console.error('[Calendar] Error refreshing data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to refresh calendar data');
-      setLoading(false);
-      setIsRefreshing(false);
-    }
-  };
-
-  const fetchUnifiedData = async (forceRefresh = false) => {
-    try {
-      setLoading(true);
-      setError(null);
-      if (forceRefresh) {
-        setIsRefreshing(true);
-      }
 
       const access_token = getStorageItem('access_token');
       
@@ -206,64 +138,163 @@ export default function CalendarPage() {
         return;
       }
 
-      // ✅ STEP 1: Fetch from API
-      const fetchType = forceRefresh ? '(force refresh)' : '(fetching all data)';
-      console.log(`[Calendar] 🚀 Fetching from API ${fetchType}`);
+      // Calendar is always fetched fresh from public.calendar table
+      // Remove any old calendar cache that might exist
+      removeClientCache('calendar');
+      console.log('[Calendar] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
+      
+      // Also check and clean unified cache if it contains calendar data
+      const unifiedCache = getClientCache('unified');
+      if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
+        const unifiedData = unifiedCache as { data?: { calendar?: unknown } };
+        if (unifiedData.data?.calendar) {
+          console.log('[Calendar] 🗑️ Found calendar in unified cache, removing it');
+          // Remove calendar from unified cache data
+          if (unifiedData.data) {
+            delete unifiedData.data.calendar;
+            setClientCache('unified', unifiedCache);
+            console.log('[Calendar] ✅ Cleaned calendar from unified cache');
+          }
+        }
+      }
+      
+      // Fetch all data (like dashboard) to get attendance data for semester extraction
+      console.log(`[Calendar] 🚀 Fetching calendar data from API (always fresh from public.calendar)`);
 
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+      // Use request deduplication for unified API calls
+      // Calendar is always fetched fresh from public.calendar table regardless
+      const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await fetch('/api/data/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
+        });
+        
+        // Check if response is OK and has content before parsing JSON
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          throw new Error(`API request failed with status ${response.status}: ${errorText}`);
+        }
+        
+        // Check if response has content
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
+        }
+        
+        // Parse JSON with error handling
+        let result;
+        try {
+          const responseText = await response.text();
+          if (!responseText || responseText.trim().length === 0) {
+            throw new Error('Empty response from server');
+          }
+          result = JSON.parse(responseText);
+        } catch (jsonError) {
+          throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+        }
+        
+        return { response, result };
       });
+      
+      const response = apiResult.response;
+      const result = apiResult.result;
 
-      const result = await response.json();
-      console.log('[Calendar] Unified API response:', result);
+      console.log('[Calendar] ========================================');
+      console.log('[Calendar] 📥 FRONTEND: Received API response');
+      console.log('[Calendar]   - Response status:', response.status);
+      console.log('[Calendar]   - Response OK:', response.ok);
+      console.log('[Calendar]   - result.success:', result.success);
+      console.log('[Calendar]   - result.error:', result.error || 'none');
+      console.log('[Calendar]   - result.metadata:', result.metadata);
+      console.log('[Calendar]   - result.semester:', (result as { semester?: number }).semester || 'none');
+      console.log('[Calendar]   - result.course:', (result as { course?: string }).course || 'none');
+      console.log('[Calendar] ========================================');
 
       // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Calendar] Session expired');
+      if (!response.ok || (result?.error === 'session_expired')) {
+        console.error('[Calendar] ❌ Session expired');
         setError('Your session has expired. Please re-enter your password.');
         setShowPasswordModal(true);
         setLoading(false);
         return;
       }
 
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
+      if (!result?.success) {
+        console.error('[Calendar] ❌ API response not successful:', result?.error);
+        throw new Error(result?.error || 'Failed to fetch data');
       }
 
       // Process calendar data
-      // Handle both formats: direct array or wrapped in {success, data}
+      // Handle both direct format and wrapped format
+      console.log('[Calendar] 📋 ========================================');
+      console.log('[Calendar] 📋 CALENDAR PROCESSING - Starting calendar data processing');
+      console.log('[Calendar] 📋   - result.data.calendar exists:', !!result.data.calendar);
+      console.log('[Calendar] 📋   - result.data.calendar type:', typeof result.data.calendar);
+      console.log('[Calendar] 📋   - result.data.calendar is array:', Array.isArray(result.data.calendar));
+      if (result.data.calendar && Array.isArray(result.data.calendar)) {
+        console.log('[Calendar] 📋   - Calendar array length:', result.data.calendar.length);
+        if (result.data.calendar.length > 0) {
+          console.log('[Calendar] 📋   - First event sample:', JSON.stringify(result.data.calendar[0], null, 2).substring(0, 200));
+          console.log('[Calendar] 📋   - Last event sample:', JSON.stringify(result.data.calendar[result.data.calendar.length - 1], null, 2).substring(0, 200));
+        }
+      }
+      console.log('[Calendar] 📋 ========================================');
+      
       let calendarEvents: CalendarEvent[] | null = null;
       
       if (Array.isArray(result.data.calendar)) {
         // Direct array format
         calendarEvents = result.data.calendar;
-        console.log('[Calendar] Calendar data is direct array format');
-      } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
-        // Wrapped format: {success: true, data: [...]}
-        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
-        const successValue = calendarWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && Array.isArray(calendarWrapper.data)) {
-          calendarEvents = calendarWrapper.data;
-          console.log('[Calendar] Calendar data is wrapped format');
+        console.log('[Calendar] ✅ Calendar data is direct array format');
+        console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
+      } else if (result.data.calendar && typeof result.data.calendar === 'object') {
+        // Check if it's wrapped format: {success: true, data: [...]}
+        if ('success' in result.data.calendar && 'data' in result.data.calendar) {
+          const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
+          const successValue = calendarWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && Array.isArray(calendarWrapper.data)) {
+            calendarEvents = calendarWrapper.data;
+            console.log('[Calendar] ✅ Calendar data is wrapped format');
+            console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
+          }
+        }
+        // Check legacy nested format: {data: [...]}
+        else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
+          calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
+          console.log('[Calendar] ✅ Calendar data is legacy nested format');
+          console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
         }
       }
       
       if (calendarEvents && calendarEvents.length > 0) {
-        
         // Extract semester from multiple sources with fallbacks
         let extractedSemester: number | null = null;
         
-        // 1. Try attendance data first
-        if (result.data.attendance?.semester) {
-          extractedSemester = result.data.attendance.semester;
-          console.log('[Calendar] Semester from attendance.semester:', extractedSemester);
-        } else if (result.data.attendance?.data?.metadata?.semester) {
-          extractedSemester = result.data.attendance.data.metadata.semester;
-          console.log('[Calendar] Semester from attendance.data.metadata.semester:', extractedSemester);
-        }
+        // 1. Try attendance data first - handle both direct and wrapped formats
+        if (result.data.attendance && typeof result.data.attendance === 'object') {
+          // Direct format: {metadata: {semester: ...}, ...}
+          if ('metadata' in result.data.attendance && result.data.attendance.metadata && typeof result.data.attendance.metadata === 'object' && 'semester' in result.data.attendance.metadata) {
+            extractedSemester = (result.data.attendance.metadata as { semester?: number }).semester || null;
+            console.log('[Calendar] Semester from attendance.metadata.semester (direct):', extractedSemester);
+          }
+          // Wrapped format: {data: {metadata: {semester: ...}}, ...}
+          else if ('data' in result.data.attendance && result.data.attendance.data && typeof result.data.attendance.data === 'object' && 'metadata' in result.data.attendance.data) {
+            const attendanceData = result.data.attendance.data as { metadata?: { semester?: number } };
+            if (attendanceData.metadata?.semester) {
+              extractedSemester = attendanceData.metadata.semester;
+              console.log('[Calendar] Semester from attendance.data.metadata.semester (wrapped):', extractedSemester);
+            }
+          }
+          // Legacy: direct semester property
+          else if ('semester' in result.data.attendance) {
+            extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
+            console.log('[Calendar] Semester from attendance.semester (legacy):', extractedSemester);
+          }
+        } 
         // 2. Try response metadata
         else if (result.metadata?.semester) {
           extractedSemester = result.metadata.semester;
@@ -284,7 +315,7 @@ export default function CalendarPage() {
         }
         
         // Default to 1 if no semester found
-        const semester = extractedSemester || 1;
+        const finalSemester = extractedSemester || 1;
         
         // Store semester in storage if found
         if (extractedSemester) {
@@ -292,20 +323,23 @@ export default function CalendarPage() {
           console.log('[Calendar] 💾 Stored semester in storage:', extractedSemester);
         }
         
-        console.log(`[Calendar] User semester: ${semester}`);
-        
-        // Mark Saturdays as holidays if not semester 1
-        calendarEvents = markSaturdaysAsHolidays(calendarEvents, semester);
-        
+        console.log('[Calendar] 📋 Calendar events count:', calendarEvents.length);
+        if (calendarEvents.length > 0) {
+          console.log('[Calendar] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
+          console.log('[Calendar] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
+        }
+        // Display calendar data as-is without holiday modifications
         setCalendarData(calendarEvents);
-        console.log('[Calendar] Loaded calendar with', calendarEvents.length, 'events');
+        console.log('[Calendar] ✅ ✅ ✅ Calendar data loaded and set:', calendarEvents.length, 'events');
       } else {
         // Keep page visible even when calendar data is unavailable
-        // User can use refresh button to fetch data
-        console.warn('[Calendar] Calendar data unavailable - keeping page visible for refresh');
-        console.warn('[Calendar] Calendar data type:', typeof result.data.calendar);
-        console.warn('[Calendar] Calendar data is array:', Array.isArray(result.data.calendar));
-        console.warn('[Calendar] Calendar data value:', result.data.calendar);
+        console.warn('[Calendar] ⚠️ ⚠️ ⚠️ CALENDAR DATA UNAVAILABLE');
+        console.warn('[Calendar]   - calendarEvents:', calendarEvents);
+        console.warn('[Calendar]   - calendarEvents length:', calendarEvents?.length || 0);
+        console.warn('[Calendar]   - result.data.calendar type:', typeof result.data.calendar);
+        console.warn('[Calendar]   - result.data.calendar is array:', Array.isArray(result.data.calendar));
+        console.warn('[Calendar]   - result.data.calendar value:', result.data.calendar);
+        console.warn('[Calendar]   - Full result.data:', result.data);
         setCalendarData([]);
         // Don't set error, just log it so page remains visible
       }
@@ -320,7 +354,6 @@ export default function CalendarPage() {
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
-      setIsRefreshing(false);
     }
   };
 
@@ -464,27 +497,7 @@ export default function CalendarPage() {
       </Link>
       
       <div className="flex flex-col items-center gap-4">
-        <div className="flex items-center gap-3 sm:gap-4">
-          <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
-          <button
-            onClick={refreshCalendarData}
-            disabled={loading}
-            className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Refresh calendar data"
-            title="Refresh calendar data"
-          >
-            <svg 
-              xmlns="http://www.w3.org/2000/svg" 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              strokeWidth={2} 
-              stroke="currentColor" 
-              className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-            </svg>
-          </button>
-        </div>
+        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
         <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
           Today&apos;s Date: {getCurrentDateString()} 
         </div>
@@ -501,7 +514,7 @@ export default function CalendarPage() {
                   No calendar data available
                 </div>
                 <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
-                  Click the refresh button above to fetch calendar data
+                  Calendar data will be loaded from the server
                 </div>
               </div>
             ) : (

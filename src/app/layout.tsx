@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono,Open_Sans,Sora } from "next/font/google";
 import "./globals.css";
+import AnalyticsProvider from "@/components/AnalyticsProvider";
 
 const sans= Open_Sans({
   variable: "--font-open-sans",
@@ -38,7 +39,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${sans.variable} ${sora.variable} antialiased`}
       >
-        {children}
+        <AnalyticsProvider>
+          {children}
+        </AnalyticsProvider>
       </body>
     </html>
   );

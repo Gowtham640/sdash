@@ -7,6 +7,9 @@ import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
+import { useErrorTracking } from "@/lib/useErrorTracking";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { deduplicateRequest } from "@/lib/requestDeduplication";
 
 interface TimeSlot {
   time: string;
@@ -46,8 +49,12 @@ export default function TimetablePage() {
   const [rawTimetableData, setRawTimetableData] = useState<TimetableData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track errors
+  useErrorTracking(error, '/timetable');
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
+  const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -148,113 +155,278 @@ export default function TimetablePage() {
         return;
       }
 
-      // ✅ STEP 1: Fetch from API
-      const apiStartTime = Date.now();
-      const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
-      console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
-
-      const response = await fetch('/api/data/all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-      });
-
-      const apiDuration = Date.now() - apiStartTime;
-      const result = await response.json();
+      // Check client-side cache first (unless force refresh)
+      let cachedTimetable: TimetableData | null = null;
+      let hasValidCache = false;
       
-      console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
-      console.log(`[Timetable]   - Success: ${result.success}`);
-      console.log(`[Timetable]   - Status: ${response.status}`);
-
-      // Handle session expiry
-      if (!response.ok || (result.error === 'session_expired')) {
-        console.error('[Timetable] Session expired or invalid');
-        setError('Your session has expired. Please re-enter your password.');
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch data');
-      }
-
-
-      // Process timetable data
-      // Handle both formats: direct object or wrapped in {success, data}
-      let timetableDataObj: TimetableData | null = null;
-      
-      if (result.data.timetable && typeof result.data.timetable === 'object') {
-        // Check if it's direct format (has timetable, time_slots, metadata at root)
-        if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
-          // Direct format
-          timetableDataObj = result.data.timetable as TimetableData;
-          console.log('[Timetable] Timetable data is direct format');
-        } 
-        // Check if it's wrapped format: {success: true, data: {...}}
-        else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
-          const timetableWrapper = result.data.timetable as { success?: boolean | { data?: TimetableData }; data?: TimetableData };
-          const successValue = timetableWrapper.success;
-          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-          if (isSuccess && timetableWrapper.data) {
-            timetableDataObj = timetableWrapper.data;
-            console.log('[Timetable] Timetable data is wrapped format');
+      if (!forceRefresh) {
+        const cachedTimetableRaw = getClientCache('timetable');
+        
+        // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+        if (cachedTimetableRaw) {
+          let timetableDataToUse: TimetableData | null = null;
+          
+          if (typeof cachedTimetableRaw === 'object' && cachedTimetableRaw !== null) {
+            // Check if cached data has 'data' property (wrapped API response format)
+            if ('data' in cachedTimetableRaw && typeof (cachedTimetableRaw as { data?: unknown }).data === 'object' && (cachedTimetableRaw as { data?: unknown }).data !== null) {
+              const cachedData = (cachedTimetableRaw as { data?: TimetableData }).data;
+              if (cachedData && 'timetable' in cachedData) {
+                timetableDataToUse = cachedData;
+                console.log('[Timetable] ✅ Using client-side cache for timetable (extracted from data property)');
+              }
+            }
+            // Check if cached data is already in TimetableData format (has timetable property at root)
+            else if ('timetable' in cachedTimetableRaw || 'time_slots' in cachedTimetableRaw) {
+              timetableDataToUse = cachedTimetableRaw as TimetableData;
+              console.log('[Timetable] ✅ Using client-side cache for timetable (direct format)');
+            }
+          }
+          
+          if (timetableDataToUse) {
+            cachedTimetable = timetableDataToUse;
+            hasValidCache = true;
+            setRawTimetableData(timetableDataToUse);
+            const convertedData = convertTimetableDataToTimeSlots(timetableDataToUse);
+            setTimetableData(convertedData);
+          } else {
+            console.warn('[Timetable] ⚠️ Cached timetable has unexpected structure, will fetch fresh data');
           }
         }
-      }
-      
-      if (timetableDataObj && timetableDataObj.timetable) {
-        console.log('[Timetable] Timetable response data:', timetableDataObj);
-        console.log('[Timetable] DO 1 time_slots sample:', timetableDataObj.timetable['DO 1']?.time_slots);
-        
-        setRawTimetableData(timetableDataObj);
-        const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
-        console.log('[Timetable] Converted time slots:', convertedData);
-        
-        setTimetableData(convertedData);
-
-        const occurrences = getSlotOccurrences(timetableDataObj);
-        console.log('[Timetable] Slot occurrences:', occurrences);
-        
-        setSlotOccurrences(occurrences);
-        console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
       } else {
-        // Keep page visible even when timetable data is unavailable
-        // User can use refresh button to fetch data
-        console.warn('[Timetable] Timetable data unavailable - keeping page visible for refresh');
-        console.warn('[Timetable] Timetable data type:', typeof result.data.timetable);
-        console.warn('[Timetable] Timetable data value:', result.data.timetable);
-        setRawTimetableData(null);
-        setTimetableData([]);
-        // Don't throw error, just log it so page remains visible
+        // Force refresh: clear client cache
+        removeClientCache('timetable');
+        console.log('[Timetable] 🗑️ Cleared client cache for force refresh');
       }
+      
+      // Only fetch if cache is missing or force refresh
+      if (!hasValidCache || forceRefresh) {
+        const apiStartTime = Date.now();
+        const fetchType = forceRefresh ? '(force refresh)' : '(fetching fresh data)';
+        console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
+        
+        // Use request deduplication - ensures only ONE page calls backend at a time
+        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+        const apiResult = await deduplicateRequest(requestKey, async () => {
+          const response = await fetch('/api/data/all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          });
+          
+          const result = await response.json();
+          return { response, result };
+        });
+        
+        const response = apiResult.response;
+        const result = apiResult.result;
+        const apiDuration = Date.now() - apiStartTime;
+        
+        console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
+        console.log(`[Timetable]   - Success: ${result.success}`);
+        console.log(`[Timetable]   - Status: ${response.status}`);
 
-      // Process calendar data for day order stats
-      // Handle both formats for calendar too
-      let calendarEvents: unknown[] | null = null;
-      
-      if (Array.isArray(result.data.calendar)) {
-        // Direct array format
-        calendarEvents = result.data.calendar;
-      } else if (result.data.calendar && typeof result.data.calendar === 'object' && 'success' in result.data.calendar && 'data' in result.data.calendar) {
-        // Wrapped format
-        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
-        const successValue = calendarWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && Array.isArray(calendarWrapper.data)) {
-          calendarEvents = calendarWrapper.data;
+        // Handle session expiry
+        if (!response.ok || (result.error === 'session_expired')) {
+          console.error('[Timetable] Session expired or invalid');
+          setError('Your session has expired. Please re-enter your password.');
+          setShowPasswordModal(true);
+          setLoading(false);
+          return;
         }
-      }
-      
-      if (calendarEvents && calendarEvents.length > 0) {
-        const stats = getDayOrderStats(calendarEvents as CalendarEvent[]);
-        setDayOrderStats(stats);
-        console.log('[Timetable] Day order stats calculated');
-      }
-      
-      // Register attendance/marks fetch for smart prefetch scheduling
-      if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-        registerAttendanceFetch();
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to fetch data');
+        }
+
+        // Process calendar data for day order stats (do this first, before timetable processing)
+        // Handle multiple formats: direct array, {success: true, data: [...]}, or {data: [...]}
+        if (result.data && typeof result.data === 'object' && 'calendar' in result.data) {
+          const calendarDataFromResult = (result.data as { calendar?: unknown }).calendar;
+          let calendarArray: CalendarEvent[] | null = null;
+          
+          if (Array.isArray(calendarDataFromResult)) {
+            // Direct array format
+            calendarArray = calendarDataFromResult;
+          } else if (calendarDataFromResult && typeof calendarDataFromResult === 'object') {
+            const calendarObj = calendarDataFromResult as Record<string, unknown>;
+            // Handle {success: true, data: [...]} format (old API format)
+            if ('success' in calendarObj && calendarObj.success && 'data' in calendarObj && Array.isArray(calendarObj.data)) {
+              calendarArray = calendarObj.data as CalendarEvent[];
+            }
+            // Handle {data: [...]} format
+            else if ('data' in calendarObj && Array.isArray(calendarObj.data)) {
+              calendarArray = calendarObj.data as CalendarEvent[];
+            }
+            // Handle nested {success: {data: [...]}} format
+            else if ('success' in calendarObj && typeof calendarObj.success === 'object' && calendarObj.success !== null) {
+              const successObj = calendarObj.success as { data?: CalendarEvent[] };
+              if (Array.isArray(successObj.data)) {
+                calendarArray = successObj.data;
+              }
+            }
+          }
+          
+          if (calendarArray) {
+            setCalendarData(calendarArray);
+            const stats = getDayOrderStats(calendarArray);
+            setDayOrderStats(stats);
+            console.log('[Timetable] ✅ Day order stats calculated:', stats);
+          } else {
+            console.warn('[Timetable] ⚠️ Calendar data format not recognized');
+          }
+        }
+
+        // Process timetable data from unified endpoint
+        // Unified endpoint returns: { success: boolean, data: { timetable: TimetableData, ... }, error?: string }
+        let timetableDataObj: TimetableData | null = null;
+        
+        console.log('[Timetable] Processing timetable data from API response');
+        console.log('[Timetable] result.data type:', typeof result.data);
+        console.log('[Timetable] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+        
+        // Extract timetable from unified response: { data: { timetable: TimetableData, ... } }
+        if (result.data && typeof result.data === 'object' && 'timetable' in result.data) {
+          const timetableData = (result.data as { timetable?: unknown }).timetable;
+          
+          if (timetableData && typeof timetableData === 'object' && timetableData !== null) {
+            // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+            let dataToProcess: unknown = timetableData;
+            
+            // Check if data is wrapped in a 'data' property (API response format from cache)
+            const dataToProcessObj = dataToProcess as Record<string, unknown>;
+            if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
+              console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
+              const wrappedData = dataToProcessObj.data as TimetableData;
+              if (wrappedData && 'timetable' in wrappedData) {
+                dataToProcess = wrappedData;
+              }
+            }
+            // Check if it's already in TimetableData format (has timetable property at root)
+            else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
+              // Already in correct format
+              dataToProcess = dataToProcess;
+            }
+            
+            // Verify it's the expected TimetableData format
+            if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
+              const dataObj = dataToProcess as Record<string, unknown>;
+              if ('timetable' in dataObj || 'time_slots' in dataObj) {
+                timetableDataObj = dataToProcess as TimetableData;
+                console.log('[Timetable] ✅ Timetable data loaded');
+              } else {
+                console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+                console.warn('[Timetable] Available keys:', Object.keys(dataObj));
+              }
+            } else {
+              console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+              console.warn('[Timetable] dataToProcess is not an object');
+            }
+          }
+        } else {
+          console.warn('[Timetable] ⚠️ result.data.timetable is not available');
+          console.warn('[Timetable] result.data structure:', result.data);
+        }
+        
+        if (timetableDataObj && timetableDataObj.timetable) {
+          console.log('[Timetable] Timetable response data:', timetableDataObj);
+          console.log('[Timetable] DO 1 time_slots sample:', timetableDataObj.timetable['DO 1']?.time_slots);
+          
+          setRawTimetableData(timetableDataObj);
+          const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
+          console.log('[Timetable] Converted time slots:', convertedData);
+          
+          // Save to client cache
+          setClientCache('timetable', timetableDataObj);
+          
+          setTimetableData(convertedData);
+
+          const occurrences = getSlotOccurrences(timetableDataObj);
+          console.log('[Timetable] Slot occurrences:', occurrences);
+          
+          setSlotOccurrences(occurrences);
+          console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
+        } else {
+          // Keep page visible even when timetable data is unavailable
+          // User can use refresh button to fetch data
+          console.warn('[Timetable] Timetable data unavailable - keeping page visible for refresh');
+          if (result && result.data) {
+            console.warn('[Timetable] Timetable data type:', typeof result.data);
+            console.warn('[Timetable] Timetable data value:', result.data);
+          }
+          setRawTimetableData(null);
+          setTimetableData([]);
+          // Don't throw error, just log it so page remains visible
+        }
+      } else {
+        // Timetable was cached, but we still need calendar data for stats
+        // Try to get calendar from unified cache or fetch it
+        const cachedUnified = getClientCache('unified');
+        if (cachedUnified && typeof cachedUnified === 'object' && cachedUnified !== null && 'data' in cachedUnified) {
+          const unifiedData = (cachedUnified as { data?: { calendar?: unknown } }).data;
+          if (unifiedData && typeof unifiedData === 'object' && 'calendar' in unifiedData) {
+            const calendarDataFromCache = (unifiedData as { calendar?: unknown }).calendar;
+            let calendarArray: CalendarEvent[] | null = null;
+            
+            if (Array.isArray(calendarDataFromCache)) {
+              calendarArray = calendarDataFromCache;
+            } else if (calendarDataFromCache && typeof calendarDataFromCache === 'object') {
+              const calendarObj = calendarDataFromCache as Record<string, unknown>;
+              // Handle {success: true, data: [...]} format
+              if ('success' in calendarObj && calendarObj.success && 'data' in calendarObj && Array.isArray(calendarObj.data)) {
+                calendarArray = calendarObj.data as CalendarEvent[];
+              }
+              // Handle {data: [...]} format
+              else if ('data' in calendarObj && Array.isArray(calendarObj.data)) {
+                calendarArray = calendarObj.data as CalendarEvent[];
+              }
+            }
+            
+            if (calendarArray) {
+              setCalendarData(calendarArray);
+              const stats = getDayOrderStats(calendarArray);
+              setDayOrderStats(stats);
+              console.log('[Timetable] ✅ Day order stats calculated from unified cache:', stats);
+            }
+          }
+        } else {
+          // Fetch calendar data separately if not in cache
+          console.log('[Timetable] 📅 Fetching calendar data for day order stats...');
+          try {
+            const calendarResponse = await fetch('/api/data/all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
+            });
+            const calendarResult = await calendarResponse.json();
+            if (calendarResult.success && calendarResult.data?.calendar) {
+              let calendarArray: CalendarEvent[] | null = null;
+              const calendarData = calendarResult.data.calendar;
+              
+              if (Array.isArray(calendarData)) {
+                calendarArray = calendarData;
+              } else if (calendarData && typeof calendarData === 'object') {
+                const calendarObj = calendarData as Record<string, unknown>;
+                // Handle {success: true, data: [...]} format
+                if ('success' in calendarObj && calendarObj.success && 'data' in calendarObj && Array.isArray(calendarObj.data)) {
+                  calendarArray = calendarObj.data as CalendarEvent[];
+                }
+                // Handle {data: [...]} format
+                else if ('data' in calendarObj && Array.isArray(calendarObj.data)) {
+                  calendarArray = calendarObj.data as CalendarEvent[];
+                }
+              }
+              
+              if (calendarArray) {
+                setCalendarData(calendarArray);
+                const stats = getDayOrderStats(calendarArray);
+                setDayOrderStats(stats);
+                console.log('[Timetable] ✅ Day order stats calculated from calendar fetch:', stats);
+              }
+            }
+          } catch (calendarErr) {
+            console.error('[Timetable] ❌ Error fetching calendar for stats:', calendarErr);
+          }
+        }
       }
 
     } catch (err) {
@@ -288,6 +460,12 @@ export default function TimetablePage() {
   const convertTimetableDataToTimeSlots = (data: TimetableData): TimeSlot[] => {
     const timeSlots: TimeSlot[] = [];
 
+    // Check if timetable data exists
+    if (!data || !data.timetable || typeof data.timetable !== 'object') {
+      console.warn('[Timetable] ⚠️ Invalid timetable data structure:', data);
+      return timeSlots;
+    }
+
     const timeSlotKeys = data.time_slots || [
       "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
       "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
@@ -304,13 +482,17 @@ export default function TimetablePage() {
       };
 
       ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach((doName, index) => {
-        const doData = data.timetable[doName];
-        if (doData && doData.time_slots && doData.time_slots[timeSlot]) {
-          const slotInfo = doData.time_slots[timeSlot];
-          const courseTitle = slotInfo.course_title || "";
+        // Safely access timetable data
+        const doData = data.timetable && typeof data.timetable === 'object' ? (data.timetable as Record<string, unknown>)[doName] : null;
+        if (doData && typeof doData === 'object' && doData !== null) {
+          const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string }> };
+          if (doDataTyped.time_slots && doDataTyped.time_slots[timeSlot]) {
+            const slotInfo = doDataTyped.time_slots[timeSlot];
+            const courseTitle = slotInfo.course_title || "";
 
-          const doKey = `do${index + 1}` as keyof TimeSlot;
-          timeSlotEntry[doKey] = courseTitle || "";
+            const doKey = `do${index + 1}` as keyof TimeSlot;
+            timeSlotEntry[doKey] = courseTitle || "";
+          }
         }
       });
 
@@ -516,7 +698,20 @@ export default function TimetablePage() {
           {/* Day Order Statistics */}
           {dayOrderStats && (
             <div className="mb-6 sm:mb-7 md:mb-8 lg:mb-8">
-              
+              <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-3 sm:mb-4">Day Order Distribution</div>
+              <div className="grid grid-cols-5 gap-2 sm:gap-3 md:gap-4">
+                {[1, 2, 3, 4, 5].map((doNumber) => (
+                  <div
+                    key={doNumber}
+                    className="bg-white/10 border border-white/20 rounded-xl p-3 sm:p-4 text-center"
+                  >
+                    <div className="text-white/70 text-xs sm:text-sm md:text-base mb-1">DO {doNumber}</div>
+                    <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-bold">
+                      {dayOrderStats[doNumber] || 0}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

@@ -55,3 +55,53 @@ create policy if not exists "Users can update only their own cache" on public.us
 for update
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
+
+create table calendar (
+id uuid primary key default gen_random_uuid(),
+course text not null, -- e.g. 'BTech', 'MTech'
+semester int not null, -- e.g. 1, 2, 3, 4
+data jsonb not null, -- stores full calendar data (holidays, events, etc.)
+updated_at timestamp with time zone default now()
+);
+
+
+create table public.events (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid null,
+  user_email text null,
+  session_id text null,
+  event_name text not null,
+  event_data jsonb null,
+  created_at timestamp with time zone null default now(),
+  constraint events_pkey primary key (id),
+  constraint events_user_id_fkey foreign KEY (user_id) references auth.users (id) on delete set null
+) TABLESPACE pg_default;
+
+RLS policies:
+create policy "public insert events"
+on events
+for insert
+to public
+with check (true);
+
+create policy "users update own events"
+on events
+for update
+using (
+  user_id = auth.uid()
+)
+with check (
+  user_id = auth.uid()
+);
+
+create policy "admin can read events"
+on events
+for select
+using (
+  exists (
+    select 1 
+    from public.users u
+    where u.id = auth.uid()
+    and u.role = 'admin'
+  )
+);
