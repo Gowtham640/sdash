@@ -540,7 +540,7 @@ export default function Dashboard() {
         // All cached, but still need calendar - fetch only calendar
         console.log('[Dashboard] ✅ All data cached, fetching only calendar...');
         const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
-        await deduplicateRequest(requestKey, async () => {
+        const calendarResult = await deduplicateRequest(requestKey, async () => {
           const response = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -552,6 +552,9 @@ export default function Dashboard() {
           }
           return result;
         });
+        
+        // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
+        result = calendarResult;
       }
       
       // Register attendance/marks fetch for smart prefetch scheduling

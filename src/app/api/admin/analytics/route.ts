@@ -107,7 +107,7 @@ export async function GET(request: NextRequest) {
       eventsQuery = eventsQuery.gte('created_at', startDate.toISOString());
     }
     
-    // Fetch all events first
+    // Fetch all events first (for metrics within time range)
     const { data: events, error: eventsError } = await eventsQuery
       .order('created_at', { ascending: false });
     
@@ -120,6 +120,18 @@ export async function GET(request: NextRequest) {
     }
     
     let eventRows = (events || []) as EventRow[];
+    
+    // Fetch ALL session_end events (regardless of time range) to accurately determine active sessions
+    // A session that ended before the time range should not be counted as active
+    const { data: allSessionEnds, error: sessionEndsError } = await supabaseAdmin
+      .from('events')
+      .select('session_id, created_at, event_data')
+      .eq('event_name', 'session_end');
+    
+    if (sessionEndsError) {
+      console.error('[Analytics API] Error fetching session_end events:', sessionEndsError);
+      // Continue with time-range filtered session_ends as fallback
+    }
     
     // Filter by semester if specified
     if (semesterFilter && semesterFilter !== 'all') {
@@ -219,7 +231,6 @@ export async function GET(request: NextRequest) {
     const uniqueSessions = new Set<string>();
     const sessionsByUser = new Map<string, Set<string>>(); // Track unique sessions per user
     const siteOpensByUser = new Map<string, number>();
-    const activeSessions = new Set<string>(); // Sessions that started but haven't ended
     
     // Track all session IDs from events
     eventRows.forEach(event => {
@@ -241,23 +252,51 @@ export async function GET(request: NextRequest) {
       if (event.user_id) {
         siteOpensByUser.set(event.user_id, (siteOpensByUser.get(event.user_id) || 0) + 1);
       }
+    });
+    
+    // Track sessions that have ended (deduplicated - one session_end per session_id)
+    // Use ALL session_end events (not just those in time range) to accurately determine active sessions
+    const endedSessionIds = new Set<string>();
+    const allSessionEndEvents = (allSessionEnds || []) as EventRow[];
+    allSessionEndEvents.forEach(event => {
       if (event.session_id) {
-        activeSessions.add(event.session_id);
+        endedSessionIds.add(event.session_id);
+      }
+    });
+    // Also include session_ends from the time range (in case allSessionEnds query failed)
+    sessionEnds.forEach(event => {
+      if (event.session_id) {
+        endedSessionIds.add(event.session_id);
       }
     });
     
-    // Remove ended sessions from active sessions
-    sessionEnds.forEach(event => {
-      if (event.session_id) {
-        activeSessions.delete(event.session_id);
+    // Active sessions = unique sessions that don't have a session_end event
+    const activeSessions = new Set<string>();
+    uniqueSessions.forEach(sessionId => {
+      if (!endedSessionIds.has(sessionId)) {
+        activeSessions.add(sessionId);
       }
     });
     
-    // Calculate session durations
+    // Calculate session durations (only count once per session_id, use the latest session_end)
+    const sessionDurationsBySession = new Map<string, { duration: number; timestamp: string }>();
     sessionEnds.forEach(event => {
-      const duration = (event.event_data as { duration_ms?: number } | null)?.duration_ms;
-      if (duration) sessionDurations.push(duration / 1000 / 60); // Convert to minutes
+      if (event.session_id) {
+        const duration = (event.event_data as { duration_ms?: number } | null)?.duration_ms;
+        if (duration) {
+          const existing = sessionDurationsBySession.get(event.session_id);
+          // Use the latest session_end event for each session_id
+          if (!existing || event.created_at > existing.timestamp) {
+            sessionDurationsBySession.set(event.session_id, {
+              duration: duration / 1000 / 60, // Convert to minutes
+              timestamp: event.created_at
+            });
+          }
+        }
+      }
     });
+    // Convert map values to array for average calculation
+    sessionDurations.push(...Array.from(sessionDurationsBySession.values()).map(s => s.duration));
     
     // Calculate average unique sessions per user
     const avgSessionsPerUser = sessionsByUser.size > 0
@@ -494,7 +533,7 @@ export async function GET(request: NextRequest) {
           siteOpens: siteOpens.length,
           errors: errors.length,
           featureClicks: featureClicks.length,
-          sessions: sessionEnds.length,
+          sessions: endedSessionIds.size, // Count of unique session_ids that have ended (deduplicated)
           uniqueSessions: uniqueSessions.size,
           activeSessions: activeSessions.size,
         },
