@@ -391,10 +391,12 @@ export default function Dashboard() {
         console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
       }
 
+      // Declare result at function scope so it's accessible in all branches
+      let result: any = null;
+      let response: Response | null = null;
+      
       if (missingCount > 0 || forceRefresh) {
         // Fetch from API with automatic retry on password-related session_expired
-        let response: Response | null = null;
-        let result: any = null;
         let apiStartTime = Date.now();
         const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
         
