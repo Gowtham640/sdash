@@ -249,7 +249,7 @@ export default function CalendarPage() {
         // Direct array format
         calendarEvents = result.data.calendar;
         console.log('[Calendar] ✅ Calendar data is direct array format');
-        console.log('[Calendar]   - Total events:', calendarEvents.length);
+        console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
       } else if (result.data.calendar && typeof result.data.calendar === 'object') {
         // Check if it's wrapped format: {success: true, data: [...]}
         if ('success' in result.data.calendar && 'data' in result.data.calendar) {
@@ -259,14 +259,14 @@ export default function CalendarPage() {
           if (isSuccess && Array.isArray(calendarWrapper.data)) {
             calendarEvents = calendarWrapper.data;
             console.log('[Calendar] ✅ Calendar data is wrapped format');
-            console.log('[Calendar]   - Total events:', calendarEvents.length);
+            console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
           }
         }
         // Check legacy nested format: {data: [...]}
         else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
           calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
           console.log('[Calendar] ✅ Calendar data is legacy nested format');
-          console.log('[Calendar]   - Total events:', calendarEvents.length);
+          console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
         }
       }
       
