@@ -46,6 +46,7 @@ export default function AdminPage() {
       siteOpens: number;
       errors: number;
       featureClicks: number;
+      totalSessions: number;
       sessions: number;
       uniqueSessions: number;
       activeSessions: number;
@@ -55,6 +56,7 @@ export default function AdminPage() {
       cacheHitsByType: Array<{ type: string; count: number }>;
       apiRequestsByEndpoint: Array<{ endpoint: string; count: number }>;
       browserDistribution: Array<{ browser: string; count: number }>;
+      deviceDistribution: Array<{ device: string; count: number }>;
       featureUsage: Array<{ feature: string; count: number }>;
       errorTypes: Array<{ type: string; count: number }>;
       pageVisitsOverTime: Array<{ date: string; count: number }>;
@@ -748,6 +750,11 @@ export default function AdminPage() {
                     <div className="relative text-white/90 text-xs font-sora mb-1">Active Sessions</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.activeSessions || 0}</div>
                         </div>
+                  <div className="relative p-4 backdrop-blur rounded-2xl border border-blue-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.5) 100%)', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Total Sessions</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalSessions || 0}</div>
+                  </div>
                   <div className="relative p-4 backdrop-blur rounded-2xl border border-pink-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(236, 72, 153, 0.4) 0%, rgba(219, 39, 119, 0.5) 100%)', boxShadow: '0 4px 15px rgba(236, 72, 153, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Ended Sessions</div>
@@ -934,6 +941,59 @@ export default function AdminPage() {
                     </div>
                   )}
 
+                  {/* Device Type Distribution */}
+                  {analyticsData.charts?.deviceDistribution && analyticsData.charts.deviceDistribution.length > 0 && (
+                    <div className="relative p-6 backdrop-blur rounded-3xl border border-purple-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.3) 0%, rgba(139, 92, 246, 0.4) 100%)', boxShadow: '0 4px 20px rgba(168, 85, 247, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-xl font-sora font-bold mb-4">Device Type Distribution</div>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <PieChart>
+                          <Pie
+                            data={(() => {
+                              const total = analyticsData.charts.deviceDistribution.reduce((sum, item) => sum + item.count, 0);
+                              return analyticsData.charts.deviceDistribution.map(item => ({
+                                ...item,
+                                percentage: total > 0 ? ((item.count / total) * 100).toFixed(1) : '0.0'
+                              }));
+                            })()}
+                            dataKey="count"
+                            nameKey="device"
+                            cx="55%"
+                            cy="50%"
+                            outerRadius={80}
+                            label={(props: any) => {
+                              const device = props.device || props.payload?.device || '';
+                              const percentage = props.percentage || props.payload?.percentage || '0.0';
+                              return (
+                                <text
+                                  x={props.x}
+                                  y={props.y}
+                                  fill="#ffffff"
+                                  textAnchor={props.textAnchor}
+                                  dominantBaseline="central"
+                                  style={{ fontFamily: 'Sora', fontSize: '12px' }}
+                                >
+                                  {`${device}: ${percentage}%`}
+                                </text>
+                              );
+                            }}
+                            labelLine={{ stroke: '#ffffff', strokeWidth: 1 }}
+                            isAnimationActive={true}
+                            animationDuration={500}
+                          >
+                            {analyticsData.charts.deviceDistribution.map((entry, index) => {
+                              const colors = ['#a78bfa', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#fb7185', '#22d3ee'];
+                              return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                            })}
+                          </Pie>
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                {/* Charts Row 2.5 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
                   {/* Cache Hits vs API Requests */}
                   <div className="relative p-6 backdrop-blur rounded-3xl border border-amber-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.4) 100%)', boxShadow: '0 4px 20px rgba(251, 191, 36, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                     <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>

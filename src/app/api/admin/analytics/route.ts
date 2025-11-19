@@ -66,6 +66,36 @@ function parseBrowser(userAgent: string): string {
   return 'other';
 }
 
+/**
+ * Parse device type from user agent or event data
+ * This function matches the client-side parseUserAgent() logic
+ */
+function parseDeviceType(userAgent: string, eventData: Record<string, unknown> | null): string {
+  // First try to get device_type from event_data (more accurate)
+  if (eventData && typeof eventData.device_type === 'string') {
+    return eventData.device_type;
+  }
+  
+  // Fallback to parsing user agent (matches client-side logic)
+  if (!userAgent) return 'unknown';
+  
+  const ua = userAgent;
+  
+  // Mobile devices (check first, before desktop OS)
+  if (/iPhone/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua)) return 'iPad';
+  if (/Android/i.test(ua)) return 'Android';
+  if (/Windows Phone/i.test(ua)) return 'Windows Phone';
+  
+  // Desktop/Tablet OS (check after mobile to avoid false positives)
+  if (/Windows NT/i.test(ua)) return 'Windows';
+  if (/Macintosh/i.test(ua) || /Mac OS X/i.test(ua)) return 'Mac';
+  if (/Linux/i.test(ua)) return 'Linux';
+  if (/CrOS/i.test(ua)) return 'Chrome OS';
+  
+  return 'unknown';
+}
+
 export async function GET(request: NextRequest) {
   try {
     // Get date range and filters
@@ -121,8 +151,18 @@ export async function GET(request: NextRequest) {
     
     let eventRows = (events || []) as EventRow[];
     
+    // Fetch ALL session_created events (regardless of time range) to accurately determine total sessions
+    const { data: allSessionCreated, error: sessionCreatedError } = await supabaseAdmin
+      .from('events')
+      .select('session_id, created_at, event_data')
+      .eq('event_name', 'session_created');
+    
+    if (sessionCreatedError) {
+      console.error('[Analytics API] Error fetching session_created events:', sessionCreatedError);
+    }
+    
     // Fetch ALL session_end events (regardless of time range) to accurately determine active sessions
-    // A session that ended before the time range should not be counted as active
+    // Active sessions are independent of time range - shows ALL currently active sessions
     const { data: allSessionEnds, error: sessionEndsError } = await supabaseAdmin
       .from('events')
       .select('session_id, created_at, event_data')
@@ -167,6 +207,7 @@ export async function GET(request: NextRequest) {
     const siteOpens = eventRows.filter(e => e.event_name === 'site_open');
     const errors = eventRows.filter(e => e.event_name === 'error');
     const featureClicks = eventRows.filter(e => e.event_name === 'feature_click' || e.event_name.startsWith('predict_') || e.event_name.startsWith('odml_') || e.event_name.startsWith('add_'));
+    const sessionCreated = eventRows.filter(e => e.event_name === 'session_created');
     const sessionEnds = eventRows.filter(e => e.event_name === 'session_end');
     
     // Page visits by page
@@ -190,12 +231,34 @@ export async function GET(request: NextRequest) {
       apiRequestsByEndpoint.set(endpoint, (apiRequestsByEndpoint.get(endpoint) || 0) + 1);
     });
     
-    // Browser distribution
+    // Browser distribution (from all events that have browser info, prioritize event_data.browser)
     const browserDistribution = new Map<string, number>();
-    pageViews.forEach(event => {
-      const userAgent = (event.event_data as { user_agent?: string } | null)?.user_agent || '';
-      const browser = parseBrowser(userAgent);
-      browserDistribution.set(browser, (browserDistribution.get(browser) || 0) + 1);
+    eventRows.forEach(event => {
+      // First try to get browser from event_data (more accurate, from client-side parsing)
+      const eventData = event.event_data as { browser?: string; user_agent?: string } | null;
+      let browser = eventData?.browser;
+      
+      // If no browser in event_data, parse from user_agent
+      if (!browser && eventData?.user_agent) {
+        browser = parseBrowser(eventData.user_agent);
+      }
+      
+      // Only count if we have a valid browser
+      if (browser && browser !== 'unknown' && browser !== 'other') {
+        browserDistribution.set(browser, (browserDistribution.get(browser) || 0) + 1);
+      }
+    });
+    
+    // Device type distribution (prioritize events with device_type in event_data, skip old events without it)
+    const deviceDistribution = new Map<string, number>();
+    eventRows.forEach(event => {
+      const eventData = event.event_data as { device_type?: string; user_agent?: string } | null;
+      
+      // Only count events that have device_type in event_data (newer events)
+      // Skip old events that don't have device_type to avoid "unknown" pollution
+      if (eventData?.device_type && eventData.device_type !== 'unknown') {
+        deviceDistribution.set(eventData.device_type, (deviceDistribution.get(eventData.device_type) || 0) + 1);
+      }
     });
     
     // Feature usage
@@ -254,8 +317,25 @@ export async function GET(request: NextRequest) {
       }
     });
     
+    // Track all sessions that have been created (deduplicated - one session_created per session_id)
+    // Use ALL session_created events (not just those in time range) to get accurate total
+    const createdSessionIds = new Set<string>();
+    const allSessionCreatedEvents = (allSessionCreated || []) as EventRow[];
+    allSessionCreatedEvents.forEach(event => {
+      if (event.session_id) {
+        createdSessionIds.add(event.session_id);
+      }
+    });
+    // Also include session_created from the time range (in case allSessionCreated query failed)
+    sessionCreated.forEach(event => {
+      if (event.session_id) {
+        createdSessionIds.add(event.session_id);
+      }
+    });
+    
     // Track sessions that have ended (deduplicated - one session_end per session_id)
     // Use ALL session_end events (not just those in time range) to accurately determine active sessions
+    // Active sessions are calculated independently of time range - shows ALL currently active sessions
     const endedSessionIds = new Set<string>();
     const allSessionEndEvents = (allSessionEnds || []) as EventRow[];
     allSessionEndEvents.forEach(event => {
@@ -270,9 +350,10 @@ export async function GET(request: NextRequest) {
       }
     });
     
-    // Active sessions = unique sessions that don't have a session_end event
+    // Active sessions = ALL sessions that were created but don't have a session_end event
+    // This is independent of the time range filter - shows current active sessions across all time
     const activeSessions = new Set<string>();
-    uniqueSessions.forEach(sessionId => {
+    createdSessionIds.forEach(sessionId => {
       if (!endedSessionIds.has(sessionId)) {
         activeSessions.add(sessionId);
       }
@@ -533,9 +614,10 @@ export async function GET(request: NextRequest) {
           siteOpens: siteOpens.length,
           errors: errors.length,
           featureClicks: featureClicks.length,
+          totalSessions: createdSessionIds.size, // Total sessions created (deduplicated)
           sessions: endedSessionIds.size, // Count of unique session_ids that have ended (deduplicated)
           uniqueSessions: uniqueSessions.size,
-          activeSessions: activeSessions.size,
+          activeSessions: activeSessions.size, // ALL currently active sessions (created but not ended, independent of time range)
         },
         // Charts data
         charts: {
@@ -553,6 +635,10 @@ export async function GET(request: NextRequest) {
           })),
           browserDistribution: Array.from(browserDistribution.entries()).map(([browser, count]) => ({
             browser,
+            count,
+          })),
+          deviceDistribution: Array.from(deviceDistribution.entries()).map(([device, count]) => ({
+            device,
             count,
           })),
           featureUsage: Array.from(featureUsage.entries()).map(([feature, count]) => ({

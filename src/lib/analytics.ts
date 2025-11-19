@@ -24,6 +24,7 @@ const LAST_PAGE_KEY = 'analytics_last_page';
 const SITE_OPENED_KEY = 'analytics_site_opened';
 const SESSION_ENDED_KEY = 'analytics_session_ended';
 const SESSION_END_SUBMITTED_KEY = 'analytics_session_end_submitted'; // Memory + localStorage flag
+const DEVICE_TYPE_TRACKED_KEY = 'analytics_device_type_tracked'; // Flag to ensure device_type is tracked only once per session
 
 // Session configuration
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes of inactivity
@@ -54,6 +55,7 @@ export type EventName =
   | 'cache_hit'
   | 'api_request'
   | 'site_open'
+  | 'session_created'
   | 'session_end'
   | 'predict_click'
   | 'odml_add'
@@ -154,16 +156,38 @@ function getOrCreateSessionId(): string {
   const existingSessionStart = existingSessionId ? getStorageItem(SESSION_START_KEY) : null;
   const alreadyEnded = getStorageItem(SESSION_ENDED_KEY);
   
+  // If session has already ended, clear it and create a new one (prevent reuse)
+  if (alreadyEnded === 'true' && existingSessionId) {
+    console.log(`[Analytics] Session ${existingSessionId} already ended - clearing and creating new session`);
+    // Clear old session data
+    removeStorageItem(SESSION_ID_KEY);
+    removeStorageItem(SESSION_START_KEY);
+    removeStorageItem(LAST_ACTIVITY_KEY);
+    removeStorageItem(SITE_OPENED_KEY);
+    removeStorageItem(SESSION_ENDED_KEY);
+    removeStorageItem(SESSION_END_SUBMITTED_KEY);
+    removeStorageItem(DEVICE_TYPE_TRACKED_KEY);
+    sessionEndSubmitted = false;
+    siteOpenTracked = false;
+    lastPageViewTracked = null;
+    lastPageViewTimestamp = 0;
+    // After clearing, continue to create a new session below
+  }
+  
+  // Re-read session ID after potential clearing
+  let currentSessionId = getStorageItem(SESSION_ID_KEY);
+  const currentAlreadyEnded = getStorageItem(SESSION_ENDED_KEY);
+  
   // Check if session expired
   if (isSessionExpired()) {
     console.log('[Analytics] Session expired (30 min inactivity) - ending old session and creating new');
     
     // If there was an existing session that hasn't been ended, end it first
-    if (existingSessionId && alreadyEnded !== 'true') {
+    if (currentSessionId && currentAlreadyEnded !== 'true') {
       console.log('[Analytics] Ending expired session before creating new one');
       
       // Track session end with the OLD session_id (before clearing)
-      trackSessionEnd(existingSessionId);
+      trackSessionEnd(currentSessionId);
     }
     
     // Clear old session data
@@ -172,11 +196,13 @@ function getOrCreateSessionId(): string {
     removeStorageItem(LAST_ACTIVITY_KEY);
     removeStorageItem(SITE_OPENED_KEY);
     removeStorageItem(SESSION_ENDED_KEY);
-        removeStorageItem(SESSION_END_SUBMITTED_KEY);
-        sessionEndSubmitted = false; // Reset memory flag
-        siteOpenTracked = false; // Reset site_open flag
-        lastPageViewTracked = null; // Reset page_view flag
-        lastPageViewTimestamp = 0; // Reset page view timestamp
+    removeStorageItem(SESSION_END_SUBMITTED_KEY);
+    removeStorageItem(DEVICE_TYPE_TRACKED_KEY);
+    sessionEndSubmitted = false; // Reset memory flag
+    siteOpenTracked = false; // Reset site_open flag
+    lastPageViewTracked = null; // Reset page_view flag
+    lastPageViewTimestamp = 0; // Reset page view timestamp
+    currentSessionId = null; // Clear local variable
   }
   
   let sessionId = getStorageItem(SESSION_ID_KEY);
@@ -196,6 +222,20 @@ function getOrCreateSessionId(): string {
     updateLastActivity();
     
     console.log(`[Analytics] New session created: ${sessionId}`);
+    
+    // Track session creation (device_type tracked here - only once per session)
+    const { browser, device_type, user_agent } = parseUserAgent();
+    trackEvent('session_created', {
+      session_id: sessionId,
+      session_start: startTime,
+      browser,
+      device_type,
+      user_agent,
+      timestamp: startTime,
+    });
+    
+    // Mark device_type as tracked for this session
+    setStorageItem(DEVICE_TYPE_TRACKED_KEY, 'true');
   } else {
     // Update activity for existing session
     updateLastActivity();
@@ -220,16 +260,18 @@ function getOrCreateSessionStart(): number {
 }
 
 /**
- * Parse user agent to detect browser
+ * Parse user agent to detect browser and device type
  */
-function parseUserAgent(): { browser: string; user_agent: string } {
+function parseUserAgent(): { browser: string; device_type: string; user_agent: string } {
   if (typeof window === 'undefined' || !window.navigator) {
-    return { browser: 'unknown', user_agent: '' };
+    return { browser: 'unknown', device_type: 'unknown', user_agent: '' };
   }
   
   const ua = window.navigator.userAgent;
   let browser = 'unknown';
+  let device_type = 'unknown';
   
+  // Detect browser
   if (ua.includes('Chrome') && !ua.includes('Edg') && !ua.includes('OPR')) {
     browser = 'chrome';
   } else if (ua.includes('Safari') && !ua.includes('Chrome')) {
@@ -242,7 +284,29 @@ function parseUserAgent(): { browser: string; user_agent: string } {
     browser = 'opera';
   }
   
-  return { browser, user_agent: ua };
+  // Detect device type
+  // Mobile devices
+  if (/iPhone/i.test(ua)) {
+    device_type = 'iPhone';
+  } else if (/iPad/i.test(ua)) {
+    device_type = 'iPad';
+  } else if (/Android/i.test(ua)) {
+    device_type = 'Android';
+  } else if (/Windows Phone/i.test(ua)) {
+    device_type = 'Windows Phone';
+  }
+  // Desktop/Tablet OS
+  else if (/Windows NT/i.test(ua)) {
+    device_type = 'Windows';
+  } else if (/Macintosh/i.test(ua) || /Mac OS X/i.test(ua)) {
+    device_type = 'Mac';
+  } else if (/Linux/i.test(ua)) {
+    device_type = 'Linux';
+  } else if (/CrOS/i.test(ua)) {
+    device_type = 'Chrome OS';
+  }
+  
+  return { browser, device_type, user_agent: ua };
 }
 
 /**
@@ -290,16 +354,20 @@ function addEventToQueue(event: AnalyticsEvent): void {
   // Check queue for duplicates (especially for page_view, site_open, session_end)
   const queue = getQueuedEvents();
   
-  // For page_view events, check if same page is already in queue
+  // For page_view events, check if same page is already in queue within 5 seconds
   if (event.event_name === 'page_view') {
     const page = (event.event_data as { page?: string } | null)?.page;
     if (page) {
-      const duplicateInQueue = queue.some(qe => 
-        qe.event_name === 'page_view' && 
-        (qe.event_data as { page?: string } | null)?.page === page
-      );
+      const eventTimestamp = event.timestamp;
+      const duplicateInQueue = queue.some(qe => {
+        if (qe.event_name !== 'page_view') return false;
+        const qePage = (qe.event_data as { page?: string } | null)?.page;
+        if (qePage !== page) return false;
+        // Check if within 5 seconds (prevent rapid duplicates)
+        return Math.abs(qe.timestamp - eventTimestamp) < 5000;
+      });
       if (duplicateInQueue) {
-        console.log(`[Analytics] Skipping duplicate page_view in queue: ${page}`);
+        console.log(`[Analytics] Skipping duplicate page_view in queue: ${page} (within 5s)`);
         return;
       }
     }
@@ -313,6 +381,18 @@ function addEventToQueue(event: AnalyticsEvent): void {
     );
     if (duplicateInQueue) {
       console.log(`[Analytics] Skipping duplicate site_open in queue for session: ${sessionId}`);
+      return;
+    }
+  }
+  
+  // For session_created events, check if already in queue (prevent duplicates)
+  if (event.event_name === 'session_created') {
+    const duplicateInQueue = queue.some(qe => 
+      qe.event_name === 'session_created' && 
+      qe.session_id === sessionId
+    );
+    if (duplicateInQueue) {
+      console.log(`[Analytics] Skipping duplicate session_created in queue for session: ${sessionId}`);
       return;
     }
   }
@@ -592,14 +672,25 @@ export function trackPageView(page: string, additionalData?: EventData): void {
     lastPageViewTimestamp = Date.now();
     setStorageItem(LAST_PAGE_KEY, page);
     
-    const { browser, user_agent } = parseUserAgent();
+    // Check if device_type has been tracked for this session
+    const deviceTypeTracked = getStorageItem(DEVICE_TYPE_TRACKED_KEY);
+    const { browser, device_type, user_agent } = parseUserAgent();
     
-    trackEvent('page_view', {
+    // Only include device_type if it hasn't been tracked yet (for existing sessions)
+    const eventData: EventData = {
       page,
       browser,
       user_agent,
       ...additionalData,
-    });
+    };
+    
+    // If device_type hasn't been tracked yet, add it and mark as tracked
+    if (deviceTypeTracked !== 'true') {
+      eventData.device_type = device_type;
+      setStorageItem(DEVICE_TYPE_TRACKED_KEY, 'true');
+    }
+    
+    trackEvent('page_view', eventData);
     
     // Clear timeout ID after tracking
     pageViewTimeoutId = null;
@@ -675,19 +766,29 @@ export function trackSiteOpen(): void {
   siteOpenTracked = true;
   setStorageItem(SITE_OPENED_KEY, 'true');
   
-  const { browser, user_agent } = parseUserAgent();
+  // Check if device_type has been tracked for this session (e.g., in session_created)
+  const deviceTypeTracked = getStorageItem(DEVICE_TYPE_TRACKED_KEY);
+  const { browser, device_type, user_agent } = parseUserAgent();
   const sessionStart = getOrCreateSessionStart();
   const currentTime = getSyncedTime();
   
   console.log(`[Analytics] Tracking site_open for session: ${sessionId}`);
   
-  trackEvent('site_open', {
+  const eventData: EventData = {
     browser,
     user_agent,
     session_id: sessionId,
     session_start: sessionStart,
     timestamp: currentTime,
-  });
+  };
+  
+  // Only include device_type if it hasn't been tracked yet (for existing sessions that didn't fire session_created)
+  if (deviceTypeTracked !== 'true') {
+    eventData.device_type = device_type;
+    setStorageItem(DEVICE_TYPE_TRACKED_KEY, 'true');
+  }
+  
+  trackEvent('site_open', eventData);
 }
 
 // Track recent feature clicks to prevent duplicates (synchronous check)
@@ -750,6 +851,22 @@ export function trackError(errorMessage: string, errorType?: string, page?: stri
  * IMPORTANT: Uses the CURRENT session_id (not a new one)
  */
 export function trackSessionEnd(sessionIdToUse?: string): void {
+  // Get the session ID to use (use provided one, or get current one WITHOUT creating new)
+  // IMPORTANT: Don't call getOrCreateSessionId() here as it might create a new session
+  const sessionId = sessionIdToUse || getStorageItem(SESSION_ID_KEY);
+  
+  if (!sessionId) {
+    console.log('[Analytics] No session ID found - cannot track session_end');
+    return;
+  }
+  
+  // Check if this session has already ended (prevent reuse) - check BEFORE setting flags
+  const alreadyEnded = getStorageItem(SESSION_ENDED_KEY);
+  if (alreadyEnded === 'true') {
+    console.log(`[Analytics] Session ${sessionId} already ended - preventing reuse`);
+    return;
+  }
+  
   // Check memory flag first (fastest check)
   if (sessionEndSubmitted) {
     console.log('[Analytics] Session end already submitted (memory flag)');
@@ -769,8 +886,6 @@ export function trackSessionEnd(sessionIdToUse?: string): void {
   setStorageItem(SESSION_END_SUBMITTED_KEY, 'true');
   setStorageItem(SESSION_ENDED_KEY, 'true');
   
-  // Get the session ID to use (use provided one, or get current one WITHOUT creating new)
-  const sessionId = sessionIdToUse || getStorageItem(SESSION_ID_KEY) || getOrCreateSessionId();
   const sessionStart = getOrCreateSessionStart();
   const currentTime = getSyncedTime();
   const sessionDuration = currentTime - sessionStart;
@@ -820,6 +935,15 @@ export function trackSessionEnd(sessionIdToUse?: string): void {
     console.log(`[Analytics] Skipping duplicate session_end in queue for session: ${sessionId}`);
   }
   
+  // CRITICAL: Clear session data immediately after tracking session_end to prevent reuse
+  // This ensures a new session will be created on next getOrCreateSessionId() call
+  removeStorageItem(SESSION_ID_KEY);
+  removeStorageItem(SESSION_START_KEY);
+  removeStorageItem(LAST_ACTIVITY_KEY);
+  removeStorageItem(SITE_OPENED_KEY);
+  removeStorageItem(DEVICE_TYPE_TRACKED_KEY);
+  // Keep SESSION_ENDED_KEY and SESSION_END_SUBMITTED_KEY set to prevent duplicate tracking
+  
   // Send immediately on unload
   void processQueue();
 }
@@ -860,6 +984,7 @@ function checkAndAutoEndExpiredSessions(): boolean {
     removeStorageItem(SITE_OPENED_KEY);
     removeStorageItem(SESSION_ENDED_KEY);
     removeStorageItem(SESSION_END_SUBMITTED_KEY);
+    removeStorageItem(DEVICE_TYPE_TRACKED_KEY);
     sessionEndSubmitted = false;
     siteOpenTracked = false;
     lastPageViewTracked = null;
@@ -917,21 +1042,34 @@ export function initializeAnalytics(): void {
   }
   
   // Track page unload (only once) - consolidated to prevent multiple calls
-  let unloadTracked = false;
+  // Use a shared flag stored in window to prevent duplicates across multiple listeners
+  if (!(window as { __analyticsUnloadTracked?: boolean }).__analyticsUnloadTracked) {
+    (window as { __analyticsUnloadTracked?: boolean }).__analyticsUnloadTracked = false;
+  }
+  
   const handleUnload = () => {
-    if (!unloadTracked) {
-      unloadTracked = true;
-      trackSessionEnd();
+    if (!(window as { __analyticsUnloadTracked?: boolean }).__analyticsUnloadTracked) {
+      (window as { __analyticsUnloadTracked?: boolean }).__analyticsUnloadTracked = true;
+      // Only end session if it has expired (30 min inactivity)
+      // Don't end session on every page navigation - only on actual expiration
+      const sessionId = getStorageItem(SESSION_ID_KEY);
+      if (sessionId && isSessionExpired()) {
+        console.log('[Analytics] Session expired on page unload - ending session');
+        trackSessionEnd(sessionId);
+      }
       // Try to send remaining events synchronously (limited time)
       void processQueue();
     }
   };
   
   // Use pagehide as primary (more reliable than beforeunload)
-  window.addEventListener('pagehide', handleUnload);
-  
-  // Fallback to beforeunload (less reliable but catches some cases)
-  window.addEventListener('beforeunload', handleUnload);
+  // Only add listeners if they haven't been added before
+  if (!(window as { __analyticsListenersAdded?: boolean }).__analyticsListenersAdded) {
+    (window as { __analyticsListenersAdded?: boolean }).__analyticsListenersAdded = true;
+    window.addEventListener('pagehide', handleUnload);
+    // Don't add beforeunload to avoid duplicate session_end events
+    // pagehide is more reliable and fires in more cases
+  }
   
   // Track visibility change (tab close) - more reliable than beforeunload
   document.addEventListener('visibilitychange', () => {
@@ -1003,6 +1141,7 @@ export function resetSession(): void {
   removeStorageItem(SITE_OPENED_KEY);
   removeStorageItem(SESSION_ENDED_KEY);
   removeStorageItem(SESSION_END_SUBMITTED_KEY);
+  removeStorageItem(DEVICE_TYPE_TRACKED_KEY);
   removeStorageItem(LAST_PAGE_KEY);
   lastTrackedPage = null;
   sessionEndSubmitted = false;
