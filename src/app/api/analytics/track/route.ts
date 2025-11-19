@@ -95,16 +95,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       let fingerprint: string;
       
       if (event.event_name === 'session_end') {
-        // For session_end, use session_id + session_end timestamp
+        // For session_end, use session_id + session_end timestamp (within 1 second)
         const sessionEnd = (event.event_data as { session_end?: number } | null)?.session_end;
-        fingerprint = `session_end_${event.session_id}_${sessionEnd || event.timestamp}`;
+        fingerprint = `session_end_${event.session_id}_${Math.floor((sessionEnd || event.timestamp) / 1000)}`;
+      } else if (event.event_name === 'session_created') {
+        // For session_created, use session_id (only one per session)
+        fingerprint = `session_created_${event.session_id}`;
       } else if (event.event_name === 'site_open') {
-        // For site_open, use session_id
+        // For site_open, use session_id (only one per session)
         fingerprint = `site_open_${event.session_id}`;
       } else if (event.event_name === 'page_view') {
-        // For page_view, use session_id + page
+        // For page_view, use session_id + page + timestamp (within 5 seconds to prevent rapid duplicates)
         const page = (event.event_data as { page?: string } | null)?.page;
-        fingerprint = `page_view_${event.session_id}_${page || 'unknown'}`;
+        fingerprint = `page_view_${event.session_id}_${page || 'unknown'}_${Math.floor(event.timestamp / 5000)}`;
       } else {
         // For other events, use event_name + session_id + timestamp (within 2 seconds)
         fingerprint = `${event.event_name}_${event.session_id}_${Math.floor(event.timestamp / 2000)}`;
@@ -116,16 +119,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         continue;
       }
       
-      // Check database for recent duplicates (for session_end and site_open)
-      if (event.event_name === 'session_end' || event.event_name === 'site_open') {
-        const fiveSecondsAgo = new Date(event.timestamp - 5000).toISOString();
-        const { data: existingEvents } = await supabaseAdmin
+      // Check database for recent duplicates (for session_end, session_created, site_open, and page_view)
+      if (event.event_name === 'session_end' || event.event_name === 'session_created' || event.event_name === 'site_open' || event.event_name === 'page_view') {
+        // Use different time windows for different events
+        const timeWindow = event.event_name === 'session_end' ? 5000 : // 5 seconds for session_end
+                          event.event_name === 'session_created' ? 10000 : // 10 seconds for session_created
+                          event.event_name === 'site_open' ? 10000 : // 10 seconds for site_open
+                          5000; // 5 seconds for page_view
+        
+        const timeWindowAgo = new Date(event.timestamp - timeWindow).toISOString();
+        
+        let query = supabaseAdmin
           .from('events')
           .select('id')
           .eq('event_name', event.event_name)
           .eq('session_id', event.session_id)
-          .gte('created_at', fiveSecondsAgo)
-          .limit(1);
+          .gte('created_at', timeWindowAgo);
+        
+        // For page_view, also check the page using JSONB contains
+        if (event.event_name === 'page_view') {
+          const page = (event.event_data as { page?: string } | null)?.page;
+          if (page) {
+            // Use JSONB contains to check if event_data contains the page
+            query = query.contains('event_data', { page }) as typeof query;
+          }
+        }
+        
+        const { data: existingEvents } = await query.limit(1);
         
         if (existingEvents && existingEvents.length > 0) {
           console.log(`[API /analytics/track] Skipping duplicate event in database: ${event.event_name} for session ${event.session_id}`);

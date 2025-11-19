@@ -1382,13 +1382,16 @@ function mergeSplitDataResults(
   if (shouldFetchMarks) {
     // Get marks from dynamicData first, then fallback to cached data
     const marksFromDynamic = (dynamicData?.data as { marks?: unknown } | undefined)?.marks;
-    if (marksFromDynamic) {
+    if (marksFromDynamic && marksFromDynamic !== null) {
       dataObject.marks = marksFromDynamic;
+      console.log(`[API /data/all] ✅ Using marks from dynamicData`);
     } else if (options?.cachedMarks) {
-      // Use cached marks
+      // Use cached marks when dynamicData doesn't have it or it's null
       dataObject.marks = options.cachedMarks;
+      console.log(`[API /data/all] ✅ Using cached marks (dynamicData had null or missing marks)`);
     } else {
       dataObject.marks = null;
+      console.warn(`[API /data/all] ⚠️ No marks data available (neither from dynamicData nor cache)`);
     }
   }
   

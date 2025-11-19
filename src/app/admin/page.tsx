@@ -34,6 +34,9 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Sidebar starts closed, will be toggled by user
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [statsExpanded, setStatsExpanded] = useState(false);
 
   // Analytics state
   const [analyticsData, setAnalyticsData] = useState<{
@@ -46,6 +49,7 @@ export default function AdminPage() {
       siteOpens: number;
       errors: number;
       featureClicks: number;
+      totalSessions: number;
       sessions: number;
       uniqueSessions: number;
       activeSessions: number;
@@ -55,6 +59,7 @@ export default function AdminPage() {
       cacheHitsByType: Array<{ type: string; count: number }>;
       apiRequestsByEndpoint: Array<{ endpoint: string; count: number }>;
       browserDistribution: Array<{ browser: string; count: number }>;
+      deviceDistribution: Array<{ device: string; count: number }>;
       featureUsage: Array<{ feature: string; count: number }>;
       errorTypes: Array<{ type: string; count: number }>;
       pageVisitsOverTime: Array<{ date: string; count: number }>;
@@ -146,12 +151,12 @@ export default function AdminPage() {
       const lastPoint = points[points.length - 1];
       path += ` Q ${lastPoint.x} ${lastPoint.y} ${lastPoint.x} ${lastPoint.y}`;
       
-      return `<svg width="${width}" height="${height}" style="position: absolute; bottom: 0; right: 0; pointer-events: none;"><path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.25" /></svg>`;
+      return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" style="position: absolute; bottom: 0; right: 0; width: 100%; height: 100%; pointer-events: none;"><path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.25" /></svg>`;
     } else {
       // Single point - show a simple curved line
       const y = padding + graphHeight - (data[0]?.count || 0) / maxCount * graphHeight;
       const midX = width / 2;
-      return `<svg width="${width}" height="${height}" style="position: absolute; bottom: 0; right: 0; pointer-events: none;"><path d="M ${padding} ${padding + graphHeight} Q ${midX} ${y} ${width - padding} ${y}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" opacity="0.25" /></svg>`;
+      return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" style="position: absolute; bottom: 0; right: 0; width: 100%; height: 100%; pointer-events: none;"><path d="M ${padding} ${padding + graphHeight} Q ${midX} ${y} ${width - padding} ${y}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" opacity="0.25" /></svg>`;
     }
   };
 
@@ -536,10 +541,46 @@ export default function AdminPage() {
 
   return (
     <div className="relative bg-black min-h-screen flex overflow-hidden">
+      {/* Menu Toggle Button - Visible on all screen sizes */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className={`fixed top-4 left-4 z-50 p-3 backdrop-blur bg-white/10 border border-white/20 rounded-xl text-white hover:bg-white/15 transition-all duration-200 ${
+          sidebarOpen ? 'lg:left-[272px]' : 'lg:left-4'
+        }`}
+        aria-label="Toggle menu"
+      >
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {sidebarOpen ? (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          ) : (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          )}
+        </svg>
+      </button>
+
+      {/* Sidebar Overlay - Visible when sidebar is open on mobile */}
+      {sidebarOpen && (
+        <div
+          className="lg:hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <div className="relative w-64 min-w-[256px] backdrop-blur bg-white/10 border-r border-white/20 flex flex-col">
-        <div className="p-6 border-b border-white/20">
+      <div className={`fixed lg:fixed w-64 min-w-[256px] h-full backdrop-blur bg-white/10 border-r border-white/20 flex flex-col z-40 transition-transform duration-300 ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:-translate-x-full'
+      }`}>
+        <div className="p-6 border-b border-white/20 flex items-center justify-between">
           <h1 className="text-white text-xl font-sora font-bold">Admin Panel</h1>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="text-white/70 hover:text-white transition-colors"
+            aria-label="Close menu"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
         <div className="flex flex-col gap-2 p-4">
           <button
@@ -566,11 +607,11 @@ export default function AdminPage() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-6 sm:p-8 md:p-10">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 lg:p-10 pt-16 lg:pt-16">
         {activePage === 'analytics' && (
-          <div className="flex flex-col gap-6">
-            <div className="flex justify-between items-center">
-            <div className="text-white text-2xl sm:text-3xl md:text-4xl font-sora font-bold">
+          <div className="flex flex-col gap-4 sm:gap-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 sm:gap-4">
+              <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">
                 Analytics Dashboard
               </div>
               {analyticsLoading && (
@@ -579,13 +620,13 @@ export default function AdminPage() {
             </div>
 
             {/* Filters */}
-            <div className="flex flex-wrap gap-4 items-center">
-              <div className="flex items-center gap-2">
-                <label className="text-white/70 text-sm font-sora">Time Range:</label>
+            <div className="flex flex-col sm:flex-row flex-wrap gap-3 sm:gap-4 items-start sm:items-center">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-1/2 sm:w-auto">
+                <label className="text-white/70 text-sm font-sora whitespace-nowrap">Time Range:</label>
                 <select
                   value={analyticsTimeRange}
                   onChange={(e) => setAnalyticsTimeRange(e.target.value)}
-                  className="px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-blue-400/50 transition-all"
+                  className="w-full sm:w-auto px-3 sm:px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-blue-400/50 transition-all text-sm sm:text-base"
                   style={{ 
                     background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.6) 0%, rgba(37, 99, 235, 0.7) 100%)',
                     border: '1px solid rgba(96, 165, 250, 0.4)',
@@ -603,12 +644,12 @@ export default function AdminPage() {
                   <option value="all" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>From the Start</option>
                 </select>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-white/70 text-sm font-sora">Semester:</label>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-1/2 sm:w-auto">
+                <label className="text-white/70 text-sm font-sora whitespace-nowrap">Semester:</label>
                 <select
                   value={analyticsSemester}
                   onChange={(e) => setAnalyticsSemester(e.target.value)}
-                  className="px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-violet-400/50 transition-all"
+                  className="w-full sm:w-auto px-3 sm:px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-violet-400/50 transition-all text-sm sm:text-base"
                   style={{ 
                     background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.6) 0%, rgba(124, 58, 237, 0.7) 100%)',
                     border: '1px solid rgba(167, 139, 250, 0.4)',
@@ -634,7 +675,8 @@ export default function AdminPage() {
             ) : analyticsData ? (
               <>
                 {/* Summary Stats Cards */}
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <div className="flex flex-col gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
                   <div 
                     className="relative p-4 backdrop-blur rounded-2xl border border-emerald-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
                     style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.4) 0%, rgba(5, 150, 105, 0.5) 100%)', boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
@@ -642,7 +684,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.totalUsersOverTime || [], '#10b981') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Total Users</div>
@@ -655,7 +697,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.pageVisitsOverTime || [], '#3b82f6') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Page Views</div>
@@ -668,7 +710,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.cacheHitsOverTime || [], '#a855f7') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Cache Hits</div>
@@ -681,7 +723,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.apiRequestsOverTime || [], '#fbbf24') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">API Requests</div>
@@ -694,7 +736,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.errorsOverTime || [], '#f43f5e') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Errors</div>
@@ -707,16 +749,18 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.featureClicksOverTime || [], '#e879f9') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Feature Used</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.featureClicks || 0}</div>
-              </div>
-            </div>
-
-                {/* Session Stats Cards */}
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  </div>
+                  </div>
+                  
+                  {/* Expandable Additional Stats */}
+                  <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 transition-all duration-300 overflow-hidden ${
+                    statsExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
+                  }`}>
                   <div 
                     className="relative p-4 backdrop-blur rounded-2xl border border-cyan-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
                     style={{ background: 'linear-gradient(135deg, rgba(34, 211, 238, 0.4) 0%, rgba(6, 182, 212, 0.5) 100%)', boxShadow: '0 4px 15px rgba(34, 211, 238, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
@@ -724,7 +768,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.siteOpensOverTime || [], '#22d3ee') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Site Opens</div>
@@ -737,7 +781,7 @@ export default function AdminPage() {
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div 
-                      className="absolute bottom-0 right-0 w-24 h-16"
+                      className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.uniqueSessionsOverTime || [], '#6366f1') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Unique Sessions</div>
@@ -748,6 +792,11 @@ export default function AdminPage() {
                     <div className="relative text-white/90 text-xs font-sora mb-1">Active Sessions</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.activeSessions || 0}</div>
                         </div>
+                  <div className="relative p-4 backdrop-blur rounded-2xl border border-blue-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.5) 100%)', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">Total Sessions</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalSessions || 0}</div>
+                  </div>
                   <div className="relative p-4 backdrop-blur rounded-2xl border border-pink-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(236, 72, 153, 0.4) 0%, rgba(219, 39, 119, 0.5) 100%)', boxShadow: '0 4px 15px rgba(236, 72, 153, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}>
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Ended Sessions</div>
@@ -763,15 +812,39 @@ export default function AdminPage() {
                     <div className="relative text-white/90 text-xs font-sora mb-1">Avg Opens/User</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSiteOpensPerUser?.toFixed(1) || '0.0'}</div>
                   </div>
+                  </div>
+                  
+                  {/* Expand/Collapse Button */}
+                  <button
+                    onClick={() => setStatsExpanded(!statsExpanded)}
+                    className="w-full sm:w-auto mx-auto px-6 py-3 backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white font-sora font-semibold hover:bg-white/15 hover:border-white/30 transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    {statsExpanded ? (
+                      <>
+                        <span>Show Less</span>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </>
+                    ) : (
+                      <>
+                        <span>Show All Stats</span>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </>
+                    )}
+                  </button>
                 </div>
 
                 {/* Page Visits & Site Opens Over Time */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                   {analyticsData.charts?.pageVisitsOverTime && analyticsData.charts.pageVisitsOverTime.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-blue-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(37, 99, 235, 0.4) 100%)', boxShadow: '0 4px 20px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-blue-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(37, 99, 235, 0.4) 100%)', boxShadow: '0 4px 20px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Page Visits ({getTimeRangeLabel(analyticsTimeRange)})</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Page Visits ({getTimeRangeLabel(analyticsTimeRange)})</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={analyticsData.charts.pageVisitsOverTime}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis 
@@ -793,15 +866,17 @@ export default function AdminPage() {
                           />
                           <Line type="monotone" dataKey="count" stroke="#60a5fa" strokeWidth={2} dot={{ fill: '#60a5fa', r: 4 }} isAnimationActive={true} animationDuration={500} />
                         </LineChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 
                   {analyticsData.charts?.siteOpensOverTime && analyticsData.charts.siteOpensOverTime.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-emerald-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.4) 100%)', boxShadow: '0 4px 20px rgba(16, 185, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-emerald-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.4) 100%)', boxShadow: '0 4px 20px rgba(16, 185, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Site Opens ({getTimeRangeLabel(analyticsTimeRange)})</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Site Opens ({getTimeRangeLabel(analyticsTimeRange)})</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={analyticsData.charts.siteOpensOverTime}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis 
@@ -823,19 +898,21 @@ export default function AdminPage() {
                           />
                           <Line type="monotone" dataKey="count" stroke="#34d399" strokeWidth={2} dot={{ fill: '#34d399', r: 4 }} isAnimationActive={true} animationDuration={500} />
                         </LineChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
                 </div>
 
                 {/* Charts Row 1 */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                   {/* Page Visits by Page */}
                   {analyticsData.charts?.pageVisitsByPage && analyticsData.charts.pageVisitsByPage.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-purple-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.3) 0%, rgba(147, 51, 234, 0.4) 100%)', boxShadow: '0 4px 20px rgba(168, 85, 247, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-purple-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.3) 0%, rgba(147, 51, 234, 0.4) 100%)', boxShadow: '0 4px 20px rgba(168, 85, 247, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Page Visits by Page</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Page Visits by Page</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={analyticsData.charts.pageVisitsByPage.map(item => {
                           let pageName = item.page.startsWith('/') ? item.page.substring(1) : item.page;
                           // Format page names for better readability
@@ -857,16 +934,18 @@ export default function AdminPage() {
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
                           <Bar dataKey="count" fill="#60a5fa" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                         </BarChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 
                   {/* Feature Used by Feature */}
                   {analyticsData.charts?.featureUsage && analyticsData.charts.featureUsage.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-fuchsia-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(240, 171, 252, 0.3) 0%, rgba(217, 70, 239, 0.4) 100%)', boxShadow: '0 4px 20px rgba(240, 171, 252, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-fuchsia-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(240, 171, 252, 0.3) 0%, rgba(217, 70, 239, 0.4) 100%)', boxShadow: '0 4px 20px rgba(240, 171, 252, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Feature Used by Feature</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Feature Used by Feature</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={analyticsData.charts.featureUsage.map(item => ({
                           ...item,
                           feature: item.feature.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
@@ -876,20 +955,22 @@ export default function AdminPage() {
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
                           <Bar dataKey="count" fill="#e879f9" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                         </BarChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 
                 </div>
 
                 {/* Charts Row 2 */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                   {/* Browser Distribution */}
                   {analyticsData.charts?.browserDistribution && analyticsData.charts.browserDistribution.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-cyan-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(34, 211, 238, 0.3) 0%, rgba(6, 182, 212, 0.4) 100%)', boxShadow: '0 4px 20px rgba(34, 211, 238, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-cyan-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(34, 211, 238, 0.3) 0%, rgba(6, 182, 212, 0.4) 100%)', boxShadow: '0 4px 20px rgba(34, 211, 238, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Browser Distribution</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Browser Distribution</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
                             data={(() => {
@@ -930,15 +1011,72 @@ export default function AdminPage() {
                             })}
                           </Pie>
                         </PieChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 
+                  {/* Device Type Distribution */}
+                  {analyticsData.charts?.deviceDistribution && analyticsData.charts.deviceDistribution.length > 0 && (
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-purple-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.3) 0%, rgba(139, 92, 246, 0.4) 100%)', boxShadow: '0 4px 20px rgba(168, 85, 247, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Device Type Distribution</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={(() => {
+                              const total = analyticsData.charts.deviceDistribution.reduce((sum, item) => sum + item.count, 0);
+                              return analyticsData.charts.deviceDistribution.map(item => ({
+                                ...item,
+                                percentage: total > 0 ? ((item.count / total) * 100).toFixed(1) : '0.0'
+                              }));
+                            })()}
+                            dataKey="count"
+                            nameKey="device"
+                            cx="55%"
+                            cy="50%"
+                            outerRadius={80}
+                            label={(props: any) => {
+                              const device = props.device || props.payload?.device || '';
+                              const percentage = props.percentage || props.payload?.percentage || '0.0';
+                              return (
+                                <text
+                                  x={props.x}
+                                  y={props.y}
+                                  fill="#ffffff"
+                                  textAnchor={props.textAnchor}
+                                  dominantBaseline="central"
+                                  style={{ fontFamily: 'Sora', fontSize: '12px' }}
+                                >
+                                  {`${device}: ${percentage}%`}
+                                </text>
+                              );
+                            }}
+                            labelLine={{ stroke: '#ffffff', strokeWidth: 1 }}
+                            isAnimationActive={true}
+                            animationDuration={500}
+                          >
+                            {analyticsData.charts.deviceDistribution.map((entry, index) => {
+                              const colors = ['#a78bfa', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#fb7185', '#22d3ee'];
+                              return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                            })}
+                          </Pie>
+                        </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Charts Row 2.5 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mt-4 sm:mt-6">
                   {/* Cache Hits vs API Requests */}
-                  <div className="relative p-6 backdrop-blur rounded-3xl border border-amber-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.4) 100%)', boxShadow: '0 4px 20px rgba(251, 191, 36, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                  <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-amber-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.4) 100%)', boxShadow: '0 4px 20px rgba(251, 191, 36, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                     <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                    <div className="relative text-white text-xl font-sora font-bold mb-4">Cache Hits vs API Requests</div>
-                    <ResponsiveContainer width="100%" height={300}>
+                    <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Cache Hits vs API Requests</div>
+                    <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                      <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={[
                         { name: 'Cache Hits', count: analyticsData.summary?.cacheHits || 0 },
                         { name: 'API Requests', count: analyticsData.summary?.apiRequests || 0 },
@@ -948,18 +1086,20 @@ export default function AdminPage() {
                         <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
                         <Bar dataKey="count" fill="#34d399" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                       </BarChart>
-                    </ResponsiveContainer>
+                      </ResponsiveContainer>
+                    </div>
               </div>
             </div>
 
                 {/* Charts Row 3 */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                   {/* Cache Hits by Type */}
                   {analyticsData.charts?.cacheHitsByType && analyticsData.charts.cacheHitsByType.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-indigo-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(79, 70, 229, 0.4) 100%)', boxShadow: '0 4px 20px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-indigo-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(79, 70, 229, 0.4) 100%)', boxShadow: '0 4px 20px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Cache Hits by Data Type</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Cache Hits by Data Type</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={analyticsData.charts.cacheHitsByType}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
@@ -978,23 +1118,26 @@ export default function AdminPage() {
                             })}
                           </Bar>
                         </BarChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 
                   {/* Error Types */}
                   {analyticsData.charts?.errorTypes && analyticsData.charts.errorTypes.length > 0 && (
-                    <div className="relative p-6 backdrop-blur rounded-3xl border border-rose-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.3) 0%, rgba(225, 29, 72, 0.4) 100%)', boxShadow: '0 4px 20px rgba(244, 63, 94, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-rose-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.3) 0%, rgba(225, 29, 72, 0.4) 100%)', boxShadow: '0 4px 20px rgba(244, 63, 94, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
                       <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-xl font-sora font-bold mb-4">Error Types</div>
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Error Types</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={analyticsData.charts.errorTypes}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
                           <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
                           <Bar dataKey="count" fill="#f87171" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                         </BarChart>
-                      </ResponsiveContainer>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
                 </div>

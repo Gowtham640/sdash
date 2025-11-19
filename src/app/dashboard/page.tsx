@@ -5,13 +5,13 @@ import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
-import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
+import { SkeletonLoader } from "@/components/ui/loading";
 
 // Import types
 interface CalendarEvent {
@@ -68,13 +68,13 @@ export default function Dashboard() {
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showSkeleton, setShowSkeleton] = useState(false);
+  const [hasCache, setHasCache] = useState(false);
   
   // Track errors
   useErrorTracking(error, '/dashboard');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [currentFact, setCurrentFact] = useState(getRandomFact());
-  const [factOpacity, setFactOpacity] = useState(1);
-  const [dots, setDots] = useState('.');
   const menuItems = [
     { label: 'Home', ariaLabel: 'Go to home page', link: '/' },
     { label: 'About', ariaLabel: 'Learn about us', link: '/about' },
@@ -197,40 +197,58 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    checkAdminStatus();
     fetchUnifiedData();
   }, []);
 
-  // Animate dots (. .. ... .. . .. ... .. .)
-  useEffect(() => {
-    if (!loading) return;
-    
-    const dotSequence = ['.', '..', '...', '..', '.', '..', '...', '..', '.'];
-    let dotIndex = 0;
-    
-    const dotInterval = setInterval(() => {
-      setDots(dotSequence[dotIndex]);
-      dotIndex = (dotIndex + 1) % dotSequence.length;
-    }, 300); // Change dots every 300ms
-    
-    return () => clearInterval(dotInterval);
-  }, [loading]);
+  const checkAdminStatus = async () => {
+    try {
+      const access_token = getStorageItem('access_token');
+      if (!access_token) {
+        setIsAdmin(false);
+        return;
+      }
 
-  // Rotate facts every 8 seconds while loading with smooth transitions
-  useEffect(() => {
-    if (!loading) return;
-    
-    const interval = setInterval(() => {
-      // Fade out
-      setFactOpacity(0);
-      
-      // Change fact and fade in after transition
-      setTimeout(() => {
-      setCurrentFact(getRandomFact());
-        setFactOpacity(1);
-      }, 300); // Half of transition duration
-    }, 8000);
+      const response = await fetch('/api/admin/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_token })
+      });
 
-    return () => clearInterval(interval);
+      const result = await response.json();
+      setIsAdmin(result.success === true && result.isAdmin === true);
+    } catch (err) {
+      console.error('[Dashboard] Error checking admin status:', err);
+      setIsAdmin(false);
+    }
+  };
+
+  // Handle skeleton display with 2s delay when no cache found
+  useEffect(() => {
+    if (!loading) {
+      setShowSkeleton(false);
+      return;
+    }
+
+    // Check if we have any cache
+    const cachedAttendance = getClientCache('attendance');
+    const cachedMarks = getClientCache('marks');
+    const cachedTimetable = getClientCache('timetable');
+    const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
+    
+    setHasCache(hasAnyCache);
+
+    if (!hasAnyCache) {
+      // Wait 2 seconds before showing skeleton
+      const timer = setTimeout(() => {
+        setShowSkeleton(true);
+      }, 2000);
+
+      return () => clearTimeout(timer);
+    } else {
+      // If cache exists, show skeleton immediately
+      setShowSkeleton(true);
+    }
   }, [loading]);
 
   const handleReAuthenticate = () => {
@@ -312,6 +330,10 @@ export default function Dashboard() {
         cachedAttendance = getClientCache<AttendanceData>('attendance');
         cachedMarks = getClientCache<MarksData>('marks');
         cachedTimetable = getClientCache('timetable');
+        
+        // Update cache status for skeleton display
+        const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
+        setHasCache(hasAnyCache);
         
         // Use cached data immediately (stale-while-revalidate)
         if (cachedAttendance) {
@@ -900,21 +922,136 @@ export default function Dashboard() {
     return conductedNum - absentNum;
   };
 
-  if (loading) {
-  return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
-      <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
-          Loading your Dashboard<span className="inline-block w-8 sm:w-12 md:w-16 lg:w-20 text-left">{dots}</span>
-        </div>
-        <div className="max-w-2xl px-6">
-          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
-            This could take a minute or two so meanwhile here are some facts to keep you entertained:
+  if (loading && !showSkeleton) {
+    // Show minimal loading state for first 2 seconds if no cache
+    return (
+      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
+        <PillNav
+          logo=""
+          logoAlt=""
+          items={[
+            { label: 'Attendance', href: '/attendance' },
+            { label: 'Timetable', href: '/timetable' },
+            { label: 'Marks', href: '/marks' },
+            { label: 'Calendar', href: '/calender' },
+            ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
+          ]}
+          activeHref="/dashboard"
+          className="custom-nav"
+          ease="power2.easeOut"
+          pillColor="#000000"
+          baseColor="#ffffff"
+          hoveredPillTextColor="#000000"
+          pillTextColor="#ffffff"
+        />
+      </div>
+    );
+  }
+
+  if (loading && showSkeleton) {
+    // Show skeleton UI after 2s delay or immediately if cache exists
+    const threeDayDates = getThreeDayDates();
+    
+    return (
+      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
+        <PillNav
+          logo=""
+          logoAlt=""
+          items={[
+            { label: 'Attendance', href: '/attendance' },
+            { label: 'Timetable', href: '/timetable' },
+            { label: 'Marks', href: '/marks' },
+            { label: 'Calendar', href: '/calender' },
+            ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
+          ]}
+          activeHref="/dashboard"
+          className="custom-nav"
+          ease="power2.easeOut"
+          pillColor="#000000"
+          baseColor="#ffffff"
+          hoveredPillTextColor="#000000"
+          pillTextColor="#ffffff"
+        />
+        <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
+          <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
+            Welcome to your Dashboard
           </div>
-          <div 
-            className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic transition-opacity duration-500 ease-in-out"
-            style={{ opacity: factOpacity }}
-          >
-            {currentFact}
+        </div>
+
+        {/* Calendar Section - Show actual calendar if available */}
+        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
+            Upcoming Calendar
+          </div>
+          <div className="flex flex-col gap-3 w-full">
+            {threeDayDates.map((dayInfo) => {
+              const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
+              const isToday = dayInfo.dateStr === getCurrentDateString();
+              const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
+              
+              let bgColor = 'bg-white/10';
+              let textColor = 'text-white';
+              
+              if (isToday) {
+                bgColor = 'bg-white';
+                textColor = 'text-black';
+              } else if (isHoliday) {
+                bgColor = 'bg-green-500/80';
+                textColor = 'text-white';
+              }
+              
+              return (
+                <div 
+                  key={dayInfo.dateStr}
+                  className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
+                >
+                  <div className="flex gap-1.5 sm:gap-2 md:gap-3 lg:gap-3 items-center">
+                    <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[80px] lg:min-w-[85px]`}>
+                      {dayInfo.dayName}
+                    </p>
+                    <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora`}>
+                      {dayInfo.dateStr}
+                    </p>
+                  </div>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
+                    {event?.content || 'No events'}
+                  </p>
+                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
+                    {event?.day_order || '-'}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Today's Timetable Section - Skeleton */}
+        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+          <SkeletonLoader className="w-full h-8 mb-2" />
+          <div className="flex flex-col gap-3 w-full">
+            {[1, 2, 3].map((i) => (
+              <SkeletonLoader key={i} className="w-full h-16 rounded-2xl" />
+            ))}
+          </div>
+        </div>
+
+        {/* Attendance Section - Skeleton */}
+        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+          <SkeletonLoader className="w-full h-8 mb-2" />
+          <div className="flex flex-col gap-3 w-full">
+            {[1, 2, 3, 4].map((i) => (
+              <SkeletonLoader key={i} className="w-full h-20 rounded-2xl" />
+            ))}
+          </div>
+        </div>
+
+        {/* Marks Section - Skeleton */}
+        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+          <SkeletonLoader className="w-full h-8 mb-2" />
+          <div className="flex flex-col gap-3 w-full">
+            {[1, 2, 3, 4].map((i) => (
+              <SkeletonLoader key={i} className="w-full h-20 rounded-2xl" />
+            ))}
           </div>
         </div>
       </div>
@@ -951,7 +1088,8 @@ export default function Dashboard() {
           { label: 'Attendance', href: '/attendance' },
           { label: 'Timetable', href: '/timetable' },
           { label: 'Marks', href: '/marks' },
-          { label: 'Calendar', href: '/calender' }
+          { label: 'Calendar', href: '/calender' },
+          ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
         ]}
         activeHref="/dashboard"
         className="custom-nav"
