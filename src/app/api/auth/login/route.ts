@@ -99,9 +99,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Sync user data from Go backend (fire and forget - don't block response)
-    if (result.user?.id) {
+    if (result.user?.id && typeof result.user.id === 'string') {
+      const userId = result.user.id as string;
       import('@/lib/userDataSync').then(({ syncUserDataFromBackend }) => {
-        syncUserDataFromBackend(result.user!.id).catch(err => {
+        syncUserDataFromBackend(userId).catch(err => {
           console.error(`[API] User data sync error (non-blocking):`, err);
         });
       }).catch(err => {
