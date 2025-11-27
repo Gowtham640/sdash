@@ -152,6 +152,7 @@ export default function LiquidEther({
         el.style.width = '100%';
         el.style.height = '100%';
         el.style.display = 'block';
+        el.style.pointerEvents = 'none'; // Allow touches to pass through to elements behind
         this.clock = new THREE.Clock();
         this.clock.start();
         console.log('Common: WebGL renderer initialized successfully');

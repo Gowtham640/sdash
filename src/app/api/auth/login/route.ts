@@ -82,6 +82,33 @@ export async function POST(request: NextRequest) {
     // Successfully signed in
     console.log(`[API] Successfully signed in: ${email}`);
 
+    // Login to Go backend to get cookies for subsequent requests
+    console.log(`[API] 🔐 Logging in to Go backend...`);
+    try {
+      const { loginToGoBackend } = await import('@/lib/scraperClient');
+      const goLoginResult = await loginToGoBackend(email, password);
+      
+      if (goLoginResult.authenticated && goLoginResult.cookies) {
+        console.log(`[API] ✅ Go backend login successful - cookies stored`);
+      } else {
+        console.warn(`[API] ⚠️ Go backend login failed or no cookies returned:`, goLoginResult.message || 'Unknown error');
+      }
+    } catch (goLoginError) {
+      console.error(`[API] ❌ Go backend login error (non-blocking):`, goLoginError);
+      // Don't fail the login if Go backend login fails - user can still use the app
+    }
+
+    // Sync user data from Go backend (fire and forget - don't block response)
+    if (result.user?.id) {
+      import('@/lib/userDataSync').then(({ syncUserDataFromBackend }) => {
+        syncUserDataFromBackend(result.user!.id).catch(err => {
+          console.error(`[API] User data sync error (non-blocking):`, err);
+        });
+      }).catch(err => {
+        console.error(`[API] Failed to load userDataSync module:`, err);
+      });
+    }
+
     return NextResponse.json(
       {
         success: true,

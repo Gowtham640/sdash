@@ -129,23 +129,70 @@ export async function POST(request: NextRequest) {
     let fetchError: string | null = null;
 
     try {
+      // Check if we need to re-authenticate with Go backend
+      // If password is provided and cookies might be missing/expired, login first
+      if (password) {
+        const { getBackendCookies, loginToGoBackend } = await import('@/lib/scraperClient');
+        const cookies = getBackendCookies();
+        
+        if (!cookies) {
+          console.log(`[API /data/refresh] 🔐 No cookies found, logging in to Go backend first...`);
+          try {
+            const loginResult = await loginToGoBackend(user_email, password);
+            if (loginResult.authenticated && loginResult.cookies) {
+              console.log(`[API /data/refresh] ✅ Go backend login successful - cookies stored`);
+            } else {
+              console.warn(`[API /data/refresh] ⚠️ Go backend login failed: ${loginResult.message || 'Unknown error'}`);
+            }
+          } catch (loginError) {
+            console.error(`[API /data/refresh] ❌ Go backend login error:`, loginError);
+            // Continue anyway - might still work if cookies are valid
+          }
+        }
+      }
+
       const action = `get_${data_type}_data`;
       console.log(`[API /data/refresh] 🔄 Calling backend: ${action}`);
       
-      const result = await callBackendScraper(action, {
+      let result = await callBackendScraper(action, {
         email: user_email,
         ...(password ? { password } : {}),
       });
 
-      const backendDuration = Date.now() - backendStartTime;
       const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
       
-      console.log(`[API /data/refresh] 📡 Backend call completed: ${backendDuration}ms`);
-      console.log(`[API /data/refresh]   - Success: ${resultTyped.success || false}`);
-      console.log(`[API /data/refresh]   - Error: ${resultTyped.error || "none"}`);
+      // If we get a session expired error and password is available, try to re-login and retry
+      if (!resultTyped.success && resultTyped.error?.includes('Session expired') && password) {
+        console.log(`[API /data/refresh] 🔄 Session expired, attempting to re-login and retry...`);
+        try {
+          const { loginToGoBackend } = await import('@/lib/scraperClient');
+          const loginResult = await loginToGoBackend(user_email, password);
+          
+          if (loginResult.authenticated && loginResult.cookies) {
+            console.log(`[API /data/refresh] ✅ Re-login successful, retrying request...`);
+            // Retry the request after successful login
+            result = await callBackendScraper(action, {
+              email: user_email,
+              password,
+            });
+            console.log(`[API /data/refresh] ✅ Retry successful after re-login`);
+          } else {
+            console.warn(`[API /data/refresh] ⚠️ Re-login failed: ${loginResult.message || 'Unknown error'}`);
+          }
+        } catch (loginError) {
+          console.error(`[API /data/refresh] ❌ Re-login error:`, loginError);
+        }
+      }
 
-      if (resultTyped.success) {
-        freshData = resultTyped.data || result;
+      const backendDuration = Date.now() - backendStartTime;
+      const finalResultTyped = result as { success?: boolean; error?: string; data?: unknown };
+      
+      console.log(`[API /data/refresh] 📡 Backend call completed: ${backendDuration}ms`);
+      console.log(`[API /data/refresh]   - Success: ${finalResultTyped.success || false}`);
+      console.log(`[API /data/refresh]   - Error: ${finalResultTyped.error || "none"}`);
+
+      if (finalResultTyped.success) {
+        freshData = finalResultTyped.data || result;
         
         // Save to Supabase cache (except calendar, which is always fetched from public.calendar table)
         if (data_type !== 'calendar') {

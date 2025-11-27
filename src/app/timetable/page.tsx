@@ -11,13 +11,19 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 
+interface TimeSlotCell {
+  course: string;
+  courseType?: string;
+  online?: boolean;
+}
+
 interface TimeSlot {
   time: string;
-  do1: string;
-  do2: string;
-  do3: string;
-  do4: string;
-  do5: string;
+  do1: string | TimeSlotCell;
+  do2: string | TimeSlotCell;
+  do3: string | TimeSlotCell;
+  do4: string | TimeSlotCell;
+  do5: string | TimeSlotCell;
 }
 
 interface TimetableData {
@@ -111,25 +117,10 @@ export default function TimetablePage() {
         throw new Error(result.error || 'Failed to refresh timetable data');
       }
 
-      // If refresh endpoint returns data directly, set it immediately
-      if (result.data && typeof result.data === 'object' && ('timetable' in result.data || 'time_slots' in result.data)) {
-        console.log('[Timetable] Setting timetable data directly from refresh response');
-        const timetableDataObj = result.data as TimetableData;
-        
-        setRawTimetableData(timetableDataObj);
-        const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
-        setTimetableData(convertedData);
-        
-        const occurrences = getSlotOccurrences(timetableDataObj);
-        setSlotOccurrences(occurrences);
-        
-        setLoading(false);
-        setIsRefreshing(false);
-        console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses from refresh');
-      } else {
-        // After refresh, fetch unified data to get updated timetable
-        await fetchUnifiedData(false);
-      }
+      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
+      // Fetch from unified endpoint to get data in the correct processed format from cache
+      console.log('[Timetable] ✅ Refresh completed, fetching updated data from cache...');
+      await fetchUnifiedData(false);
     } catch (err) {
       console.error('[Timetable] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');
@@ -289,37 +280,46 @@ export default function TimetablePage() {
           const timetableData = (result.data as { timetable?: unknown }).timetable;
           
           if (timetableData && typeof timetableData === 'object' && timetableData !== null) {
-            // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
-            let dataToProcess: unknown = timetableData;
-            
-            // Check if data is wrapped in a 'data' property (API response format from cache)
-            const dataToProcessObj = dataToProcess as Record<string, unknown>;
-            if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
-              console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
-              const wrappedData = dataToProcessObj.data as TimetableData;
-              if (wrappedData && 'timetable' in wrappedData) {
-                dataToProcess = wrappedData;
+            // Check if it's the new Go backend format (has schedule array)
+            const dataObj = timetableData as Record<string, unknown>;
+            if ('schedule' in dataObj && Array.isArray(dataObj.schedule)) {
+              console.log('[Timetable] 🔄 Detected new Go backend format (schedule array) - transforming...');
+              // Transform new format to old format
+              timetableDataObj = transformGoBackendTimetableToOldFormat(dataObj);
+              console.log('[Timetable] ✅ Transformed Go backend timetable format');
+            } else {
+              // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+              let dataToProcess: unknown = timetableData;
+              
+              // Check if data is wrapped in a 'data' property (API response format from cache)
+              const dataToProcessObj = dataToProcess as Record<string, unknown>;
+              if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
+                console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
+                const wrappedData = dataToProcessObj.data as TimetableData;
+                if (wrappedData && 'timetable' in wrappedData) {
+                  dataToProcess = wrappedData;
+                }
               }
-            }
-            // Check if it's already in TimetableData format (has timetable property at root)
-            else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
-              // Already in correct format
-              dataToProcess = dataToProcess;
-            }
-            
-            // Verify it's the expected TimetableData format
-            if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
-              const dataObj = dataToProcess as Record<string, unknown>;
-              if ('timetable' in dataObj || 'time_slots' in dataObj) {
-                timetableDataObj = dataToProcess as TimetableData;
-                console.log('[Timetable] ✅ Timetable data loaded');
+              // Check if it's already in TimetableData format (has timetable property at root)
+              else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
+                // Already in correct format
+                dataToProcess = dataToProcess;
+              }
+              
+              // Verify it's the expected TimetableData format
+              if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
+                const dataObj2 = dataToProcess as Record<string, unknown>;
+                if ('timetable' in dataObj2 || 'time_slots' in dataObj2) {
+                  timetableDataObj = dataToProcess as TimetableData;
+                  console.log('[Timetable] ✅ Timetable data loaded');
+                } else {
+                  console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+                  console.warn('[Timetable] Available keys:', Object.keys(dataObj2));
+                }
               } else {
                 console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-                console.warn('[Timetable] Available keys:', Object.keys(dataObj));
+                console.warn('[Timetable] dataToProcess is not an object');
               }
-            } else {
-              console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-              console.warn('[Timetable] dataToProcess is not an object');
             }
           }
         } else {
@@ -457,6 +457,109 @@ export default function TimetablePage() {
     setShowPasswordModal(false);
   };
 
+  // Transform new Go backend format to old format
+  const transformGoBackendTimetableToOldFormat = (goData: Record<string, unknown>): TimetableData => {
+    const timeSlots = [
+      "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
+      "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
+    ];
+    
+    const schedule = goData.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
+    if (!schedule || !Array.isArray(schedule)) {
+      console.warn('[Timetable] Invalid schedule format');
+      return {
+        metadata: {
+          generated_at: new Date().toISOString(),
+          source: 'go_backend',
+          academic_year: '',
+          format: 'go_backend'
+        },
+        time_slots: timeSlots,
+        slot_mapping: {},
+        timetable: {}
+      };
+    }
+    
+    const timetable: Record<string, TimetableDayOrder> = {};
+    const slotMapping: Record<string, string> = {};
+    
+    // Map day numbers (1-5) to DO names
+    const dayToDO: Record<number, string> = {
+      1: 'DO 1',
+      2: 'DO 2',
+      3: 'DO 3',
+      4: 'DO 4',
+      5: 'DO 5'
+    };
+    
+    schedule.forEach((daySchedule) => {
+      const doName = dayToDO[daySchedule.day];
+      if (!doName) return;
+      
+      const timeSlotsMap: Record<string, { slot_code: string; course_title: string; slot_type: string; is_alternate: boolean; courseType?: string; online?: boolean }> = {};
+      
+      daySchedule.table.forEach((entry, index) => {
+        if (entry && typeof entry === 'object' && entry !== null) {
+          const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; online?: boolean };
+          if (course.code && course.name && course.slot) {
+            const timeSlot = timeSlots[index] || `Slot ${index + 1}`;
+            const slotCode = course.slot;
+            const courseTitle = course.name;
+            const courseType = course.courseType || 'Theory';
+            const slotType = courseType === 'Practical' ? 'Lab' : 'Theory';
+            
+            timeSlotsMap[timeSlot] = {
+              slot_code: slotCode,
+              course_title: courseTitle,
+              slot_type: slotType,
+              is_alternate: false,
+              courseType: courseType,
+              online: course.online || false
+            };
+            
+            // Build slot mapping
+            if (!slotMapping[slotCode]) {
+              slotMapping[slotCode] = courseTitle;
+            }
+          }
+        }
+      });
+      
+      if (Object.keys(timeSlotsMap).length > 0) {
+        timetable[doName] = {
+          do_name: doName,
+          time_slots: timeSlotsMap
+        };
+      }
+    });
+    
+    return {
+      metadata: {
+        generated_at: new Date().toISOString(),
+        source: 'go_backend',
+        academic_year: '',
+        format: 'go_backend'
+      },
+      time_slots: timeSlots,
+      slot_mapping: slotMapping,
+      timetable
+    };
+  };
+
+  interface TimetableDayOrder {
+    do_name: string;
+    time_slots: {
+      [timeSlot: string]: {
+        slot_code: string;
+        course_title: string;
+        slot_type: string;
+        is_alternate: boolean;
+        courseType?: string;
+        online?: boolean;
+      };
+    };
+  }
+
   const convertTimetableDataToTimeSlots = (data: TimetableData): TimeSlot[] => {
     const timeSlots: TimeSlot[] = [];
 
@@ -485,13 +588,24 @@ export default function TimetablePage() {
         // Safely access timetable data
         const doData = data.timetable && typeof data.timetable === 'object' ? (data.timetable as Record<string, unknown>)[doName] : null;
         if (doData && typeof doData === 'object' && doData !== null) {
-          const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string }> };
+          const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string; courseType?: string; online?: boolean }> };
           if (doDataTyped.time_slots && doDataTyped.time_slots[timeSlot]) {
             const slotInfo = doDataTyped.time_slots[timeSlot];
             const courseTitle = slotInfo.course_title || "";
+            const courseType = slotInfo.courseType;
+            const online = slotInfo.online;
 
             const doKey = `do${index + 1}` as keyof TimeSlot;
-            timeSlotEntry[doKey] = courseTitle || "";
+            // Store as object if we have courseType info, otherwise as string for backward compatibility
+            if (courseType || online !== undefined) {
+              (timeSlotEntry as unknown as Record<string, string | TimeSlotCell>)[doKey] = {
+                course: courseTitle,
+                courseType: courseType,
+                online: online
+              };
+            } else {
+              timeSlotEntry[doKey] = courseTitle;
+            }
           }
         }
       });
@@ -677,12 +791,39 @@ export default function TimetablePage() {
                     {slot.time}
                   </td>
 
-                  {dayKeys.map((dayKey) => (
-                    <td key={dayKey} className="border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base">
-    
-                      {slot[dayKey] || ""}
-                    </td>
-                  ))}
+                  {dayKeys.map((dayKey) => {
+                    const cellData = slot[dayKey];
+                    const isObject = typeof cellData === 'object' && cellData !== null;
+                    const courseName = isObject ? (cellData as { course: string }).course : (cellData as string) || "";
+                    const courseType = isObject ? (cellData as { courseType?: string }).courseType : undefined;
+                    const online = isObject ? (cellData as { online?: boolean }).online : undefined;
+                    
+                    // Determine background color based on courseType
+                    let bgColor = 'bg-white/10';
+                    if (courseType) {
+                      const typeLower = courseType.toLowerCase();
+                      if (typeLower === 'theory') {
+                        bgColor = 'bg-blue-500/30';
+                      } else if (typeLower === 'practical' || typeLower === 'lab') {
+                        bgColor = 'bg-green-500/30';
+                      } else if (online) {
+                        bgColor = 'bg-purple-500/30';
+                      } else {
+                        bgColor = 'bg-yellow-500/30';
+                      }
+                    } else if (online) {
+                      bgColor = 'bg-purple-500/30';
+                    }
+                    
+                    return (
+                      <td 
+                        key={dayKey} 
+                        className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor}`}
+                      >
+                        {courseName}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>

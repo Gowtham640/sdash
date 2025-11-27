@@ -123,22 +123,10 @@ export default function MarksPage() {
         throw new Error(result.error || 'Failed to refresh marks data');
       }
 
-      // If refresh endpoint returns data directly, set it immediately
-      // Extract marks from unified endpoint response: { data: { marks: MarksData, ... } }
-      if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
-        const marksData = (result.data as { marks?: unknown }).marks;
-        if (marksData && typeof marksData === 'object' && ('all_courses' in marksData || 'summary' in marksData)) {
-          console.log('[Marks] Setting marks data directly from refresh response');
-          const marksDataObj = marksData as MarksData;
-          
-          setMarksData(marksDataObj);
-          setLoading(false);
-          console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses from refresh');
-        }
-      } else {
-        // After refresh, fetch unified data to get updated marks
-        await fetchUnifiedData(false);
-      }
+      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
+      // Fetch from unified endpoint to get data in the correct processed format from cache
+      console.log('[Marks] ✅ Refresh completed, fetching updated data from cache...');
+      await fetchUnifiedData(false);
     } catch (err) {
       console.error('[Marks] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh marks data');

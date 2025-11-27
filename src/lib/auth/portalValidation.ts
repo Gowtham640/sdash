@@ -1,15 +1,19 @@
 import { PortalValidationResult, AuthErrorCode } from "./types";
-import { callBackendScraper } from '@/lib/scraperClient';
+import { loginToGoBackend } from '@/lib/scraperClient';
 
 /**
- * Validates user credentials against the college portal using backend API
- * @param email - User email/portal login ID
+ * Validates user credentials against the college portal using Go backend API
+ * @param email - User email/portal login ID (used as account)
  * @param password - User password
+ * @param cdigest - Optional captcha digest
+ * @param captcha - Optional captcha answer
  * @returns Validation result with success status and optional error
  */
 export async function validatePortalCredentials(
   email: string,
-  password: string
+  password: string,
+  cdigest?: string,
+  captcha?: string
 ): Promise<PortalValidationResult> {
   const timeoutHandle = setTimeout(() => {
     console.error("[Auth] Portal validation timeout after 35 seconds");
@@ -23,21 +27,25 @@ export async function validatePortalCredentials(
   try {
     console.log(`[Auth] Starting portal validation for: ${email}`);
     
-    const result = await callBackendScraper('validate_credentials', {
-      email,
+    // Use the new Go backend login function
+    const result = await loginToGoBackend(
+      email, // account field
       password,
-    });
+      cdigest,
+      captcha
+    );
 
     clearTimeout(timeoutHandle);
 
-    if (result.success) {
+    if (result.authenticated) {
       console.log(`[Auth] Portal validation successful for: ${email}`);
       return { valid: true, email };
     } else {
-      console.error(`[Auth] Portal validation failed: ${result.error || "Unknown error"}`);
+      const errorMessage = result.message || result.errors?.join(', ') || "Invalid credentials";
+      console.error(`[Auth] Portal validation failed: ${errorMessage}`);
       return {
         valid: false,
-        error: result.error || "Invalid credentials",
+        error: errorMessage,
         errorCode: AuthErrorCode.INVALID_CREDENTIALS,
       };
     }

@@ -668,29 +668,86 @@ export async function POST(request: NextRequest) {
     }
     
     // Fetch calendar from public.calendar table (ALWAYS, not from Supabase cache or backend)
-    // Calendar is fetched based on user's course and semester, then saved to client cache
-    const course: string | null = courseFromAttendance || 'BTech'; // Default to BTech
-    
+    // Calendar is fetched based on user's program and semester from public.users table
     console.log(`[API /data/all] 📋 CALENDAR FETCH DEBUG - Starting calendar fetch process`);
     console.log(`[API /data/all]   - Course from attendance: ${courseFromAttendance || 'none'}`);
-    console.log(`[API /data/all]   - Final course to use: ${course}`);
     console.log(`[API /data/all]   - Semester from attendance: ${semesterFromAttendance || 'none'}`);
     
+    // Declare course variable outside if block for use later
+    let course: string = courseFromAttendance || 'BTech'; // Default to BTech
+    
     if (shouldFetchCalendar) {
-      // Fetch calendar if semester is available (including 0, but not null/undefined)
-      // If semester is not available yet, try to get it from database
-      let semesterForCalendar: number | null = semesterFromAttendance;
-      if (!semesterForCalendar) {
-        console.log(`[API /data/all] 🔍 Semester not in attendance data, fetching from database...`);
-        semesterForCalendar = await getSemesterFromDatabase(user_id);
+      // Fetch user's program and semester from public.users table
+      console.log(`[API /data/all] 🔍 Fetching user's program and semester from public.users table...`);
+      const { data: userData, error: userError } = await supabaseAdmin
+        .from('users')
+        .select('program, semester')
+        .eq('id', user_id)
+        .single();
+      
+      let programForCalendar: string | null = null;
+      let semesterForCalendar: number | null = null;
+      
+      if (!userError && userData) {
+        programForCalendar = userData.program || null;
+        semesterForCalendar = userData.semester || null;
+        console.log(`[API /data/all]   - Program from database: ${programForCalendar || 'none'}`);
         console.log(`[API /data/all]   - Semester from database: ${semesterForCalendar || 'none'}`);
+      } else {
+        console.warn(`[API /data/all] ⚠️ Error fetching user data: ${userError?.message || 'Unknown error'}`);
+        // Fallback to attendance data or defaults
+        semesterForCalendar = semesterFromAttendance;
+        // Convert to program format (B.Tech, M.Tech) if coming from attendance
+        if (courseFromAttendance === 'BTech' || courseFromAttendance === 'MTech') {
+          programForCalendar = courseFromAttendance === 'BTech' ? 'B.Tech' : 'M.Tech';
+        } else {
+          programForCalendar = courseFromAttendance || 'B.Tech';
+        }
       }
+      
+      // If semester not in database, try attendance data
+      if (!semesterForCalendar) {
+        semesterForCalendar = semesterFromAttendance;
+        if (!semesterForCalendar) {
+          console.log(`[API /data/all] 🔍 Semester not in database, fetching from database...`);
+          semesterForCalendar = await getSemesterFromDatabase(user_id);
+          console.log(`[API /data/all]   - Semester from database (fallback): ${semesterForCalendar || 'none'}`);
+        }
+      }
+      
+      // If program not in database, use course from attendance or default to "B.Tech"
+      if (!programForCalendar) {
+        // Convert attendance course format to program format if needed
+        if (courseFromAttendance === 'BTech' || courseFromAttendance === 'MTech') {
+          programForCalendar = courseFromAttendance === 'BTech' ? 'B.Tech' : 'M.Tech';
+        } else {
+          programForCalendar = courseFromAttendance || 'B.Tech';
+        }
+        console.log(`[API /data/all]   - Program fallback: ${programForCalendar}`);
+      }
+      
+      // Preserve program format (e.g., "B.Tech", "M.Tech") but convert to database format for querying
+      // Calendar table uses "BTech"/"MTech" format (without dot)
+      const programFormatted = programForCalendar || 'B.Tech';
+      
+      // Convert to database format for calendar table query
+      if (programFormatted.toLowerCase().includes('b.tech') || programFormatted.toLowerCase().includes('btech')) {
+        course = 'BTech';
+      } else if (programFormatted.toLowerCase().includes('m.tech') || programFormatted.toLowerCase().includes('mtech')) {
+        course = 'MTech';
+      } else {
+        course = 'BTech'; // Default fallback
+      }
+      
+      console.log(`[API /data/all]   - Program (preserved format): ${programFormatted}`);
+      console.log(`[API /data/all]   - Course (for database query): ${course}`);
       
       if (semesterForCalendar !== null && semesterForCalendar !== undefined) {
         try {
           console.log(`[API /data/all] 🔍 ========================================`);
           console.log(`[API /data/all] 🔍 CALENDAR FETCH: Attempting to fetch from public.calendar`);
-          console.log(`[API /data/all] 🔍   - Course: "${course}"`);
+          console.log(`[API /data/all] 🔍   - Program from users table: "${programForCalendar}"`);
+          console.log(`[API /data/all] 🔍   - Course (mapped): "${course}"`);
           console.log(`[API /data/all] 🔍   - Semester: ${semesterForCalendar}`);
           console.log(`[API /data/all] 🔍   - User ID: ${user_id}`);
           console.log(`[API /data/all] 🔍 ========================================`);
@@ -1083,7 +1140,12 @@ async function callPythonIndividualData(
     
     if (resultTyped.success) {
       // Extract data from response (structure may vary by endpoint)
+      // Go backend returns: {status: 200, error: null, attendance: [...], regNumber: ...}
+      // We want to return the entire response object as data
       const data = resultTyped.data || result;
+      
+      // For attendance endpoint, the response is already in the correct format
+      // {regNumber, attendance, status, error} - save this entire object
       return {
         success: true,
         data: data,
