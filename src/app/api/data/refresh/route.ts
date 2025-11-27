@@ -192,7 +192,22 @@ export async function POST(request: NextRequest) {
       console.log(`[API /data/refresh]   - Error: ${finalResultTyped.error || "none"}`);
 
       if (finalResultTyped.success) {
-        freshData = finalResultTyped.data || result;
+        // Extract the actual data - handle Go backend response format
+        // Go backend might return: { status: 200, error: null, marks: {...}, ... }
+        // scraperClient extracts to: { marks: {...}, ... } (removes status/error)
+        // We need to extract the actual data type field (marks, attendance, timetable)
+        let dataToSave = finalResultTyped.data || result;
+        
+        // If data is wrapped in the data type field (e.g., { marks: {...} }), extract it
+        if (dataToSave && typeof dataToSave === 'object' && data_type in dataToSave) {
+          const extractedData = (dataToSave as Record<string, unknown>)[data_type];
+          if (extractedData !== undefined && extractedData !== null) {
+            console.log(`[API /data/refresh] 🔄 Extracting ${data_type} from wrapped response`);
+            dataToSave = extractedData;
+          }
+        }
+        
+        freshData = dataToSave;
         
         // Save to Supabase cache (except calendar, which is always fetched from public.calendar table)
         if (data_type !== 'calendar') {
