@@ -11,6 +11,7 @@ import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { transformMarksIfNeeded } from "@/lib/dataFormatHandler";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 
 interface Assessment {
@@ -63,21 +64,23 @@ export default function MarksPage() {
   const [marksData, setMarksData] = useState<MarksData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Track errors
   useErrorTracking(error, '/marks');
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [currentFact, setCurrentFact] = useState(getRandomFact());
+  const [currentFact, setCurrentFact] = useState('');
 
   useEffect(() => {
     fetchUnifiedData();
+    // Set initial fact on client side only to avoid hydration mismatch
+    setCurrentFact(getRandomFact());
   }, []);
 
   // Rotate facts every 8 seconds while loading
   useEffect(() => {
     if (!loading) return;
-    
+
     const interval = setInterval(() => {
       setCurrentFact(getRandomFact());
     }, 8000);
@@ -95,7 +98,7 @@ export default function MarksPage() {
       setError(null);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Marks] No access token found');
         setError('Please sign in to view marks');
@@ -105,28 +108,9 @@ export default function MarksPage() {
 
       console.log('[Marks] 🔄 Force refreshing marks data...');
 
-      const response = await fetch('/api/data/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...getRequestBodyWithPassword(access_token, false),
-          data_type: 'marks'
-        })
-      });
-
-      const result = await response.json();
-      console.log('[Marks] Refresh API response:', result);
-      console.log('[Marks] Refresh API response data:', result.data);
-      console.log('[Marks] Refresh API response data type:', typeof result.data);
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to refresh marks data');
-      }
-
-      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
-      // Fetch from unified endpoint to get data in the correct processed format from cache
-      console.log('[Marks] ✅ Refresh completed, fetching updated data from cache...');
-      await fetchUnifiedData(false);
+      // Clear cache and fetch fresh
+      removeClientCache('marks');
+      await fetchUnifiedData(true);
     } catch (err) {
       console.error('[Marks] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh marks data');
@@ -134,13 +118,49 @@ export default function MarksPage() {
     }
   };
 
+  // Background fetch function - updates cache without blocking UI
+  const fetchFreshDataInBackground = async (access_token: string, forceRefresh: boolean) => {
+    try {
+      console.log('[Marks] 🔄 Background fetch started...');
+
+      const requestKey = `fetch_unified_all_bg_${access_token.substring(0, 10)}`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await fetch('/api/data/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        });
+
+        const result = await response.json();
+        return { response, result };
+      });
+
+      const response = apiResult.response;
+      const result = apiResult.result;
+
+      if (response.ok && result.success && result.data?.marks) {
+        const marksDataObj = transformMarksIfNeeded(result.data.marks) as MarksData;
+
+        // Update UI with fresh data
+        setMarksData(marksDataObj);
+
+        // Update cache
+        setClientCache('marks', marksDataObj);
+
+        console.log('[Marks] ✅ Background fetch completed - data updated');
+      } else {
+        console.log('[Marks] ⚠️ Background fetch completed but no new data');
+      }
+    } catch (err) {
+      console.error('[Marks] ❌ Background fetch error (non-critical):', err);
+      // Don't show error to user - we're already showing cached data
+    }
+  };
+
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
-      setLoading(true);
-      setError(null);
-
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Marks] No access token found');
         setError('Please sign in to view marks');
@@ -148,117 +168,124 @@ export default function MarksPage() {
         return;
       }
 
-      // Check client-side cache first (unless force refresh)
+      // Check client-side cache FIRST before showing loading state
       let cachedMarks: MarksData | null = null;
-      
+
       if (!forceRefresh) {
         cachedMarks = getClientCache<MarksData>('marks');
-        
+
         // Use cached data immediately (stale-while-revalidate)
         if (cachedMarks) {
           console.log('[Marks] ✅ Using client-side cache for marks');
           setMarksData(cachedMarks);
+          setLoading(false); // Don't show loading if we have cache
+          setError(null);
+
+          // Fetch in background to update cache (non-blocking)
+          console.log('[Marks] 🔄 Fetching fresh data in background...');
+          fetchFreshDataInBackground(access_token, false);
+          return; // Return early - we'll update when background fetch completes
         }
       } else {
         // Force refresh: clear client cache
         removeClientCache('marks');
         console.log('[Marks] 🗑️ Cleared client cache for force refresh');
       }
-      
-      // Only fetch if cache is missing or force refresh
-      if (!cachedMarks || forceRefresh) {
-        console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
-        
-        // Use request deduplication - ensures only ONE page calls backend at a time
-        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
-        const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-          });
-          
-          const result = await response.json();
-          return { response, result };
+
+      // No cache found - show loading and fetch
+      setLoading(true);
+      setError(null);
+      console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(no cache, fetching)');
+
+      // Use request deduplication - ensures only ONE page calls backend at a time
+      const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await fetch('/api/data/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
         });
-        
-        const response = apiResult.response;
-        const result = apiResult.result;
-        console.log('[Marks] API response:', result);
 
-        // Handle session expiry
-        if (!response.ok || (result.error === 'session_expired')) {
-          console.error('[Marks] Session expired or invalid');
-          setError('Your session has expired. Please re-enter your password.');
-          setShowPasswordModal(true);
-          setLoading(false);
-          return;
-        }
+        const result = await response.json();
+        return { response, result };
+      });
 
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to fetch data');
-        }
+      const response = apiResult.response;
+      const result = apiResult.result;
+      console.log('[Marks] API response:', result);
 
-        // Process marks data from unified endpoint
-        // Unified endpoint returns: { success: boolean, data: { marks: MarksData, ... }, error?: string }
-        let marksDataObj: MarksData | null = null;
-        
-        console.log('[Marks] Processing marks data from API response');
-        console.log('[Marks] result.data type:', typeof result.data);
-        console.log('[Marks] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
-        
-        // Extract marks from unified response: { data: { marks: MarksData, ... } }
-        if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
-          const marksData = (result.data as { marks?: unknown }).marks;
-          
-          if (marksData && typeof marksData === 'object') {
-            // Handle both unwrapped and wrapped data structures within marks
-            let dataToProcess = marksData;
-            
-            // Check if data is wrapped in an extra 'data' property (legacy format)
-            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
-              console.log('[Marks] 🔄 Unwrapping nested data structure in frontend');
-              dataToProcess = (dataToProcess as { data: unknown }).data as typeof marksData;
-            }
-            
-            // Check if it's the expected MarksData format
-            if ('all_courses' in dataToProcess || 'summary' in dataToProcess) {
-              marksDataObj = dataToProcess as MarksData;
-              console.log('[Marks] ✅ Marks data loaded');
-              console.log('[Marks]   - all_courses count:', marksDataObj.all_courses?.length || 0);
-              console.log('[Marks]   - summary exists:', !!marksDataObj.summary);
-            } else {
-              console.warn('[Marks] ⚠️ Marks data doesn\'t match expected format');
-              console.warn('[Marks] Available keys:', Object.keys(dataToProcess));
-            }
+      // Handle session expiry
+      if (!response.ok || (result.error === 'session_expired')) {
+        console.error('[Marks] Session expired or invalid');
+        setError('Your session has expired. Please re-enter your password.');
+        setShowPasswordModal(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch data');
+      }
+
+      // Process marks data from unified endpoint
+      // Unified endpoint returns: { success: boolean, data: { marks: MarksData, ... }, error?: string }
+      let marksDataObj: MarksData | null = null;
+
+      console.log('[Marks] Processing marks data from API response');
+      console.log('[Marks] result.data type:', typeof result.data);
+      console.log('[Marks] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+
+      // Extract marks from unified response: { data: { marks: MarksData, ... } }
+      if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
+        const marksData = (result.data as { marks?: unknown }).marks;
+
+        if (marksData && typeof marksData === 'object') {
+          // Transform if needed (Go format -> Python format)
+          let dataToProcess = transformMarksIfNeeded(marksData) as typeof marksData;
+
+          // Check if data is wrapped in an extra 'data' property (legacy format)
+          if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
+            console.log('[Marks] 🔄 Unwrapping nested data structure in frontend');
+            dataToProcess = (dataToProcess as { data: unknown }).data as typeof marksData;
           }
-        } else {
-          console.warn('[Marks] ⚠️ result.data.marks is not available');
-          console.warn('[Marks] result.data structure:', result.data);
-        }
-        
-        if (marksDataObj && (marksDataObj.all_courses || marksDataObj.summary)) {
-          setMarksData(marksDataObj);
-          console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses');
-          
-          // Save to client cache
-          setClientCache('marks', marksDataObj);
-        } else {
-          // Keep page visible even when marks data is unavailable
-          // User can use refresh button to fetch data
-          console.warn('[Marks] Marks data unavailable - keeping page visible for refresh');
-          if (result && result.data) {
-            console.warn('[Marks] Marks data type:', typeof result.data);
-            console.warn('[Marks] Marks data value:', result.data);
+
+          // Check if it's the expected MarksData format
+          if ('all_courses' in dataToProcess || 'summary' in dataToProcess) {
+            marksDataObj = dataToProcess as MarksData;
+            console.log('[Marks] ✅ Marks data loaded');
+            console.log('[Marks]   - all_courses count:', marksDataObj.all_courses?.length || 0);
+            console.log('[Marks]   - summary exists:', !!marksDataObj.summary);
+          } else {
+            console.warn('[Marks] ⚠️ Marks data doesn\'t match expected format');
+            console.warn('[Marks] Available keys:', Object.keys(dataToProcess));
           }
-          setMarksData(null);
-          // Don't throw error, just log it so page remains visible
         }
-        
-        // Register marks fetch for smart prefetch scheduling
-        if (result.success && marksDataObj) {
-          registerAttendanceFetch();
+      } else {
+        console.warn('[Marks] ⚠️ result.data.marks is not available');
+        console.warn('[Marks] result.data structure:', result.data);
+      }
+
+      if (marksDataObj && (marksDataObj.all_courses || marksDataObj.summary)) {
+        setMarksData(marksDataObj);
+        console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses');
+
+        // Save to client cache
+        setClientCache('marks', marksDataObj);
+      } else {
+        // Keep page visible even when marks data is unavailable
+        // User can use refresh button to fetch data
+        console.warn('[Marks] Marks data unavailable - keeping page visible for refresh');
+        if (result && result.data) {
+          console.warn('[Marks] Marks data type:', typeof result.data);
+          console.warn('[Marks] Marks data value:', result.data);
         }
+        setMarksData(null);
+        // Don't throw error, just log it so page remains visible
+      }
+
+      // Register marks fetch for smart prefetch scheduling
+      if (result.success && marksDataObj) {
+        registerAttendanceFetch();
       }
 
     } catch (err) {
@@ -308,7 +335,7 @@ export default function MarksPage() {
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Marks</div>
         <div className="text-red-400 font-sora text-base sm:text-lg md:text-xl lg:text-xl text-center px-4">{error}</div>
         <div className="flex gap-3 sm:gap-4">
-          <button 
+          <button
             onClick={() => fetchUnifiedData()}
             className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
           >
@@ -333,23 +360,23 @@ export default function MarksPage() {
     return (
       <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
         {/* Home Icon */}
-        <Link 
+        <Link
           href="/dashboard"
           className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
           aria-label="Go to Dashboard"
         >
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            fill="none" 
-            viewBox="0 0 24 24" 
-            strokeWidth={2} 
-            stroke="currentColor" 
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
             className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
           </svg>
         </Link>
-        
+
         <div className="flex flex-col items-center gap-4">
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
@@ -360,12 +387,12 @@ export default function MarksPage() {
               aria-label="Refresh marks data"
               title="Refresh marks data"
             >
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                fill="none" 
-                viewBox="0 0 24 24" 
-                strokeWidth={2} 
-                stroke="currentColor" 
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
                 className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -373,7 +400,7 @@ export default function MarksPage() {
             </button>
           </div>
         </div>
-        
+
         <div className="flex flex-col items-center justify-center gap-4 h-full">
           <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
             No marks data available
@@ -389,23 +416,23 @@ export default function MarksPage() {
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
       {/* Home Icon */}
-      <Link 
+      <Link
         href="/dashboard"
         className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
         aria-label="Go to Dashboard"
       >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+          stroke="currentColor"
           className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
         </svg>
       </Link>
-      
+
       <div className="flex flex-col items-center gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Marks</div>
@@ -416,12 +443,12 @@ export default function MarksPage() {
             aria-label="Refresh marks data"
             title="Refresh marks data"
           >
-            <svg 
-              xmlns="http://www.w3.org/2000/svg" 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              strokeWidth={2} 
-              stroke="currentColor" 
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
               className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -429,7 +456,7 @@ export default function MarksPage() {
           </button>
         </div>
       </div>
-      
+
       {/* Individual Course Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
         {(() => {
@@ -446,17 +473,17 @@ export default function MarksPage() {
           // If same course_code + subject_type appears multiple times, keep the one with more assessments
           const deduplicatedCourses = marksData.all_courses.reduce((acc, course) => {
             if (!course) return acc; // Skip null/undefined courses
-            
-            const existing = acc.find(c => 
-              c && c.course_code === course.course_code && 
+
+            const existing = acc.find(c =>
+              c && c.course_code === course.course_code &&
               c.subject_type === course.subject_type
             );
-            
+
             // If duplicate found, keep the one with more assessments (or first one if equal)
             if (existing) {
               const existingAssessments = existing.assessments?.length || 0;
               const currentAssessments = course.assessments?.length || 0;
-              
+
               if (currentAssessments > existingAssessments) {
                 // Replace with the one with more assessments
                 const index = acc.indexOf(existing);
@@ -469,26 +496,26 @@ export default function MarksPage() {
               // New unique course, add it
               acc.push(course);
             }
-            
+
             return acc;
           }, [] as MarksCourse[]);
-          
+
           console.log('[Marks] Deduplication:', {
             original: marksData.all_courses.length,
             deduplicated: deduplicatedCourses.length,
             removed: marksData.all_courses.length - deduplicatedCourses.length
           });
-          
+
           return deduplicatedCourses.map((course, index) => {
             if (!course) return null; // Skip null courses
             const lineChartData = createLineChartData(course);
             const courseTitle = getCourseTitle(course);
-            
+
             // Skip courses with no assessments
             if (!course.assessments || course.assessments.length === 0) {
               return null;
             }
-            
+
             return (
               <div key={`${course.course_code}-${course.subject_type}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
               {/* Main Card Content */}
@@ -513,8 +540,8 @@ export default function MarksPage() {
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={lineChartData} margin={{ left: 40, right: 40, top: 20, bottom: 20 }}>
                           <CartesianGrid strokeDasharray="6 6" stroke="#374151" />
-                          <XAxis 
-                            dataKey="assessment" 
+                          <XAxis
+                            dataKey="assessment"
                             stroke="#9CA3AF"
                             fontSize={10}
                             angle={0}
@@ -525,13 +552,13 @@ export default function MarksPage() {
                             interval={0}
                             padding={{ left: 20, right: 20 }}
                           />
-                          <YAxis 
+                          <YAxis
                             stroke="#9CA3AF"
                             fontSize={10}
                             domain={[0, 100]}
                             tickFormatter={(value) => `${value}%`}
                           />
-                          <Tooltip 
+                          <Tooltip
                             contentStyle={{
                               backgroundColor: '#1F2937',
                               border: '1px solid #374151',
@@ -545,20 +572,20 @@ export default function MarksPage() {
                             labelFormatter={(label) => `Assessment: ${label}`}
                           />
                           <Legend />
-                          <Line 
-                            type="monotone" 
-                            dataKey="percentage" 
-                            stroke="#FFFFFF" 
+                          <Line
+                            type="monotone"
+                            dataKey="percentage"
+                            stroke="#FFFFFF"
                             strokeWidth={4}
-                            dot={{ 
-                              fill: '#FFFFFF', 
-                              strokeWidth: 3, 
+                            dot={{
+                              fill: '#FFFFFF',
+                              strokeWidth: 3,
                               r: 6,
                               filter: 'drop-shadow(0 8px 16px rgba(255, 255, 255, 0.8))'
                             }}
-                            activeDot={{ 
-                              r: 8, 
-                              stroke: '#FFFFFF', 
+                            activeDot={{
+                              r: 8,
+                              stroke: '#FFFFFF',
                               strokeWidth: 3,
                               filter: 'drop-shadow(0 12px 24px rgba(255, 255, 255, 1))'
                             }}
@@ -596,7 +623,7 @@ export default function MarksPage() {
         })()}
       </div>
 
-      
+
       {/* Re-auth Modal */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">

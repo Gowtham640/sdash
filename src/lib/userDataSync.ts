@@ -27,11 +27,11 @@ export async function syncUserDataFromBackend(
   user_id: string
 ): Promise<{ success: boolean; error?: string }> {
   console.log(`[UserDataSync] 🔄 Starting user data sync for user: ${user_id}`);
-  
+
   try {
     // Fetch user data from Go backend
     const userData = await getUserDataFromGoBackend();
-    
+
     if (!userData) {
       console.error(`[UserDataSync] ❌ Failed to fetch user data from backend`);
       return {
@@ -64,7 +64,7 @@ export async function syncUserDataFromBackend(
       year?: number;
       department?: string;
       section?: string;
-      specialization?: string;
+      specialization?: string | null;
     } = {};
 
     if (userData.name) {
@@ -137,11 +137,10 @@ export async function syncUserDataFromBackend(
     if (error instanceof Error && error.stack) {
       console.error(`[UserDataSync]   - Stack: ${error.stack.split('\n').slice(0, 3).join('\n')}`);
     }
-    
+
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
-

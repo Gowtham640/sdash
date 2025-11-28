@@ -14,9 +14,9 @@ function decodeJWT(token: string): { sub?: string; email?: string } | null {
     const payload = parts[1];
     const decoded = Buffer.from(payload, 'base64').toString('utf-8');
     const claims = JSON.parse(decoded) as { sub?: string; email?: string };
-    
+
     return {
-      user_id: claims.sub,
+      sub: claims.sub,
       email: claims.email,
     };
   } catch (error) {
@@ -216,6 +216,3 @@ export async function DELETE(request: NextRequest) {
     );
   }
 }
-
-
-

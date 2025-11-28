@@ -11,16 +11,18 @@ import { supabaseAdmin } from './supabaseAdmin';
 
 export type CacheDataType = 'attendance' | 'marks' | 'calendar' | 'timetable';
 
-// TTL in milliseconds
+// TTL in milliseconds - Generous TTLs for stale-while-revalidate strategy
+// We serve expired cache and only update when user explicitly refreshes or data is very old
 const CACHE_TTL: Record<CacheDataType, number | null> = {
-  attendance: 4 * 60 * 60 * 1000, // 4 hours
-  marks: 24 * 60 * 60 * 1000, // 1 day
+  attendance: 7 * 24 * 60 * 60 * 1000, // 7 days (we'll serve even if expired)
+  marks: 30 * 24 * 60 * 60 * 1000, // 30 days (marks change rarely)
   calendar: null, // Forever (null = never expires)
   timetable: null, // Forever (null = never expires)
 };
 
-// Prefetch threshold: fetch new data 30 minutes before expiry
-const PREFETCH_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+// Prefetch threshold: This is now less important since we serve expired cache
+// Only used for background refresh triggers (not blocking)
+const PREFETCH_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface CacheEntry {
   id: number;
@@ -69,7 +71,7 @@ export async function getSupabaseCacheWithInfo(
   try {
     const cacheStartTime = Date.now();
     console.log(`[SupabaseCache] 🔍 Checking cache for ${dataType} (user: ${user_id})`);
-    
+
     const { data, error } = await supabaseAdmin
       .from('user_cache')
       .select('*')
@@ -152,7 +154,7 @@ export async function getSupabaseCacheEvenIfExpired(
 ): Promise<unknown | null> {
   try {
     console.log(`[SupabaseCache] 🔍 Fetching cache for ${dataType} (even if expired) (user: ${user_id})`);
-    
+
     const { data, error } = await supabaseAdmin
       .from('user_cache')
       .select('data, expires_at')
@@ -178,7 +180,7 @@ export async function getSupabaseCacheEvenIfExpired(
     const entry = data as { data: unknown; expires_at: string | null };
     const now = new Date();
     const expiresAt = entry.expires_at ? new Date(entry.expires_at) : null;
-    
+
     if (expiresAt && now > expiresAt) {
       const msSinceExpiry = now.getTime() - expiresAt.getTime();
       const minutesSinceExpiry = Math.round(msSinceExpiry / 1000 / 60);
@@ -249,7 +251,7 @@ export async function deleteSupabaseCache(
 ): Promise<boolean> {
   try {
     console.log(`[SupabaseCache] 🔄 Marking cache as expired for ${dataType} (user: ${user_id})`);
-    
+
     // Instead of deleting, update expires_at to past to mark as expired
     // This way the cache entry remains but will be treated as expired
     const { error } = await supabaseAdmin
@@ -281,7 +283,7 @@ export async function deleteSupabaseCache(
 export async function clearAllSupabaseCache(user_id: string): Promise<boolean> {
   try {
     console.log(`[SupabaseCache] 🔄 Marking all caches as expired for user: ${user_id}`);
-    
+
     // Instead of deleting, update expires_at to past to mark as expired
     // This way the cache entries remain but will be treated as expired
     const { error } = await supabaseAdmin
@@ -339,4 +341,3 @@ export async function isSupabaseCacheValid(
     return false;
   }
 }
-

@@ -9,12 +9,12 @@ import { trackApiRequest, trackServerError } from "@/lib/analyticsServer";
 /**
  * Unified data endpoint - Returns all data types in one call
  * POST /api/data/all
- * 
+ *
  * Features:
  * - Uses Python session persistence (no password needed)
- * 
+ *
  * Request body: { access_token: string, password?: string }
- * 
+ *
  * Returns: {
  *   success: boolean,
  *   data: {
@@ -58,15 +58,15 @@ export async function POST(request: NextRequest) {
   let user_email: string = '';
   let user_id: string | undefined;
   let session_id: string | undefined;
-  
+
   try {
     // Parse request body
     const body = await request.json();
     const { access_token, password, force_refresh, types, session_id: bodySessionId } = body;
     session_id = bodySessionId;
-    
+
     const forceRefresh = force_refresh === true || force_refresh === 'true';
-    
+
     // Parse types parameter: can be string (comma-separated) or array, or undefined (all types)
     let requestedTypes: string[] | null = null;
     if (types) {
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
         requestedTypes = types.map(t => String(t).trim()).filter(t => t.length > 0);
       }
     }
-    
+
     // Valid data types
     const validTypes = ['calendar', 'timetable', 'attendance', 'marks'];
     if (requestedTypes) {
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
         requestedTypes = null; // Invalid types, fetch all
       }
     }
-    
+
     console.log("[API /data/all] 📋 Request parameters:");
     console.log("  - password_provided:", password ? "✓" : "✗");
     console.log("  - access_token_length:", access_token?.length || 0);
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     try {
       // Decode the JWT token (extract claims without verification)
       const decoded = decodeJWT(access_token);
-      
+
       if (!decoded) {
         throw new Error("Invalid token format");
       }
@@ -144,162 +144,93 @@ export async function POST(request: NextRequest) {
     const shouldFetchAttendance = !requestedTypes || requestedTypes.includes('attendance');
     const shouldFetchMarks = !requestedTypes || requestedTypes.includes('marks');
 
-    // Check Supabase cache only for requested data types (calendar is NOT cached, fetched from public.calendar table)
-    console.log(`[API /data/all] 🔍 Checking Supabase cache...`);
-    let timetableInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
-    let attendanceInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
-    let marksInfo: { data: unknown; expiresAt: Date | null; isAboutToExpire: boolean; minutesUntilExpiry: number | null } | null = null;
-    
-    if (shouldFetchTimetable) {
+    // Check Supabase cache - ALWAYS try to get cached data (even if expired) for immediate response
+    // This implements stale-while-revalidate: serve what we have, update in background
+    console.log(`[API /data/all] 🔍 Checking Supabase cache (serving expired data if available)...`);
+
+    let cachedTimetable: unknown = null;
+    let cachedAttendance: unknown = null;
+    let cachedMarks: unknown = null;
+
+    let timetableExpired = false;
+    let attendanceExpired = false;
+    let marksExpired = false;
+
+    // Fetch all cached data (even if expired) - parallel fetching for speed
+    const { getSupabaseCacheEvenIfExpired } = await import('@/lib/supabaseCache');
+
+    if (shouldFetchTimetable && !forceRefresh) {
       try {
-        timetableInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', forceRefresh, session_id);
+        cachedTimetable = await getSupabaseCacheEvenIfExpired(user_id, 'timetable');
+        if (cachedTimetable) {
+          // Check if it's actually expired by trying to get valid cache
+          const validInfo = await getSupabaseCacheWithInfo(user_id, 'timetable', false, session_id);
+          timetableExpired = !validInfo;
+          console.log(`[API /data/all] ✅ Timetable found in cache (${timetableExpired ? 'EXPIRED' : 'VALID'})`);
+        }
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking timetable cache:`, error);
-        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof Error && error.stack) {
-          console.error(`[API /data/all]   - Stack: ${error.stack}`);
-        }
-        timetableInfo = null;
       }
     }
-    
-    if (shouldFetchAttendance) {
+
+    if (shouldFetchAttendance && !forceRefresh) {
       try {
-        attendanceInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', forceRefresh, session_id);
+        cachedAttendance = await getSupabaseCacheEvenIfExpired(user_id, 'attendance');
+        if (cachedAttendance) {
+          // Check if it's actually expired by trying to get valid cache
+          const validInfo = await getSupabaseCacheWithInfo(user_id, 'attendance', false, session_id);
+          attendanceExpired = !validInfo;
+          console.log(`[API /data/all] ✅ Attendance found in cache (${attendanceExpired ? 'EXPIRED' : 'VALID'})`);
+        }
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking attendance cache:`, error);
-        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof Error && error.stack) {
-          console.error(`[API /data/all]   - Stack: ${error.stack}`);
-        }
-        attendanceInfo = null;
       }
     }
-    
-    if (shouldFetchMarks) {
+
+    if (shouldFetchMarks && !forceRefresh) {
       try {
-        marksInfo = await getSupabaseCacheWithInfo(user_id, 'marks', forceRefresh, session_id);
+        cachedMarks = await getSupabaseCacheEvenIfExpired(user_id, 'marks');
+        if (cachedMarks) {
+          // Check if it's actually expired by trying to get valid cache
+          const validInfo = await getSupabaseCacheWithInfo(user_id, 'marks', false, session_id);
+          marksExpired = !validInfo;
+          console.log(`[API /data/all] ✅ Marks found in cache (${marksExpired ? 'EXPIRED' : 'VALID'})`);
+        }
       } catch (error) {
         console.error(`[API /data/all] ❌ Error checking marks cache:`, error);
-        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof Error && error.stack) {
-          console.error(`[API /data/all]   - Stack: ${error.stack}`);
-        }
-        marksInfo = null;
       }
     }
 
-    // Safely extract cached data with null checks (only for requested types)
-    // Note: Calendar is NOT cached, always fetched from public.calendar table
-    const cachedTimetable = shouldFetchTimetable && (timetableInfo && timetableInfo.data) ? timetableInfo.data : null;
-    let cachedAttendance = shouldFetchAttendance && (attendanceInfo && attendanceInfo.data) ? attendanceInfo.data : null;
-    const cachedMarks = shouldFetchMarks && (marksInfo && marksInfo.data) ? marksInfo.data : null;
-    
-    // Track if we have expired cache (for fallback use, but still need to fetch fresh data)
-    let hasExpiredAttendanceCache = false;
-    
-    // If attendance cache is expired (attendanceInfo is null but cache might exist), fetch expired cache for fallback
-    if (shouldFetchAttendance && !cachedAttendance && !forceRefresh) {
-      try {
-        const { getSupabaseCacheEvenIfExpired } = await import('@/lib/supabaseCache');
-        const expiredAttendance = await getSupabaseCacheEvenIfExpired(user_id, 'attendance');
-        if (expiredAttendance) {
-          cachedAttendance = expiredAttendance;
-          hasExpiredAttendanceCache = true;
-          console.log(`[API /data/all] ⚠️ Using expired attendance cache as fallback (stale-while-revalidate)`);
-        }
-      } catch (error) {
-        console.error(`[API /data/all] ❌ Error fetching expired attendance cache:`, error);
-      }
-    }
+    // Determine what needs to be fetched - NEW LOGIC: Only fetch if NO data OR force refresh
+    // We serve cached data immediately (even if expired) and only update if truly missing
+    console.log(`[API /data/all] 📊 Cache status:`);
+    console.log(`[API /data/all]   - Calendar: Always fetched from public.calendar table (not cached)`);
+    console.log(`[API /data/all]   - Timetable: ${cachedTimetable ? (timetableExpired ? "⚠️ Cached (expired)" : "✓ Cached (valid)") : "✗ Missing"}`);
+    console.log(`[API /data/all]   - Attendance: ${cachedAttendance ? (attendanceExpired ? "⚠️ Cached (expired)" : "✓ Cached (valid)") : "✗ Missing"}`);
+    console.log(`[API /data/all]   - Marks: ${cachedMarks ? (marksExpired ? "⚠️ Cached (expired)" : "✓ Cached (valid)") : "✗ Missing"}`);
 
-    // Determine what needs to be fetched (only for requested types)
-    // Calendar is always fetched from public.calendar table (not from cache or backend)
-    // Note: If we only have expired cache (hasExpiredAttendanceCache), we still need to fetch fresh data
+    // NEW APPROACH: Only fetch from backend if data is truly missing OR user explicitly requests refresh
+    // Don't fetch just because cache expired - serve expired cache instead
     const needTimetable = shouldFetchTimetable && (!cachedTimetable || forceRefresh);
-    const needAttendance = shouldFetchAttendance && ((!cachedAttendance || hasExpiredAttendanceCache) || forceRefresh || (attendanceInfo && attendanceInfo.isAboutToExpire));
-    const needMarks = shouldFetchMarks && (!cachedMarks || forceRefresh || (marksInfo && marksInfo.isAboutToExpire));
-    const needStatic = needTimetable; // Calendar is not part of static fetch anymore
+    const needAttendance = shouldFetchAttendance && (!cachedAttendance || forceRefresh);
+    const needMarks = shouldFetchMarks && (!cachedMarks || forceRefresh);
+    const needStatic = needTimetable;
     const needDynamic = needAttendance || needMarks;
-    
-    // Count how many data types need fetching (calendar is always fetched from DB, not counted here)
+
+    // Count how many data types need fetching
     const missingCount = [needTimetable, needAttendance, needMarks].filter(Boolean).length;
     const allMissing = missingCount === 3;
 
-    // If force refresh, clear caches first (similar to refresh endpoint)
-    // Note: Calendar is NOT cached, so no need to clear it
-    if (forceRefresh) {
-      console.log(`[API /data/all] 🔄 Force refresh requested - clearing caches...`);
-      try {
-        if (needTimetable) {
-          await deleteSupabaseCache(user_id, 'timetable');
-          removeClientCache('timetable');
-        }
-        if (needAttendance) {
-          await deleteSupabaseCache(user_id, 'attendance');
-          removeClientCache('attendance');
-        }
-        if (needMarks) {
-          await deleteSupabaseCache(user_id, 'marks');
-          removeClientCache('marks');
-        }
-        console.log(`[API /data/all] 🗑️ Cleared caches for force refresh`);
-      } catch (cacheError) {
-        console.warn(`[API /data/all] ⚠️ Error clearing cache (continuing anyway):`, cacheError);
-        console.warn(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-        console.warn(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-      }
-    }
+    console.log(`[API /data/all] 🎯 Fetch decision:`);
+    console.log(`[API /data/all]   - Force refresh: ${forceRefresh}`);
+    console.log(`[API /data/all]   - Need timetable: ${needTimetable}`);
+    console.log(`[API /data/all]   - Need attendance: ${needAttendance}`);
+    console.log(`[API /data/all]   - Need marks: ${needMarks}`);
+    console.log(`[API /data/all]   - Total missing: ${missingCount}`);
 
-    console.log(`[API /data/all] 📊 Cache status:`);
-    console.log(`[API /data/all]   - Calendar: Always fetched from public.calendar table (not cached)`);
-    console.log(`[API /data/all]   - Timetable: ${cachedTimetable ? "✓ Cached" : "✗ Need fetch"}`);
-    if (timetableInfo && timetableInfo.minutesUntilExpiry !== null) {
-      console.log(`[API /data/all]     Expires in: ${timetableInfo.minutesUntilExpiry} minutes`);
-    }
-    console.log(`[API /data/all]   - Attendance: ${cachedAttendance ? "✓ Cached" : "✗ Need fetch"}`);
-    if (attendanceInfo && attendanceInfo.minutesUntilExpiry !== null) {
-      console.log(`[API /data/all]     Expires in: ${attendanceInfo.minutesUntilExpiry} minutes`);
-      if (attendanceInfo.isAboutToExpire) {
-        console.log(`[API /data/all]     ⚠️ About to expire! Triggering background prefetch...`);
-      }
-    }
-    console.log(`[API /data/all]   - Marks: ${cachedMarks ? "✓ Cached" : "✗ Need fetch"}`);
-    if (marksInfo && marksInfo.minutesUntilExpiry !== null) {
-      console.log(`[API /data/all]     Expires in: ${marksInfo.minutesUntilExpiry} minutes`);
-      if (marksInfo.isAboutToExpire) {
-        console.log(`[API /data/all]     ⚠️ About to expire! Triggering background prefetch...`);
-      }
-    }
+    // Skip cache clearing on force refresh - we'll just fetch fresh data and update cache
+    // This prevents data loss if backend fetch fails
 
-    // Trigger background prefetch for caches about to expire (non-blocking, only if not already fetching)
-    if (!forceRefresh) {
-      if (attendanceInfo && attendanceInfo.isAboutToExpire && cachedAttendance && !needAttendance) {
-        console.log(`[API /data/all] 🔄 Triggering background prefetch for attendance...`);
-        triggerBackgroundPrefetch(user_email, user_id, password, 'attendance').catch(err => {
-          console.error(`[API /data/all] ❌ Background prefetch error for attendance:`);
-          console.error(`[API /data/all]   - Error type: ${err instanceof Error ? err.constructor.name : typeof err}`);
-          console.error(`[API /data/all]   - Error message: ${err instanceof Error ? err.message : String(err)}`);
-          if (err instanceof Error && err.stack) {
-            console.error(`[API /data/all]   - Stack: ${err.stack}`);
-          }
-        });
-      }
-      if (marksInfo && marksInfo.isAboutToExpire && cachedMarks && !needMarks) {
-        console.log(`[API /data/all] 🔄 Triggering background prefetch for marks...`);
-        triggerBackgroundPrefetch(user_email, user_id, password, 'marks').catch(err => {
-          console.error(`[API /data/all] ❌ Background prefetch error for marks:`);
-          console.error(`[API /data/all]   - Error type: ${err instanceof Error ? err.constructor.name : typeof err}`);
-          console.error(`[API /data/all]   - Error message: ${err instanceof Error ? err.message : String(err)}`);
-          if (err instanceof Error && err.stack) {
-            console.error(`[API /data/all]   - Stack: ${err.stack}`);
-          }
-        });
-      }
-    }
 
     let staticData: Record<string, unknown> | null = null;
     let dynamicData: Record<string, unknown> | null = null;
@@ -320,36 +251,38 @@ export async function POST(request: NextRequest) {
         dynamicData = await callPythonDynamicData(user_email, user_id, password);
         const dynamicDuration = Date.now() - dynamicStartTime;
         console.log(`[API /data/all] ✅ Dynamic data received (${dynamicDuration}ms)`);
-        
+
         const dynamicDataData = dynamicData.data as { attendance?: unknown; marks?: unknown } | undefined;
         if (dynamicData.success && dynamicDataData) {
-          // If backend returned null attendance but we have cached attendance (including expired), preserve cached attendance in dynamicData
-          if (!dynamicDataData.attendance && cachedAttendance && needAttendance) {
-            if (hasExpiredAttendanceCache) {
-              console.log(`[API /data/all] ⚠️ Backend returned null attendance, but expired cached attendance exists - preserving expired cached attendance`);
-            } else {
-              console.log(`[API /data/all] ⚠️ Backend returned null attendance, but cached attendance exists - preserving cached attendance`);
-            }
-            dynamicDataData.attendance = cachedAttendance;
-          }
+          // Save fresh data to cache only if it's not null
           if (dynamicDataData.attendance && needAttendance) {
             try {
               await setSupabaseCache(user_id, 'attendance', dynamicDataData.attendance);
+              console.log(`[API /data/all] ✅ Updated attendance cache with fresh data`);
             } catch (cacheError) {
               console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
               console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
               console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
             }
+          } else if (!dynamicDataData.attendance && cachedAttendance) {
+            console.log(`[API /data/all] ⚠️ Backend returned null attendance - keeping existing cached data`);
           }
+
           if (dynamicDataData.marks && needMarks) {
             try {
               await setSupabaseCache(user_id, 'marks', dynamicDataData.marks);
+              console.log(`[API /data/all] ✅ Updated marks cache with fresh data`);
             } catch (cacheError) {
               console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
               console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
               console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
             }
+          } else if (!dynamicDataData.marks && cachedMarks) {
+            console.log(`[API /data/all] ⚠️ Backend returned null marks - keeping existing cached data`);
           }
+        } else if (!dynamicData.success) {
+          // Backend fetch failed - we'll serve cached data
+          console.log(`[API /data/all] ⚠️ Backend fetch failed - will serve cached data if available`);
         }
       } catch (error) {
         console.error(`[API /data/all] ❌ Dynamic data request failed:`);
@@ -358,6 +291,7 @@ export async function POST(request: NextRequest) {
         if (error instanceof Error && error.stack) {
           console.error(`[API /data/all]   - Stack: ${error.stack}`);
         }
+        console.log(`[API /data/all] ⚠️ Will attempt to serve cached data despite error`);
         dynamicData = null;
       }
 
@@ -371,14 +305,14 @@ export async function POST(request: NextRequest) {
         const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
         const staticDuration = Date.now() - staticStartTime;
         console.log(`[API /data/all] ✅ Timetable received (${staticDuration}ms)`);
-        
+
         if (timetableResult.success && timetableResult.data && needTimetable) {
           // Set timetable in staticData
           if (!staticData) {
             staticData = { success: true, data: {} };
           }
           (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
-          
+
           try {
             await setSupabaseCache(user_id, 'timetable', timetableResult.data);
           } catch (cacheError) {
@@ -399,7 +333,7 @@ export async function POST(request: NextRequest) {
     } else {
       // OPTIMIZATION: Only some data is missing - fetch only what's needed individually
       console.log(`[API /data/all] 🎯 Partial data missing (${missingCount} types) - Using individual fetch strategy`);
-      
+
       // Initialize with cached data (only for requested types)
       // Note: Calendar is fetched from public.calendar table, not from cache
       staticData = {
@@ -409,7 +343,7 @@ export async function POST(request: NextRequest) {
         },
         metadata: { source: 'supabase_cache' },
       };
-      
+
       dynamicData = {
         success: true,
         data: {
@@ -577,10 +511,10 @@ export async function POST(request: NextRequest) {
         }
       }
     }
-    
+
     const backendDuration = Date.now() - backendStartTime;
     console.log(`[API /data/all] 🔄 Data fetch completed: ${backendDuration}ms total`);
-    
+
     // Merge results (combine cached and fresh data) - only include requested types
     const result = mergeSplitDataResults(staticData, dynamicData, {
       shouldFetchCalendar,
@@ -591,17 +525,17 @@ export async function POST(request: NextRequest) {
       cachedAttendance,
       cachedMarks,
     });
-    
+
     console.log(`[API /data/all] 📊 Merged result:`);
     const mergedResultTyped = result as { success?: boolean };
     console.log(`[API /data/all]   - Overall success: ${mergedResultTyped.success || false}`);
-    
+
     // Safely access merged result data properties (only log requested types)
-    const mergedData = result.data as { 
-      calendar?: unknown; 
-      timetable?: unknown; 
-      attendance?: unknown; 
-      marks?: unknown 
+    const mergedData = result.data as {
+      calendar?: unknown;
+      timetable?: unknown;
+      attendance?: unknown;
+      marks?: unknown
     } | undefined;
     if (shouldFetchCalendar) {
       console.log(`[API /data/all]   - Calendar: ${mergedData?.calendar ? "✓" : "✗"}`);
@@ -615,25 +549,39 @@ export async function POST(request: NextRequest) {
     if (shouldFetchMarks) {
       console.log(`[API /data/all]   - Marks: ${mergedData?.marks ? "✓" : "✗"}`);
     }
-    
-    // Check for session expiry in either request
+
+    // Check for session expiry in either request - BUT don't fail if we have cached data
     const staticDataTyped = staticData as { success?: boolean; error?: string } | null;
     const dynamicDataTyped = dynamicData as { success?: boolean; error?: string } | null;
-    if ((staticDataTyped && !staticDataTyped.success && staticDataTyped.error === "session_expired") ||
-        (dynamicDataTyped && !dynamicDataTyped.success && dynamicDataTyped.error === "session_expired")) {
-      console.error("[API /data/all] ❌ Backend session expired");
-      console.error("[API /data/all]   - User needs to re-authenticate");
-      console.log(`[API /data/all]   - Total response time: ${Date.now() - requestStartTime}ms`);
-      console.log("===========================================");
-      return NextResponse.json(
-        {
-          success: false,
-          error: "session_expired",
-          message: "Your portal session has expired. Please re-enter your password.",
-          requires_password: true
-        },
-        { status: 401 }
-      );
+    const hasSessionExpiry = (staticDataTyped && !staticDataTyped.success && staticDataTyped.error === "session_expired") ||
+                              (dynamicDataTyped && !dynamicDataTyped.success && dynamicDataTyped.error === "session_expired");
+
+    if (hasSessionExpiry) {
+      console.warn("[API /data/all] ⚠️ Backend session expired - but checking if we have cached data");
+
+      // If we have ANY cached data, serve it instead of failing
+      const hasCachedData = cachedTimetable || cachedAttendance || cachedMarks;
+
+      if (hasCachedData) {
+        console.log("[API /data/all] ✅ Serving cached data despite session expiry (stale-while-revalidate)");
+        console.log("[API /data/all]   - This allows user to see their data while session is renewed");
+        // Continue to serve cached data - don't return 401
+      } else {
+        // No cached data at all - must require re-authentication
+        console.error("[API /data/all] ❌ Backend session expired AND no cached data available");
+        console.error("[API /data/all]   - User needs to re-authenticate");
+        console.log(`[API /data/all]   - Total response time: ${Date.now() - requestStartTime}ms`);
+        console.log("===========================================");
+        return NextResponse.json(
+          {
+            success: false,
+            error: "session_expired",
+            message: "Your portal session has expired. Please re-enter your password.",
+            requires_password: true
+          },
+          { status: 401 }
+        );
+      }
     }
 
     // Try to get semester and course from attendance data first, fallback to database
@@ -645,7 +593,7 @@ export async function POST(request: NextRequest) {
     } else if (attendanceData?.data?.metadata?.semester) {
       semesterFromAttendance = attendanceData.data.metadata.semester;
     }
-    
+
     // Extract course from department field (BTech/MTech)
     if (attendanceData?.data?.metadata?.department) {
       const department = attendanceData.data.metadata.department;
@@ -657,7 +605,7 @@ export async function POST(request: NextRequest) {
       }
       console.log(`[API /data/all] ✅ Course from attendance: ${courseFromAttendance} (from department: ${department})`);
     }
-    
+
     // If no semester from attendance and attendance failed, fetch from database
     let semester: number | null = semesterFromAttendance;
     if (!semester) {
@@ -666,16 +614,16 @@ export async function POST(request: NextRequest) {
     } else {
       console.log(`[API /data/all] ✅ Semester from attendance: ${semester}`);
     }
-    
+
     // Fetch calendar from public.calendar table (ALWAYS, not from Supabase cache or backend)
     // Calendar is fetched based on user's program and semester from public.users table
     console.log(`[API /data/all] 📋 CALENDAR FETCH DEBUG - Starting calendar fetch process`);
     console.log(`[API /data/all]   - Course from attendance: ${courseFromAttendance || 'none'}`);
     console.log(`[API /data/all]   - Semester from attendance: ${semesterFromAttendance || 'none'}`);
-    
+
     // Declare course variable outside if block for use later
     let course: string = courseFromAttendance || 'BTech'; // Default to BTech
-    
+
     if (shouldFetchCalendar) {
       // Fetch user's program and semester from public.users table
       console.log(`[API /data/all] 🔍 Fetching user's program and semester from public.users table...`);
@@ -684,10 +632,10 @@ export async function POST(request: NextRequest) {
         .select('program, semester')
         .eq('id', user_id)
         .single();
-      
+
       let programForCalendar: string | null = null;
       let semesterForCalendar: number | null = null;
-      
+
       if (!userError && userData) {
         programForCalendar = userData.program || null;
         semesterForCalendar = userData.semester || null;
@@ -704,7 +652,7 @@ export async function POST(request: NextRequest) {
           programForCalendar = courseFromAttendance || 'B.Tech';
         }
       }
-      
+
       // If semester not in database, try attendance data
       if (!semesterForCalendar) {
         semesterForCalendar = semesterFromAttendance;
@@ -714,7 +662,7 @@ export async function POST(request: NextRequest) {
           console.log(`[API /data/all]   - Semester from database (fallback): ${semesterForCalendar || 'none'}`);
         }
       }
-      
+
       // If program not in database, use course from attendance or default to "B.Tech"
       if (!programForCalendar) {
         // Convert attendance course format to program format if needed
@@ -725,11 +673,11 @@ export async function POST(request: NextRequest) {
         }
         console.log(`[API /data/all]   - Program fallback: ${programForCalendar}`);
       }
-      
+
       // Preserve program format (e.g., "B.Tech", "M.Tech") but convert to database format for querying
       // Calendar table uses "BTech"/"MTech" format (without dot)
       const programFormatted = programForCalendar || 'B.Tech';
-      
+
       // Convert to database format for calendar table query
       if (programFormatted.toLowerCase().includes('b.tech') || programFormatted.toLowerCase().includes('btech')) {
         course = 'BTech';
@@ -738,10 +686,10 @@ export async function POST(request: NextRequest) {
       } else {
         course = 'BTech'; // Default fallback
       }
-      
+
       console.log(`[API /data/all]   - Program (preserved format): ${programFormatted}`);
       console.log(`[API /data/all]   - Course (for database query): ${course}`);
-      
+
       if (semesterForCalendar !== null && semesterForCalendar !== undefined) {
         try {
           console.log(`[API /data/all] 🔍 ========================================`);
@@ -751,18 +699,18 @@ export async function POST(request: NextRequest) {
           console.log(`[API /data/all] 🔍   - Semester: ${semesterForCalendar}`);
           console.log(`[API /data/all] 🔍   - User ID: ${user_id}`);
           console.log(`[API /data/all] 🔍 ========================================`);
-          
+
           // First, try to get calendar for specific course and semester
           let calendarDbData = null;
           let recordSource = 'none';
-          
+
           const { data: specificCalendarData, error: specificError } = await supabaseAdmin
             .from('calendar')
             .select('data')
             .eq('course', course)
             .eq('semester', semesterForCalendar)
             .single();
-          
+
           console.log(`[API /data/all] 🔍 Query result for course="${course}", semester=${semesterForCalendar}:`);
           console.log(`[API /data/all]   - Has data: ${!!specificCalendarData}`);
           console.log(`[API /data/all]   - Has error: ${!!specificError}`);
@@ -770,7 +718,7 @@ export async function POST(request: NextRequest) {
             console.log(`[API /data/all]   - Error code: ${specificError.code}`);
             console.log(`[API /data/all]   - Error message: ${specificError.message}`);
           }
-          
+
           if (!specificError && specificCalendarData && specificCalendarData.data) {
             calendarDbData = specificCalendarData;
             recordSource = `course="${course}", semester=${semesterForCalendar}`;
@@ -789,14 +737,14 @@ export async function POST(request: NextRequest) {
             // Not found for specific course/semester, try fallback: course='default', semester=0
             console.log(`[API /data/all] ℹ️ Record not found for course="${course}", semester=${semesterForCalendar}`);
             console.log(`[API /data/all] 🔍 Trying fallback: course="default", semester=0`);
-            
+
             const { data: fallbackCalendarData, error: fallbackError } = await supabaseAdmin
               .from('calendar')
               .select('data')
               .eq('course', 'default')
               .eq('semester', 0)
               .single();
-            
+
             console.log(`[API /data/all] 🔍 Fallback query result:`);
             console.log(`[API /data/all]   - Has data: ${!!fallbackCalendarData}`);
             console.log(`[API /data/all]   - Has error: ${!!fallbackError}`);
@@ -804,7 +752,7 @@ export async function POST(request: NextRequest) {
               console.log(`[API /data/all]   - Error code: ${fallbackError.code}`);
               console.log(`[API /data/all]   - Error message: ${fallbackError.message}`);
             }
-            
+
             if (!fallbackError && fallbackCalendarData && fallbackCalendarData.data) {
               calendarDbData = fallbackCalendarData;
               recordSource = 'course="default", semester=0 (FALLBACK)';
@@ -830,7 +778,7 @@ export async function POST(request: NextRequest) {
             console.warn(`[API /data/all] ⚠️ Error fetching calendar from database: ${specificError.message}`);
             console.warn(`[API /data/all]   - Error code: ${specificError.code}`);
           }
-          
+
           // Add calendar to result if fetched
           if (calendarDbData && calendarDbData.data) {
             console.log(`[API /data/all] ✅ ✅ ✅ FINAL: Calendar data being added to response`);
@@ -840,12 +788,12 @@ export async function POST(request: NextRequest) {
             if (Array.isArray(calendarDbData.data)) {
               console.log(`[API /data/all]   - Total events: ${calendarDbData.data.length}`);
             }
-            
+
             if (!result.data || typeof result.data !== 'object') {
               result.data = {};
             }
             (result.data as { calendar?: unknown }).calendar = calendarDbData.data;
-            
+
             console.log(`[API /data/all] ✅ Calendar successfully added to result.data.calendar`);
             console.log(`[API /data/all]   - result.data.calendar type: ${typeof (result.data as { calendar?: unknown }).calendar}`);
             console.log(`[API /data/all]   - result.data.calendar is array: ${Array.isArray((result.data as { calendar?: unknown }).calendar)}`);
@@ -872,7 +820,7 @@ export async function POST(request: NextRequest) {
     } else {
       console.log(`[API /data/all] ℹ️ Calendar fetch skipped (shouldFetchCalendar: false)`);
     }
-    
+
     // Include semester and course in response metadata
     const resultTyped = result as { success?: boolean; metadata?: { semester?: number; course?: string; queue_info?: unknown; [key: string]: unknown }; semester?: number; course?: string };
     if (resultTyped.metadata) {
@@ -890,17 +838,17 @@ export async function POST(request: NextRequest) {
     } else if (semester || course) {
       // Create metadata if it doesn't exist
       const queueInfo = requestQueueTracker.getQueueInfo(user_email);
-      resultTyped.metadata = { 
+      resultTyped.metadata = {
         ...(semester ? { semester } : {}),
         ...(course ? { course } : {}),
-        queue_info: queueInfo 
+        queue_info: queueInfo
       };
     } else {
       // Create metadata with queue info
       const queueInfo = requestQueueTracker.getQueueInfo(user_email);
       resultTyped.metadata = { queue_info: queueInfo };
     }
-    
+
     // Also add semester and course at root level for easy access
     if (semester) {
       (result as { semester?: number }).semester = semester;
@@ -943,7 +891,7 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-    
+
     // Ensure result has required structure
     const safeResult = {
       success: finalResultTyped.success ?? false,
@@ -952,7 +900,7 @@ export async function POST(request: NextRequest) {
       metadata: (result as { metadata?: unknown }).metadata ?? {},
       ...(result as Record<string, unknown>)
     };
-    
+
     // Return the unified data
     return NextResponse.json(safeResult, { status: finalResultTyped.success ? 200 : 500 });
 
@@ -967,11 +915,11 @@ export async function POST(request: NextRequest) {
       console.error(`[API /data/all]   - Stack Trace: ${error.stack}`);
     }
     console.error("===========================================");
-    
+
     // Track error (async, non-blocking) - safely handle undefined variables
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorType = error instanceof Error ? error.constructor.name : typeof error;
-    
+
     // Safely track errors (handle undefined user_id and session_id)
     try {
       void trackServerError(errorMessage, errorType, user_id || undefined, '/api/data/all', session_id || undefined);
@@ -980,7 +928,7 @@ export async function POST(request: NextRequest) {
       console.error(`[API /data/all] ❌ Error tracking failed:`, trackError);
       // Continue even if tracking fails
     }
-    
+
     // Always return a valid JSON response, even on error
     try {
       return NextResponse.json(
@@ -1023,7 +971,7 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
     console.log(`[API /data/all] 🔄 Calling backend: get_all_data (extracting attendance/marks only)`);
     console.log(`[API /data/all]   - Email: ${email}`);
     console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
-    
+
     // Call get_all_data but extract only attendance and marks
     const backendCallStart = Date.now();
     const result = await callBackendScraper('get_all_data', {
@@ -1032,10 +980,10 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
       force_refresh: false,
     });
     const backendCallDuration = Date.now() - backendCallStart;
-    
+
     // Type-safe access to result properties
     const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
-    
+
     console.log(`[API /data/all] 📡 Backend call completed: ${backendCallDuration}ms`);
     console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
     console.log(`[API /data/all]   - Error: ${resultTyped.error || "none"}`);
@@ -1054,45 +1002,45 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
           marks_fresh: true,
         }
       };
-      
+
       // Update user's semester, name, registration number, and department in database if available (fire and forget)
-      const attendanceData = fullData.attendance as { 
-        semester?: number; 
-        data?: { 
-          metadata?: { 
+      const attendanceData = fullData.attendance as {
+        semester?: number;
+        data?: {
+          metadata?: {
             semester?: number;
             student_name?: string;
             registration_number?: string;
             department?: string;
-          } 
-        } 
+          }
+        }
       } | undefined;
-      
+
       // Extract from direct semester field or data.metadata
       const semester = attendanceData?.semester || attendanceData?.data?.metadata?.semester;
       if (semester) {
         console.log(`[API /data/all] 📝 Semester found in response: ${semester}`);
         updateSemesterInDatabase(user_id, semester);
       }
-      
+
       const studentName = attendanceData?.data?.metadata?.student_name;
       if (studentName) {
         console.log(`[API /data/all] 📝 Name found in response: ${studentName}`);
         updateNameInDatabase(user_id, studentName);
       }
-      
+
       const registrationNumber = attendanceData?.data?.metadata?.registration_number;
       if (registrationNumber) {
         console.log(`[API /data/all] 📝 Registration Number found in response: ${registrationNumber}`);
         updateRegistrationNumberInDatabase(user_id, registrationNumber);
       }
-      
+
       const department = attendanceData?.data?.metadata?.department;
       if (department) {
         console.log(`[API /data/all] 📝 Department found in response: ${department}`);
         updateDepartmentInDatabase(user_id, department);
       }
-      
+
       return extractedResult as unknown as Record<string, unknown>;
     }
 
@@ -1121,29 +1069,29 @@ async function callPythonIndividualData(
   console.log(`[API /data/all]   - Email: ${email}`);
   console.log(`[API /data/all]   - Data type: ${dataType}`);
   console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
-  
+
   const backendCallStart = Date.now();
-  
+
   try {
     const action = `get_${dataType}_data`;
     const result = await callBackendScraper(action, {
       email,
       ...(password ? { password } : {}),
     });
-    
+
     const backendCallDuration = Date.now() - backendCallStart;
     const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
-    
+
     console.log(`[API /data/all] 📡 ${dataType} call completed: ${backendCallDuration}ms`);
     console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
     console.log(`[API /data/all]   - Error: ${resultTyped.error || "none"}`);
-    
+
     if (resultTyped.success) {
       // Extract data from response (structure may vary by endpoint)
       // Go backend returns: {status: 200, error: null, attendance: [...], regNumber: ...}
       // We want to return the entire response object as data
       const data = resultTyped.data || result;
-      
+
       // For attendance endpoint, the response is already in the correct format
       // {regNumber, attendance, status, error} - save this entire object
       return {
@@ -1151,7 +1099,7 @@ async function callPythonIndividualData(
         data: data,
       };
     }
-    
+
     return {
       success: false,
       error: resultTyped.error || 'Unknown error',
@@ -1174,18 +1122,18 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
   console.log(`[API /data/all]   - Email: ${email}`);
   console.log(`[API /data/all]   - Data types: timetable, calendar`);
   console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
-  
+
   const backendCallStart = Date.now();
-  
+
   // Try new split endpoint first
   let result = await callBackendScraper('get_static_data', {
     email,
     ...(password ? { password } : {}),
   });
-  
+
   // Type-safe access to result properties
   const resultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
-  
+
   // Fallback to get_all_data if new endpoint not supported
   if (!resultTyped.success && typeof resultTyped.error === 'string' && resultTyped.error.includes('Unknown action')) {
     console.warn(`[API /data/all] ⚠️  Backend doesn't support get_static_data, using get_all_data`);
@@ -1195,13 +1143,13 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
       ...(password ? { password } : {}),
       force_refresh: false,
     });
-    
+
     // Extract only static data from full response
     const fallbackResultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
     if (fallbackResultTyped.success && fallbackResultTyped.data) {
       const resultWithMetadata = fallbackResultTyped as { metadata?: unknown };
-      const resultData = fallbackResultTyped.data as { 
-        calendar?: unknown; 
+      const resultData = fallbackResultTyped.data as {
+        calendar?: unknown;
         timetable?: unknown;
       };
       const staticDataResult = {
@@ -1215,15 +1163,15 @@ async function callPythonStaticData(email: string, user_id: string, password?: s
       result = staticDataResult as unknown as typeof result;
     }
   }
-  
+
   const backendCallDuration = Date.now() - backendCallStart;
-  
+
   console.log(`[API /data/all] 📡 Static data call completed: ${backendCallDuration}ms`);
   // Use typed result for final access
   const finalResultTyped = result as { success?: boolean; error?: string; data?: unknown };
   console.log(`[API /data/all]   - Success: ${finalResultTyped.success || false}`);
   console.log(`[API /data/all]   - Error: ${finalResultTyped.error || "none"}`);
-  
+
   if (finalResultTyped.success) {
     console.log(`[API /data/all] 📊 Static data received:`);
     const staticResultData = finalResultTyped.data as { calendar?: unknown; timetable?: unknown } | undefined;
@@ -1242,18 +1190,18 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
   console.log(`[API /data/all]   - Email: ${email}`);
   console.log(`[API /data/all]   - Data types: attendance, marks`);
   console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
-  
+
   const backendCallStart = Date.now();
-  
+
   // Try new split endpoint first
   let result = await callBackendScraper('get_dynamic_data', {
     email,
     ...(password ? { password } : {}),
   });
-  
+
   // Type-safe access to result properties
   const resultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
-  
+
   // Fallback to get_all_data if new endpoint not supported
   if (!resultTyped.success && typeof resultTyped.error === 'string' && resultTyped.error.includes('Unknown action')) {
     console.warn(`[API /data/all] ⚠️  Backend doesn't support get_dynamic_data, using get_all_data`);
@@ -1263,13 +1211,13 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
       ...(password ? { password } : {}),
       force_refresh: false,
     });
-    
+
     // Extract only dynamic data from full response
     const fallbackResultTyped = result as { success?: boolean; error?: string; data?: unknown; metadata?: unknown };
     if (fallbackResultTyped.success && fallbackResultTyped.data) {
       const resultWithMetadata = fallbackResultTyped as { metadata?: unknown };
-      const resultData = fallbackResultTyped.data as { 
-        attendance?: unknown; 
+      const resultData = fallbackResultTyped.data as {
+        attendance?: unknown;
         marks?: unknown;
       };
       const dynamicDataResult = {
@@ -1283,37 +1231,37 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
       result = dynamicDataResult as unknown as typeof result;
     }
   }
-  
+
   const backendCallDuration = Date.now() - backendCallStart;
-  
+
   console.log(`[API /data/all] 📡 Dynamic data call completed: ${backendCallDuration}ms`);
   // Use typed result for final access
   const finalResultTyped = result as { success?: boolean; error?: string; data?: unknown };
   console.log(`[API /data/all]   - Success: ${finalResultTyped.success || false}`);
   console.log(`[API /data/all]   - Error: ${finalResultTyped.error || "none"}`);
-  
+
   if (finalResultTyped.success) {
     console.log(`[API /data/all] 📊 Dynamic data received:`);
     // Safely access nested data properties
     const dynamicResultData = finalResultTyped.data as { attendance?: unknown; marks?: unknown } | undefined;
     console.log(`[API /data/all]   - Attendance: ${dynamicResultData?.attendance ? "✓" : "✗"}`);
     console.log(`[API /data/all]   - Marks: ${dynamicResultData?.marks ? "✓" : "✗"}`);
-    
+
     // Update user's semester, name, registration number, and department in database if available (fire and forget)
-    const dynamicAttendanceData = finalResultTyped.data as { 
-      attendance?: { 
+    const dynamicAttendanceData = finalResultTyped.data as {
+      attendance?: {
         semester?: number;
-        data?: { 
-          metadata?: { 
+        data?: {
+          metadata?: {
             semester?: number;
             student_name?: string;
             registration_number?: string;
             department?: string;
-          } 
-        } 
-      } 
+          }
+        }
+      }
     } | undefined;
-    
+
     // Extract from direct semester field or data.metadata
     const semester = dynamicAttendanceData?.attendance?.semester || dynamicAttendanceData?.attendance?.data?.metadata?.semester;
     if (semester) {
@@ -1324,19 +1272,19 @@ async function callPythonDynamicData(email: string, user_id: string, password?: 
       const checkAttendanceData = finalResultTyped.data as { attendance?: unknown } | undefined;
       console.log(`[API /data/all]   - Attendance data exists: ${checkAttendanceData?.attendance ? "✓" : "✗"}`);
     }
-    
+
     const studentName = dynamicAttendanceData?.attendance?.data?.metadata?.student_name;
     if (studentName) {
       console.log(`[API /data/all] 📝 Name found in response: ${studentName}`);
       updateNameInDatabase(user_id, studentName);
     }
-    
+
     const registrationNumber = dynamicAttendanceData?.attendance?.data?.metadata?.registration_number;
     if (registrationNumber) {
       console.log(`[API /data/all] 📝 Registration Number found in response: ${registrationNumber}`);
       updateRegistrationNumberInDatabase(user_id, registrationNumber);
     }
-    
+
     const department = dynamicAttendanceData?.attendance?.data?.metadata?.department;
     if (department) {
       console.log(`[API /data/all] 📝 Department found in response: ${department}`);
@@ -1367,27 +1315,27 @@ function mergeSplitDataResults(
   const staticSuccess = staticData && staticData.success;
   const dynamicSuccess = dynamicData && dynamicData.success;
   const overallSuccess = staticSuccess || dynamicSuccess;
-  
+
   const shouldFetchCalendar = options?.shouldFetchCalendar ?? true;
   const shouldFetchTimetable = options?.shouldFetchTimetable ?? true;
   const shouldFetchAttendance = options?.shouldFetchAttendance ?? true;
   const shouldFetchMarks = options?.shouldFetchMarks ?? true;
-  
+
   console.log(`[API /data/all] 🔗 Merging split data results`);
   console.log(`[API /data/all]   - Static data success: ${staticSuccess}`);
   console.log(`[API /data/all]   - Dynamic data success: ${dynamicSuccess}`);
   console.log(`[API /data/all]   - Overall success: ${overallSuccess}`);
   console.log(`[API /data/all]   - Including: calendar=${shouldFetchCalendar}, timetable=${shouldFetchTimetable}, attendance=${shouldFetchAttendance}, marks=${shouldFetchMarks}`);
-  
+
   // Build data object only with requested types
   const dataObject: Record<string, unknown> = {};
-  
+
   if (shouldFetchCalendar) {
     // Calendar should NOT come from staticData (backend scraper)
     // It will be fetched from public.calendar table later in the API route
     dataObject.calendar = null;
   }
-  
+
   if (shouldFetchTimetable) {
     // Try to get timetable from staticData first, then fallback to cached data
     const timetableFromStatic = (staticData?.data as { timetable?: unknown } | undefined)?.timetable;
@@ -1424,7 +1372,7 @@ function mergeSplitDataResults(
       dataObject.timetable = null;
     }
   }
-  
+
   if (shouldFetchAttendance) {
     // Get attendance from dynamicData first, then fallback to cached data
     const attendanceFromDynamic = (dynamicData?.data as { attendance?: unknown } | undefined)?.attendance;
@@ -1440,7 +1388,7 @@ function mergeSplitDataResults(
       console.warn(`[API /data/all] ⚠️ No attendance data available (neither from dynamicData nor cache)`);
     }
   }
-  
+
   if (shouldFetchMarks) {
     // Get marks from dynamicData first, then fallback to cached data
     const marksFromDynamic = (dynamicData?.data as { marks?: unknown } | undefined)?.marks;
@@ -1456,7 +1404,7 @@ function mergeSplitDataResults(
       console.warn(`[API /data/all] ⚠️ No marks data available (neither from dynamicData nor cache)`);
     }
   }
-  
+
   const merged: Record<string, unknown> = {
     success: overallSuccess,
     data: dataObject,
@@ -1468,10 +1416,10 @@ function mergeSplitDataResults(
       parallel_fetch: true,
     },
   };
-  
+
   // Combine metadata from both results if available
   const baseMetadata = merged.metadata as Record<string, unknown>;
-  
+
   if (staticData?.metadata && typeof staticData.metadata === 'object' && staticData.metadata !== null) {
     const staticMetadata = staticData.metadata as Record<string, unknown>;
     merged.metadata = {
@@ -1486,11 +1434,11 @@ function mergeSplitDataResults(
       dynamic_metadata: dynamicMetadata,
     } as Record<string, unknown>;
   }
-  
+
   // Add error if both failed
   const staticDataError = staticData ? (staticData as { error?: string }).error : undefined;
   const dynamicDataError = dynamicData ? (dynamicData as { error?: string }).error : undefined;
-  
+
   if (!staticSuccess && !dynamicSuccess) {
     merged.error = `Both requests failed. Static: ${staticDataError || "Unknown"}, Dynamic: ${dynamicDataError || "Unknown"}`;
   } else if (!staticSuccess) {
@@ -1498,7 +1446,7 @@ function mergeSplitDataResults(
   } else if (!dynamicSuccess) {
     merged.error = `Dynamic data failed: ${dynamicDataError || "Unknown"}`;
   }
-  
+
   return merged;
 }
 
@@ -1509,26 +1457,26 @@ async function getSemesterFromDatabase(user_id: string): Promise<number | null> 
   try {
     console.log(`[API /data/all] 🔍 Fetching semester from database for user: ${user_id}`);
     const dbStartTime = Date.now();
-    
+
     const { data, error } = await supabaseAdmin
       .from("users")
       .select("semester")
       .eq("id", user_id)
       .single();
-    
+
     const dbDuration = Date.now() - dbStartTime;
-    
+
     if (error) {
       console.warn(`[API /data/all] ⚠️  Database query failed (${dbDuration}ms)`);
       console.warn(`[API /data/all]   - Error: ${error.message}`);
       return null;
     }
-    
+
     if (data && data.semester) {
       console.log(`[API /data/all] ✅ Semester fetched from database (${dbDuration}ms): ${data.semester}`);
       return data.semester;
     }
-    
+
     console.log(`[API /data/all] ℹ️  No semester found in database for user`);
     return null;
   } catch (err) {
@@ -1545,7 +1493,7 @@ async function updateSemesterInDatabase(user_id: string, semester: number): Prom
   console.log(`[API /data/all] 💾 Database update started (fire-and-forget)`);
   console.log(`[API /data/all]   - User ID: ${user_id}`);
   console.log(`[API /data/all]   - Semester: ${semester}`);
-    
+
     // Fire and forget - don't wait for DB update
     (async () => {
       try {
@@ -1556,7 +1504,7 @@ async function updateSemesterInDatabase(user_id: string, semester: number): Prom
           .eq("id", user_id)
           .select();
       const dbDuration = Date.now() - dbStartTime;
-        
+
         if (error) {
         console.error(`[API /data/all] ❌ Database update failed (${dbDuration}ms)`);
         console.error(`[API /data/all]   - Error: ${error.message}`);
@@ -1595,7 +1543,7 @@ async function updateNameInDatabase(user_id: string, name: string): Promise<void
   console.log(`[API /data/all] 💾 Database name update started (fire-and-forget)`);
   console.log(`[API /data/all]   - User ID: ${user_id}`);
   console.log(`[API /data/all]   - Name: ${name} -> ${formattedName}`);
-    
+
     // Fire and forget - don't wait for DB update
     (async () => {
       try {
@@ -1606,7 +1554,7 @@ async function updateNameInDatabase(user_id: string, name: string): Promise<void
           .eq("id", user_id)
           .select();
       const dbDuration = Date.now() - dbStartTime;
-        
+
         if (error) {
         console.error(`[API /data/all] ❌ Database name update failed (${dbDuration}ms)`);
         console.error(`[API /data/all]   - Error: ${error.message}`);
@@ -1633,7 +1581,7 @@ async function updateRegistrationNumberInDatabase(user_id: string, registration_
   console.log(`[API /data/all] 💾 Database registration_number update started (fire-and-forget)`);
   console.log(`[API /data/all]   - User ID: ${user_id}`);
   console.log(`[API /data/all]   - Registration Number: ${registration_number}`);
-    
+
   (async () => {
     try {
       const dbStartTime = Date.now();
@@ -1643,7 +1591,7 @@ async function updateRegistrationNumberInDatabase(user_id: string, registration_
         .eq("id", user_id)
         .select();
       const dbDuration = Date.now() - dbStartTime;
-      
+
       if (error) {
         console.error(`[API /data/all] ❌ Database registration_number update failed (${dbDuration}ms)`);
         console.error(`[API /data/all]   - Error: ${error.message}`);
@@ -1665,7 +1613,7 @@ async function updateDepartmentInDatabase(user_id: string, department: string): 
   console.log(`[API /data/all] 💾 Database department update started (fire-and-forget)`);
   console.log(`[API /data/all]   - User ID: ${user_id}`);
   console.log(`[API /data/all]   - Department: ${department}`);
-    
+
   (async () => {
     try {
       const dbStartTime = Date.now();
@@ -1675,7 +1623,7 @@ async function updateDepartmentInDatabase(user_id: string, department: string): 
         .eq("id", user_id)
         .select();
       const dbDuration = Date.now() - dbStartTime;
-      
+
       if (error) {
         console.error(`[API /data/all] ❌ Database department update failed (${dbDuration}ms)`);
         console.error(`[API /data/all]   - Error: ${error.message}`);
@@ -1702,11 +1650,11 @@ async function triggerBackgroundPrefetch(
   dataType: 'attendance' | 'marks'
 ): Promise<void> {
   console.log(`[BackgroundPrefetch] 🔄 Starting background prefetch for ${dataType} (user: ${user_email})`);
-  
+
   try {
     // Fetch only the specific data type (optimized - single request)
     const result = await callPythonIndividualData(user_email, user_id, password, dataType);
-    
+
     if (result.success && result.data) {
       try {
         await setSupabaseCache(user_id, dataType, result.data);
@@ -1747,4 +1695,3 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
-

@@ -71,7 +71,9 @@ export default function Dashboard() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [hasCache, setHasCache] = useState(false);
-  
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [expandedButton, setExpandedButton] = useState<'marks' | 'attendance' | null>(null);
+
   // Track errors
   useErrorTracking(error, '/dashboard');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -81,7 +83,7 @@ export default function Dashboard() {
     { label: 'Services', ariaLabel: 'View our services', link: '/services' },
     { label: 'Contact', ariaLabel: 'Get in touch', link: '/contact' }
   ];
-  
+
   const socialItems = [
     { label: 'Twitter', link: 'https://twitter.com' },
     { label: 'GitHub', link: 'https://github.com' },
@@ -101,7 +103,7 @@ export default function Dashboard() {
   const getThreeDayDates = () => {
     const today = new Date();
     const dates = [];
-    
+
     for (let i = -1; i <= 1; i++) {
       const date = new Date(today);
       date.setDate(today.getDate() + i);
@@ -114,7 +116,7 @@ export default function Dashboard() {
         dateObj: date
       });
     }
-    
+
     return dates;
   };
 
@@ -146,7 +148,7 @@ export default function Dashboard() {
 
     const doKey = `DO ${doNumber}`;
     const dayTimetable = timetableData?.timetable?.[doKey];
-    
+
     if (!dayTimetable?.time_slots) {
       return [];
     }
@@ -163,7 +165,7 @@ export default function Dashboard() {
         const slotCode = typedSlot.slot_code;
         const slotMapping = timetableData?.slot_mapping || {};
         const courseTitle = slotMapping[slotCode] || '';
-        
+
         timeSlots.push({
           time,
           course_title: courseTitle,
@@ -180,7 +182,7 @@ export default function Dashboard() {
         const timeParts = startTime.split(':').map(Number);
         let hours = timeParts[0];
         const minutes = timeParts[1];
-        
+
         // Convert 12-hour format to 24-hour for proper sorting
         // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
         // Times 08:xx onwards are AM (keep as is)
@@ -188,7 +190,7 @@ export default function Dashboard() {
         if (hours < 8 && hours !== 0) {
           hours += 12; // Convert 1PM-7PM to 13-19
         }
-        
+
         const minutesValue = hours * 60 + minutes;
         return minutesValue;
       };
@@ -200,6 +202,25 @@ export default function Dashboard() {
     checkAdminStatus();
     fetchUnifiedData();
   }, []);
+
+  // Update current time every second
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Debug: Log state changes
+  useEffect(() => {
+    console.log('[Dashboard] 📊 State update:');
+    console.log('[Dashboard]   - calendarData length:', Array.isArray(calendarData) ? calendarData.length : 'not array');
+    console.log('[Dashboard]   - attendanceData:', attendanceData ? `has ${attendanceData.all_subjects?.length || 0} subjects` : 'null');
+    console.log('[Dashboard]   - marksData:', marksData ? `has ${marksData.all_courses?.length || 0} courses` : 'null');
+    console.log('[Dashboard]   - timetableData:', timetableData ? 'exists' : 'null');
+    console.log('[Dashboard]   - loading:', loading);
+    console.log('[Dashboard]   - error:', error);
+  }, [calendarData, attendanceData, marksData, timetableData, loading, error]);
 
   const checkAdminStatus = async () => {
     try {
@@ -235,7 +256,7 @@ export default function Dashboard() {
     const cachedMarks = getClientCache('marks');
     const cachedTimetable = getClientCache('timetable');
     const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-    
+
     setHasCache(hasAnyCache);
 
     if (!hasAnyCache) {
@@ -267,14 +288,14 @@ export default function Dashboard() {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const password = await getPortalPassword();
-      
+
       if (password) {
         if (attempt > 1) {
           console.log(`[Dashboard] ✅ Password available after ${attempt} attempt(s)`);
         }
         return password;
       }
-      
+
       if (attempt < maxAttempts) {
         // Exponential backoff: 200ms, 400ms, 800ms, 1600ms
         const delay = 200 * Math.pow(2, attempt - 1);
@@ -282,7 +303,7 @@ export default function Dashboard() {
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
-    
+
     console.error('[Dashboard] ❌ Password not available after all retry attempts');
     return null;
   };
@@ -293,7 +314,7 @@ export default function Dashboard() {
       setError(null);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Dashboard] No access token found');
         setError('Please sign in to view dashboard');
@@ -306,7 +327,7 @@ export default function Dashboard() {
       // Remove any old calendar cache that might exist
       removeClientCache('calendar');
       console.log('[Dashboard] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
-      
+
       // Also check and clean unified cache if it contains calendar data
       const unifiedCache = getClientCache('unified');
       if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
@@ -321,66 +342,94 @@ export default function Dashboard() {
           }
         }
       }
-      
+
       let cachedAttendance: AttendanceData | null = null;
       let cachedMarks: MarksData | null = null;
       let cachedTimetable: unknown | null = null;
-      
+
       if (!forceRefresh) {
         cachedAttendance = getClientCache<AttendanceData>('attendance');
         cachedMarks = getClientCache<MarksData>('marks');
         cachedTimetable = getClientCache('timetable');
-        
+
         // Update cache status for skeleton display
         const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
         setHasCache(hasAnyCache);
-        
+
         // Use cached data immediately (stale-while-revalidate)
+        // Only use cached attendance if it has actual data
         if (cachedAttendance) {
-          console.log('[Dashboard] ✅ Using client-side cache for attendance');
-          setAttendanceData(cachedAttendance);
+          const hasSubjects = cachedAttendance.all_subjects && Array.isArray(cachedAttendance.all_subjects) && cachedAttendance.all_subjects.length > 0;
+          if (hasSubjects) {
+            console.log('[Dashboard] ✅ Using client-side cache for attendance');
+            setAttendanceData(cachedAttendance);
+          } else {
+            console.log('[Dashboard] ⚠️ Cached attendance has no subjects, will fetch fresh');
+            cachedAttendance = null; // Force fetch
+          }
         }
+        // Only use cached marks if it has actual data
         if (cachedMarks) {
-          console.log('[Dashboard] ✅ Using client-side cache for marks');
-          setMarksData(cachedMarks);
+          const hasCourses = cachedMarks.all_courses && Array.isArray(cachedMarks.all_courses) && cachedMarks.all_courses.length > 0;
+          if (hasCourses) {
+            console.log('[Dashboard] ✅ Using client-side cache for marks');
+            setMarksData(cachedMarks);
+          } else {
+            console.log('[Dashboard] ⚠️ Cached marks has no courses, will fetch fresh');
+            cachedMarks = null; // Force fetch
+          }
         }
         if (cachedTimetable) {
           console.log('[Dashboard] ✅ Using client-side cache for timetable');
           // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
           let timetableDataToUse: typeof timetableData | null = null;
-          
+
           if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
             // Check if cached data has 'data' property (wrapped API response format)
             if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
               const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
-              if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
+              if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData || 'slot_mapping' in cachedData)) {
                 timetableDataToUse = cachedData;
                 console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
               }
             }
             // Check if cached data is already in direct format (has timetable property at root)
-            else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
+            else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable || 'slot_mapping' in cachedTimetable) {
               timetableDataToUse = cachedTimetable as typeof timetableData;
               console.log('[Dashboard] ✅ Using timetable in direct format');
             }
+            // Try to extract from nested structures
+            else {
+              // Log the structure for debugging
+              console.log('[Dashboard] 🔍 Cached timetable structure:', Object.keys(cachedTimetable));
+              console.log('[Dashboard] 🔍 Cached timetable sample:', JSON.stringify(cachedTimetable).substring(0, 500));
+            }
           }
-          
+
           if (timetableDataToUse) {
-            setTimetableData(timetableDataToUse);
-            // Also set slot occurrences for day order stats
-            try {
-              const timetableForUtils = {
-                timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
-                slot_mapping: timetableDataToUse.slot_mapping,
-              } as TimetableData;
-              const occurrences = getSlotOccurrences(timetableForUtils);
-              setSlotOccurrences(occurrences);
-              console.log('[Dashboard] ✅ Timetable slot occurrences loaded:', occurrences.length);
-            } catch (err) {
-              console.error('[Dashboard] ❌ Error processing cached timetable:', err);
+            // Verify timetable has actual data
+            const hasTimetableData = timetableDataToUse.timetable && Object.keys(timetableDataToUse.timetable).length > 0;
+            if (hasTimetableData) {
+              setTimetableData(timetableDataToUse);
+              // Also set slot occurrences for day order stats
+              try {
+                const timetableForUtils = {
+                  timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
+                  slot_mapping: timetableDataToUse.slot_mapping,
+                } as TimetableData;
+                const occurrences = getSlotOccurrences(timetableForUtils);
+                setSlotOccurrences(occurrences);
+                console.log('[Dashboard] ✅ Timetable slot occurrences loaded:', occurrences.length);
+              } catch (err) {
+                console.error('[Dashboard] ❌ Error processing cached timetable:', err);
+              }
+            } else {
+              console.warn('[Dashboard] ⚠️ Cached timetable has no data, will fetch fresh');
+              cachedTimetable = null; // Force fetch
             }
           } else {
-            console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
+            console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure, will fetch fresh');
+            cachedTimetable = null; // Force fetch
           }
         }
       } else {
@@ -391,24 +440,24 @@ export default function Dashboard() {
         removeClientCache('unified');
         console.log('[Dashboard] 🗑️ Cleared client caches for force refresh');
       }
-      
+
       // Determine what needs to be fetched
       const needAttendance = !cachedAttendance || forceRefresh;
       const needMarks = !cachedMarks || forceRefresh;
       const needTimetable = !cachedTimetable || forceRefresh;
       const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
-      
+
       console.log('[Dashboard] 📊 Cache status:');
       console.log(`[Dashboard]   - Attendance: ${cachedAttendance ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Marks: ${cachedMarks ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
-      
+
       // Always use unified API endpoint with request deduplication
       // This ensures only one page calls the backend at a time
       // Ensure password is available (handles race condition after login redirect)
       const password = await waitForPassword();
-      
+
       if (!password) {
         console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
       }
@@ -416,12 +465,12 @@ export default function Dashboard() {
       // Declare result at function scope so it's accessible in all branches
       let result: any = null;
       let response: Response | null = null;
-      
+
       if (missingCount > 0 || forceRefresh) {
         // Fetch from API with automatic retry on password-related session_expired
         let apiStartTime = Date.now();
         const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
-        
+
         // Use request deduplication for unified API calls - ensures only ONE call at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
@@ -431,11 +480,11 @@ export default function Dashboard() {
           let shouldRetry = true;
           let finalResponse: Response | null = null;
           let finalResult: any = null;
-          
+
           while (shouldRetry && attempt <= maxRetries) {
             console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
             apiStartTime = Date.now();
-            
+
             finalResponse = await fetch('/api/data/all', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -443,14 +492,14 @@ export default function Dashboard() {
             });
 
             const apiDuration = Date.now() - apiStartTime;
-            
+
             // Check if response is OK and has content before parsing JSON
             if (!finalResponse.ok) {
               const errorText = await finalResponse.text().catch(() => 'Unknown error');
               console.error(`[Dashboard] ❌ API error response (${finalResponse.status}):`, errorText);
               throw new Error(`API request failed with status ${finalResponse.status}: ${errorText}`);
             }
-            
+
             // Check if response has content
             const contentType = finalResponse.headers.get('content-type');
             if (!contentType || !contentType.includes('application/json')) {
@@ -459,7 +508,7 @@ export default function Dashboard() {
               console.error(`[Dashboard]   - Response body:`, text.substring(0, 200));
               throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
             }
-            
+
             // Parse JSON with error handling
             try {
               const responseText = await finalResponse.text();
@@ -473,24 +522,24 @@ export default function Dashboard() {
               console.error(`[Dashboard]   - Response status: ${finalResponse.status}`);
               throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
             }
-            
+
             console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
             console.log(`[Dashboard]   - Success: ${finalResult.success}`);
             console.log(`[Dashboard]   - Status: ${finalResponse.status}`);
             console.log(`[Dashboard]   - Error: ${finalResult.error || 'none'}`);
-            
+
             // Check if session_expired is due to missing password (retryable)
-            const isSessionExpiredDueToPassword = 
-              (finalResult.error === 'session_expired' || !finalResponse.ok) && 
-              attempt < maxRetries && 
+            const isSessionExpiredDueToPassword =
+              (finalResult.error === 'session_expired' || !finalResponse.ok) &&
+              attempt < maxRetries &&
               !password; // Only retry if password wasn't available initially
-            
+
             if (isSessionExpiredDueToPassword) {
               console.log(`[Dashboard] 🔄 session_expired detected, waiting for password to be stored...`);
               // Wait a bit longer for password storage to complete
               const retryDelay = 500 * attempt; // 500ms, 1000ms, 1500ms
               await new Promise(resolve => setTimeout(resolve, retryDelay));
-              
+
               // Check if password is now available
               const retryPassword = await waitForPassword(3); // Quick check with fewer attempts
               if (retryPassword) {
@@ -501,10 +550,10 @@ export default function Dashboard() {
                 console.warn(`[Dashboard] ⚠️ Password still not available after wait`);
               }
             }
-            
+
             shouldRetry = false; // Exit retry loop
           }
-          
+
           // Ensure response and result are set
           if (!finalResponse || !finalResult) {
             throw new Error('Failed to fetch data from API');
@@ -526,7 +575,7 @@ export default function Dashboard() {
                 body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
               });
               const retryResult = await retryResponse.json();
-              
+
               if (!retryResponse.ok || (retryResult.error === 'session_expired')) {
                 throw new Error('Your session has expired. Please re-enter your password.');
               }
@@ -542,12 +591,12 @@ export default function Dashboard() {
 
           return { response: finalResponse, result: finalResult };
         });
-        
+
         response = apiResult.response;
         result = apiResult.result;
-        
+
         processUnifiedData(result);
-        
+
         // Save individual caches from unified response
         if (result.data) {
           if (result.data.attendance) {
@@ -562,25 +611,50 @@ export default function Dashboard() {
         }
       } else if (missingCount === 0) {
         // All cached, but still need calendar - fetch only calendar
-        console.log('[Dashboard] ✅ All data cached, fetching only calendar...');
-        const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
-        const calendarResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
+        // Also check if cached data is actually valid (has items)
+        const needsRefresh =
+          (cachedAttendance && (!cachedAttendance.all_subjects || cachedAttendance.all_subjects.length === 0)) ||
+          (cachedMarks && (!cachedMarks.all_courses || cachedMarks.all_courses.length === 0)) ||
+          (cachedTimetable && (!cachedTimetable || typeof cachedTimetable !== 'object'));
+
+        if (needsRefresh) {
+          console.log('[Dashboard] ⚠️ Cached data is empty/invalid, fetching all data...');
+          // Fetch all data to refresh empty caches
+          const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+          const apiResult = await deduplicateRequest(requestKey, async () => {
+            const response = await fetch('/api/data/all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(getRequestBodyWithPassword(access_token, true)) // Force refresh
+            });
+            const result = await response.json();
+            if (result.success) {
+              processUnifiedData(result);
+            }
+            return { response, result };
           });
-          const result = await response.json();
-          if (result.success && result.data?.calendar) {
-            processUnifiedData(result);
-          }
-          return result;
-        });
-        
-        // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
-        result = calendarResult;
+          result = apiResult.result;
+        } else {
+          console.log('[Dashboard] ✅ All data cached, fetching only calendar...');
+          const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
+          const calendarResult = await deduplicateRequest(requestKey, async () => {
+            const response = await fetch('/api/data/all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
+            });
+            const result = await response.json();
+            if (result.success && result.data?.calendar) {
+              processUnifiedData(result);
+            }
+            return result;
+          });
+
+          // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
+          result = calendarResult;
+        }
       }
-      
+
       // Register attendance/marks fetch for smart prefetch scheduling
       // Only register if we fetched unified data (result is defined)
       const allMissing = missingCount === 3;
@@ -611,7 +685,7 @@ export default function Dashboard() {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
-    
+
     // Process calendar data - handle both direct format and wrapped format
     console.log('[Dashboard] 📋 ========================================');
     console.log('[Dashboard] 📋 CALENDAR PROCESSING - Starting calendar data processing');
@@ -626,9 +700,9 @@ export default function Dashboard() {
       }
     }
     console.log('[Dashboard] 📋 ========================================');
-    
+
     let calendarEvents: CalendarEvent[] | null = null;
-    
+
     if (Array.isArray(result.data.calendar)) {
       // Direct array format
       calendarEvents = result.data.calendar;
@@ -653,11 +727,11 @@ export default function Dashboard() {
         console.log('[Dashboard]   - Total events:', calendarEvents.length);
       }
     }
-    
+
     if (calendarEvents && calendarEvents.length > 0) {
       // Extract semester from multiple sources with fallbacks
       let extractedSemester: number | null = null;
-      
+
       // 1. Try attendance data first - handle both direct and wrapped formats
       if (result.data.attendance && typeof result.data.attendance === 'object') {
         // Direct format: {metadata: {semester: ...}, ...}
@@ -678,7 +752,7 @@ export default function Dashboard() {
           extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
           console.log('[Dashboard] Semester from attendance.semester (legacy):', extractedSemester);
         }
-      } 
+      }
       // 2. Try response metadata
       else if (result.metadata?.semester) {
         extractedSemester = result.metadata.semester;
@@ -697,20 +771,41 @@ export default function Dashboard() {
           console.log('[Dashboard] Semester from storage cache:', extractedSemester);
         }
       }
-      
+
       // Default to 1 if no semester found
       const finalSemester = extractedSemester || 1;
-      
+
       // Store semester in storage if found
       if (extractedSemester) {
           setStorageItem('user_semester', extractedSemester.toString());
         console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
-      
+
       console.log('[Dashboard] 📋 Calendar events count:', calendarEvents.length);
       if (calendarEvents.length > 0) {
         console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
+        console.log('[Dashboard] 📋   - Last event:', JSON.stringify(calendarEvents[calendarEvents.length - 1], null, 2).substring(0, 200));
         console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
+
+        // Check if current date is in range
+        const currentDate = getCurrentDateString();
+        const hasCurrentDate = calendarEvents.some(e => e && e.date === currentDate);
+        console.log('[Dashboard] 📋   - Current date:', currentDate);
+        console.log('[Dashboard] 📋   - Current date in calendar:', hasCurrentDate ? 'YES' : 'NO');
+        if (!hasCurrentDate) {
+          // Find closest dates
+          const today = new Date();
+          const todayStr = `${today.getDate().toString().padStart(2, '0')}/${(today.getMonth() + 1).toString().padStart(2, '0')}/${today.getFullYear()}`;
+          const nearbyDates = calendarEvents
+            .filter(e => e && e.date)
+            .map(e => ({ date: e.date, event: e }))
+            .sort((a, b) => {
+              // Simple string comparison for dates in DD/MM/YYYY format
+              return a.date.localeCompare(b.date);
+            })
+            .slice(0, 5);
+          console.log('[Dashboard] 📋   - Nearby dates in calendar:', nearbyDates.map(d => d.date));
+        }
       }
       // Display calendar data as-is without holiday modifications
       setCalendarData(calendarEvents);
@@ -719,19 +814,22 @@ export default function Dashboard() {
       console.warn('[Dashboard] ⚠️ No calendar data found');
       console.warn('[Dashboard] Calendar data type:', typeof result.data.calendar);
       console.warn('[Dashboard] Calendar data is array:', Array.isArray(result.data.calendar));
+      if (result.data.calendar) {
+        console.warn('[Dashboard] Calendar data value:', JSON.stringify(result.data.calendar).substring(0, 500));
+      }
       setCalendarData([]);
     }
 
     // Process attendance data - handle both direct format and wrapped format
     let attendanceDataObj: AttendanceData | null = null;
-    
+
     if (result.data.attendance && typeof result.data.attendance === 'object') {
       // Check if it's direct format (has all_subjects, summary, metadata at root)
       if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
         // Direct format
         attendanceDataObj = result.data.attendance as AttendanceData;
         console.log('[Dashboard] Attendance data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
         const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
@@ -751,17 +849,33 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
       setAttendanceData(attendanceDataObj);
-      console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
+      console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0, 'subjects');
+      if (attendanceDataObj.all_subjects && attendanceDataObj.all_subjects.length > 0) {
+        console.log('[Dashboard]   - First subject:', JSON.stringify(attendanceDataObj.all_subjects[0], null, 2).substring(0, 300));
+      }
     } else if (result.data.attendance !== undefined && result.data.attendance !== null) {
       // Only overwrite if attendance was explicitly provided in result (not undefined/null)
       // This prevents overwriting cached data when only calendar is fetched
-      console.warn('[Dashboard] ⚠️ No attendance data found');
+      console.warn('[Dashboard] ⚠️ No attendance data found in processed result');
       console.warn('[Dashboard] Attendance data type:', typeof result.data.attendance);
-      console.warn('[Dashboard] Attendance data value:', result.data.attendance);
-      setAttendanceData(null);
+      console.warn('[Dashboard] Attendance data value:', JSON.stringify(result.data.attendance).substring(0, 500));
+
+      // Try to extract data directly if structure is unexpected
+      if (typeof result.data.attendance === 'object') {
+        const rawAttendance = result.data.attendance as Record<string, unknown>;
+        if ('all_subjects' in rawAttendance && Array.isArray(rawAttendance.all_subjects)) {
+          console.log('[Dashboard] 🔄 Found all_subjects in unexpected location, extracting...');
+          setAttendanceData({ all_subjects: rawAttendance.all_subjects as AttendanceSubject[] });
+          console.log('[Dashboard] ✅ Attendance data extracted from unexpected structure');
+        } else {
+          setAttendanceData(null);
+        }
+      } else {
+        setAttendanceData(null);
+      }
     } else {
       // result.data.attendance is undefined/null - don't overwrite existing state (likely from cache)
       console.log('[Dashboard] ℹ️ Attendance not in API response, keeping existing state (likely from cache)');
@@ -769,14 +883,14 @@ export default function Dashboard() {
 
     // Process marks data - handle both direct format and wrapped format
     let marksDataObj: MarksData | null = null;
-    
+
     if (result.data.marks && typeof result.data.marks === 'object') {
       // Check if it's direct format (has all_courses, summary, metadata at root)
       if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
         // Direct format
         marksDataObj = result.data.marks as MarksData;
         console.log('[Dashboard] Marks data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.marks && 'data' in result.data.marks) {
         const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
@@ -796,17 +910,33 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
       setMarksData(marksDataObj);
-      console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
+      console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0, 'courses');
+      if (marksDataObj.all_courses && marksDataObj.all_courses.length > 0) {
+        console.log('[Dashboard]   - First course:', JSON.stringify(marksDataObj.all_courses[0], null, 2).substring(0, 300));
+      }
     } else if (result.data.marks !== undefined && result.data.marks !== null) {
       // Only overwrite if marks was explicitly provided in result (not undefined/null)
       // This prevents overwriting cached data when only calendar is fetched
-      console.warn('[Dashboard] ⚠️ No marks data found');
+      console.warn('[Dashboard] ⚠️ No marks data found in processed result');
       console.warn('[Dashboard] Marks data type:', typeof result.data.marks);
-      console.warn('[Dashboard] Marks data value:', result.data.marks);
-      setMarksData(null);
+      console.warn('[Dashboard] Marks data value:', JSON.stringify(result.data.marks).substring(0, 500));
+
+      // Try to extract data directly if structure is unexpected
+      if (typeof result.data.marks === 'object') {
+        const rawMarks = result.data.marks as Record<string, unknown>;
+        if ('all_courses' in rawMarks && Array.isArray(rawMarks.all_courses)) {
+          console.log('[Dashboard] 🔄 Found all_courses in unexpected location, extracting...');
+          setMarksData({ all_courses: rawMarks.all_courses as MarksCourse[] });
+          console.log('[Dashboard] ✅ Marks data extracted from unexpected structure');
+        } else {
+          setMarksData(null);
+        }
+      } else {
+        setMarksData(null);
+      }
     } else {
       // result.data.marks is undefined/null - don't overwrite existing state (likely from cache)
       console.log('[Dashboard] ℹ️ Marks not in API response, keeping existing state (likely from cache)');
@@ -814,14 +944,14 @@ export default function Dashboard() {
 
     // Process timetable data - handle both direct format and wrapped format
     let timetableDataObj: typeof timetableData | null = null;
-    
+
     if (result.data.timetable && typeof result.data.timetable === 'object') {
       // Check if it's direct format (has timetable, time_slots, metadata at root)
       if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
         // Direct format
         timetableDataObj = result.data.timetable as typeof timetableData;
         console.log('[Dashboard] Timetable data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
         const timetableWrapper = result.data.timetable as { success?: boolean | { data?: unknown }; data?: unknown };
@@ -844,10 +974,10 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (timetableDataObj) {
       setTimetableData(timetableDataObj);
-      
+
       try {
         // Convert to TimetableData format for getSlotOccurrences
         const timetableForUtils = {
@@ -878,7 +1008,7 @@ export default function Dashboard() {
       try {
         // Extract semester using same logic as above
         let extractedSemester: number | null = null;
-        
+
         if (result.data.attendance?.semester) {
           extractedSemester = result.data.attendance.semester;
         } else if (result.data.attendance?.data?.metadata?.semester) {
@@ -893,7 +1023,7 @@ export default function Dashboard() {
             extractedSemester = parseInt(cachedSemester, 10);
           }
         }
-        
+
         // Use calendar data as-is without holiday modifications
         const stats = getDayOrderStats(calendarForStats as CalendarEvent[]);
         setDayOrderStats(stats);
@@ -922,136 +1052,70 @@ export default function Dashboard() {
     return conductedNum - absentNum;
   };
 
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  };
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
   if (loading && !showSkeleton) {
     // Show minimal loading state for first 2 seconds if no cache
     return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-        <PillNav
-          logo=""
-          logoAlt=""
-          items={[
-            { label: 'Attendance', href: '/attendance' },
-            { label: 'Timetable', href: '/timetable' },
-            { label: 'Marks', href: '/marks' },
-            { label: 'Calendar', href: '/calender' },
-            ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
-          ]}
-          activeHref="/dashboard"
-          className="custom-nav"
-          ease="power2.easeOut"
-          pillColor="#000000"
-          baseColor="#ffffff"
-          hoveredPillTextColor="#000000"
-          pillTextColor="#ffffff"
-        />
+      <div className="relative bg-black min-h-screen flex items-center justify-center">
+        <div className="text-white text-xl font-sora">Loading...</div>
       </div>
     );
   }
 
   if (loading && showSkeleton) {
     // Show skeleton UI after 2s delay or immediately if cache exists
-    const threeDayDates = getThreeDayDates();
-    
     return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-        <PillNav
-          logo=""
-          logoAlt=""
-          items={[
-            { label: 'Attendance', href: '/attendance' },
-            { label: 'Timetable', href: '/timetable' },
-            { label: 'Marks', href: '/marks' },
-            { label: 'Calendar', href: '/calender' },
-            ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
-          ]}
-          activeHref="/dashboard"
-          className="custom-nav"
-          ease="power2.easeOut"
-          pillColor="#000000"
-          baseColor="#ffffff"
-          hoveredPillTextColor="#000000"
-          pillTextColor="#ffffff"
-        />
-        <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
-          <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
-            Welcome to your Dashboard
+      <div className="relative bg-black min-h-screen flex overflow-hidden">
+        {/* Left Sidebar */}
+        <div className="w-64 bg-white/5 backdrop-blur-md border-r border-white/10 flex flex-col p-6">
+          {/* Logo Section */}
+          <div className="mb-8">
+            <h1 className="text-white text-2xl font-sora font-bold">SDash</h1>
           </div>
+
+          {/* Navigation Links */}
+          <nav className="flex-1 space-y-2">
+            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">TimeTable</div>
+            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">Attendance</div>
+            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">Marks</div>
+            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">Calendar</div>
+          </nav>
         </div>
 
-        {/* Calendar Section - Show actual calendar if available */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-            Upcoming Calendar
-          </div>
-          <div className="flex flex-col gap-3 w-full">
-            {threeDayDates.map((dayInfo) => {
-              const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
-              const isToday = dayInfo.dateStr === getCurrentDateString();
-              const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
-              
-              let bgColor = 'bg-white/10';
-              let textColor = 'text-white';
-              
-              if (isToday) {
-                bgColor = 'bg-white';
-                textColor = 'text-black';
-              } else if (isHoliday) {
-                bgColor = 'bg-green-500/80';
-                textColor = 'text-white';
-              }
-              
-              return (
-                <div 
-                  key={dayInfo.dateStr}
-                  className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
-                >
-                  <div className="flex gap-1.5 sm:gap-2 md:gap-3 lg:gap-3 items-center">
-                    <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[80px] lg:min-w-[85px]`}>
-                      {dayInfo.dayName}
-                    </p>
-                    <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora`}>
-                      {dayInfo.dateStr}
-                    </p>
-                  </div>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
-                    {event?.content || 'No events'}
-                  </p>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
-                    {event?.day_order || '-'}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Today's Timetable Section - Skeleton */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <SkeletonLoader className="w-full h-8 mb-2" />
-          <div className="flex flex-col gap-3 w-full">
-            {[1, 2, 3].map((i) => (
-              <SkeletonLoader key={i} className="w-full h-16 rounded-2xl" />
-            ))}
-          </div>
-        </div>
-
-        {/* Attendance Section - Skeleton */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <SkeletonLoader className="w-full h-8 mb-2" />
-          <div className="flex flex-col gap-3 w-full">
-            {[1, 2, 3, 4].map((i) => (
-              <SkeletonLoader key={i} className="w-full h-20 rounded-2xl" />
-            ))}
-          </div>
-        </div>
-
-        {/* Marks Section - Skeleton */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <SkeletonLoader className="w-full h-8 mb-2" />
-          <div className="flex flex-col gap-3 w-full">
-            {[1, 2, 3, 4].map((i) => (
-              <SkeletonLoader key={i} className="w-full h-20 rounded-2xl" />
-            ))}
+        {/* Main Content Area */}
+        <div className="flex-1 overflow-y-auto p-8 flex flex-col">
+          <SkeletonLoader className="w-64 h-16 mb-2" />
+          <SkeletonLoader className="w-96 h-8 mb-8" />
+          <SkeletonLoader className="w-full h-32 mb-8 rounded-2xl" />
+          <div className="flex gap-4 items-end mt-auto">
+            <div className="w-[65%] grid grid-cols-2 gap-4 items-end transition-all duration-500 ease-in-out">
+              <SkeletonLoader className="h-56 rounded-2xl" />
+              <SkeletonLoader className="h-56 rounded-2xl" />
+              <SkeletonLoader className="h-56 rounded-2xl" />
+              <SkeletonLoader className="h-56 rounded-2xl" />
+            </div>
+            <div className="flex-1 flex flex-col gap-4 h-[29rem] transition-all duration-500 ease-in-out">
+              <SkeletonLoader className="flex-1 rounded-2xl" />
+              <SkeletonLoader className="flex-1 rounded-2xl" />
+              <SkeletonLoader className="flex-1 rounded-2xl" />
+            </div>
           </div>
         </div>
       </div>
@@ -1059,18 +1123,18 @@ export default function Dashboard() {
   }
 
   if (error) {
-  return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
-        <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
-          {error.includes('session') && (
-            <NavigationButton
-              path="/auth"
-              onClick={handleReAuthenticate}
-              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
-            >
-              Sign In Again
-            </NavigationButton>
-          )}
+    return (
+      <div className="relative bg-black min-h-screen flex items-center justify-center flex-col gap-6">
+        <div className="text-red-400 text-xl font-sora text-center px-4">{error}</div>
+        {error.includes('session') && (
+          <NavigationButton
+            path="/auth"
+            onClick={handleReAuthenticate}
+            className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+          >
+            Sign In Again
+          </NavigationButton>
+        )}
       </div>
     );
   }
@@ -1080,213 +1144,240 @@ export default function Dashboard() {
   const currentDayOrder = getCurrentDayOrder();
 
   return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-      <PillNav
-        logo=""
-        logoAlt=""
-        items={[
-          { label: 'Attendance', href: '/attendance' },
-          { label: 'Timetable', href: '/timetable' },
-          { label: 'Marks', href: '/marks' },
-          { label: 'Calendar', href: '/calender' },
-          ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
-        ]}
-        activeHref="/dashboard"
-        className="custom-nav"
-        ease="power2.easeOut"
-        pillColor="#000000"
-        baseColor="#ffffff"
-        hoveredPillTextColor="#000000"
-        pillTextColor="#ffffff"
-      />
-      <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
-        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
-          Welcome to your Dashboard
+    <div className="relative bg-black min-h-screen flex overflow-hidden">
+      {/* Left Sidebar */}
+      <div className="w-64 bg-white/5 backdrop-blur-md border-r border-white/10 flex flex-col p-6">
+        {/* Logo Section */}
+        <div className="mb-8 ml-3.5  mt-3">
+          <h1 className="text-white text-5xl font-sora font-bold">SDash</h1>
         </div>
+
+        {/* Navigation Links */}
+        <nav className="flex-1 space-y-2">
+          <Link
+            href="/timetable"
+            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
+          >
+            TimeTable
+          </Link>
+          <Link
+            href="/attendance"
+            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
+          >
+            Attendance
+          </Link>
+          <Link
+            href="/marks"
+            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
+          >
+            Marks
+          </Link>
+          <Link
+            href="/calender"
+            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
+          >
+            Calendar
+          </Link>
+          {isAdmin && (
+            <Link
+              href="/admin"
+              className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
+            >
+              Admin
+            </Link>
+          )}
+        </nav>
       </div>
 
-      {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Upcoming Calendar
-        </div>
-        <div className="flex flex-col gap-3 w-full">
-          {threeDayDates.map((dayInfo) => {
-            const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
-            const isToday = dayInfo.dateStr === getCurrentDateString();
-            const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
-            
-            let bgColor = 'bg-white/10';
-            let textColor = 'text-white';
-            
-            if (isToday) {
-              bgColor = 'bg-white';
-              textColor = 'text-black';
-            } else if (isHoliday) {
-              bgColor = 'bg-green-500/80';
-              textColor = 'text-white';
-            }
-            
-            return (
-              <div 
-                key={dayInfo.dateStr}
-                className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
-              >
-                <div className="flex gap-1.5 sm:gap-2 md:gap-3 lg:gap-3 items-center">
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[80px] lg:min-w-[85px]`}>
-                    {dayInfo.dayName}
-                  </p>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora`}>
-                    {dayInfo.dateStr}
-                  </p>
-                </div>
-                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
-                  {event?.content || 'No events'}
-                </p>
-                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
-                  {event?.day_order || '-'}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Today's Timetable Section */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Today&apos;s Timetable {currentDayOrder && `- ${currentDayOrder}`}
-        </div>
-        {todaysTimetable.length > 0 ? (
-          <div className="flex flex-col gap-3 w-full">
-            {todaysTimetable.map((slot, index) => (
-              <div 
-                key={index}
-                className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
-              >
-                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] whitespace-nowrap">
-                  {slot.time}
-                </div>
-                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold flex-1">
-                  {slot.course_title || 'No class'}
-                </div>
-                {slot.category && (
-                  <div className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                    {slot.category}
-                  </div>
-                )}
-              </div>
-            ))}
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-y-auto p-8 flex flex-col">
+        {/* Clock, Date, Day Section */}
+        <div className="mb-8">
+          <div className="text-white text-5xl font-sora font-bold mb-2">
+            {formatTime(currentTime)}
           </div>
-        ) : (
           <div className="text-white/70 text-lg font-sora">
-            {currentDayOrder ? 'No classes today' : 'Unable to determine day order'}
+            {formatDate(currentTime)}
           </div>
-        )}
-      </div>
-
-      {/* Attendance Section */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Attendance Overview
         </div>
-        {attendanceData?.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
-          <div className="flex flex-col gap-3 w-full">
-            {attendanceData.all_subjects.map((subject, index) => {
-              if (!subject || !subject.attendance_percentage) return null; // Skip null/invalid subjects
-              const attendancePercent = parseFloat(subject.attendance_percentage.replace('%', ''));
-              
-              return (
-                <div 
-                  key={index}
-                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
+
+        {/* Day Order Timetable Section - Placeholder */}
+        <div className="mb-8 p-6 bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl">
+          <div className="text-white text-xl font-sora font-bold mb-4">
+            Today&apos;s Schedule {currentDayOrder && `- ${currentDayOrder}`}
+          </div>
+          <div className="text-white/50 text-sm font-sora">
+            {/* Placeholder for day order timetable */}
+            Day order timetable will be displayed here
+          </div>
+        </div>
+
+        {/* Button Layout - 2x2 Grid + 3 Side Buttons */}
+        <div className="flex gap-4 items-end mt-auto">
+          {/* Left Side - 2x2 Grid */}
+          <div className="w-[65%] grid grid-cols-2 gap-4 items-end transition-all duration-500 ease-in-out">
+            {/* Marks Button */}
+            <div
+              onClick={(e) => {
+                if (expandedButton !== 'marks') {
+                  e.preventDefault();
+                  setExpandedButton('marks');
+                }
+              }}
+              className={`relative bg-gradient-to-br from-purple-600/20 to-pink-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group cursor-pointer ${
+                expandedButton === 'marks'
+                  ? 'col-span-2 row-span-2 h-[29rem] self-end'
+                  : expandedButton
+                    ? 'opacity-0 scale-50 h-0 overflow-hidden'
+                    : 'h-56 opacity-100 scale-100'
+              }`}
+            >
+              {/* Four-way arrow icon */}
+              {expandedButton === 'marks' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedButton(null);
+                  }}
+                  className="absolute top-4 right-4 text-white/70 hover:text-white hover:scale-110 transition-all duration-200 z-10"
                 >
-                  <div className="flex-1">
-                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
-                      {subject.course_title}
-                    </p>
-                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                      {subject.category}
-                    </p>
-                  </div>
-                  <div className="text-center">
-                    <p className={`text-lg sm:text-xl md:text-2xl lg:text-2xl font-bold ${attendancePercent >= 75 ? 'text-green-400' : 'text-red-400'}`}>
-                      {subject.attendance_percentage}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="text-white/70 text-lg font-sora">
-            No attendance data available
-          </div>
-        )}
-      </div>
-
-      {/* Marks Section */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Marks Overview
-        </div>
-        {marksData?.all_courses && Array.isArray(marksData.all_courses) && marksData.all_courses.length > 0 ? (
-          <div className="flex flex-col gap-3 w-full">
-            {marksData.all_courses
-              .filter(course => course && course.assessments && Array.isArray(course.assessments) && course.assessments.length > 0)
-              .filter((course, index, self) => 
-                course && index === self.findIndex(c => 
-                  c && c.course_code === course.course_code && c.subject_type === course.subject_type
-                )
-              )
-              .map((course, index) => {
-                if (!course) return null;
-                
-                const getCourseTitle = (course: MarksCourse): string => {
-                  return course.course_title || course.course_code;
-                };
-
-                const getTotalMarks = () => {
-                  if (!course.assessments || !Array.isArray(course.assessments) || course.assessments.length === 0) return { obtained: 0, total: 0 };
-                  const obtained = course.assessments.reduce((sum, a) => sum + (a ? (parseFloat(a.marks_obtained) || 0) : 0), 0);
-                  const total = course.assessments.reduce((sum, a) => sum + (a ? (parseFloat(a.total_marks) || 0) : 0), 0);
-                  return { obtained, total };
-                };
-
-              const { obtained, total } = getTotalMarks();
-              
-              return (
-                <div 
-                  key={`${course.course_code}-${course.subject_type}-${index}`}
-                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
+              )}
+              {!expandedButton && (
+                <div
+                  className="absolute top-4 right-4 text-white/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                 >
-                  <div className="flex-1">
-                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
-                      {getCourseTitle(course)}
-                    </p>
-                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                      {course.course_code} • {course.subject_type}
-                    </p>
-                  </div>
-                  <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
-                    <div className="text-center">
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
-                      <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
-                      <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
-                    </div>
-                  </div>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
                 </div>
-              );
-            })}
+              )}
+              <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
+                Marks
+              </div>
+              <div className="text-white/70 text-sm font-sora text-center">
+                View your academic performance
+              </div>
+            </div>
+
+            {/* Attendance Button */}
+            <div
+              onClick={(e) => {
+                if (expandedButton !== 'attendance') {
+                  e.preventDefault();
+                  setExpandedButton('attendance');
+                }
+              }}
+              className={`relative bg-gradient-to-br from-blue-600/20 to-cyan-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group cursor-pointer ${
+                expandedButton === 'attendance'
+                  ? 'col-span-2 row-span-2 h-[29rem] self-end'
+                  : expandedButton
+                    ? 'opacity-0 scale-50 h-0 overflow-hidden'
+                    : 'h-56 opacity-100 scale-100'
+              }`}
+            >
+              {/* Four-way arrow icon */}
+              {expandedButton === 'attendance' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedButton(null);
+                  }}
+                  className="absolute top-4 right-4 text-white/70 hover:text-white hover:scale-110 transition-all duration-200 z-10"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
+              )}
+              {!expandedButton && (
+                <div
+                  className="absolute top-4 right-4 text-white/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </div>
+              )}
+              <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
+                Attendance
+              </div>
+              <div className="text-white/70 text-sm font-sora text-center">
+                Check attendance
+              </div>
+            </div>
+
+            {/* TimeTable Button */}
+            <Link
+              href="/timetable"
+              className={`bg-gradient-to-br from-green-600/20 to-emerald-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group ${
+                expandedButton
+                  ? 'opacity-0 scale-50 h-0 overflow-hidden pointer-events-none'
+                  : 'h-56 opacity-100 scale-100'
+              }`}
+            >
+              <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
+                TimeTable
+              </div>
+              <div className="text-white/70 text-sm font-sora text-center">
+                View schedule
+              </div>
+            </Link>
+
+            {/* Calendar Button */}
+            <Link
+              href="/calender"
+              className={`bg-gradient-to-br from-orange-600/20 to-red-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group ${
+                expandedButton
+                  ? 'opacity-0 scale-50 h-0 overflow-hidden pointer-events-none'
+                  : 'h-56 opacity-100 scale-100'
+              }`}
+            >
+              <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
+                Calendar
+              </div>
+              <div className="text-white/70 text-sm font-sora text-center">
+                View calendar
+              </div>
+            </Link>
           </div>
-        ) : (
-          <div className="text-white/70 text-lg font-sora">
-            No marks data available
+
+          {/* Right Side - 3 Extra Buttons */}
+          <div className="flex-1 flex flex-col gap-4 h-[29rem] transition-all duration-500 ease-in-out">
+            {/* Meal Chart Button */}
+            <Link
+              href="/mealchart"
+              className="flex-1 bg-gradient-to-br from-yellow-600/20 to-amber-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-6 hover:scale-[1.02] transition-transform duration-300 flex flex-col justify-end items-center group"
+            >
+              <div className="text-white text-xl font-sora font-bold mb-1 group-hover:scale-110 transition-transform">
+                Meal Chart
+              </div>
+            </Link>
+
+            {/* Faculty Button */}
+            <Link
+              href="/faculty"
+              className="flex-1 bg-gradient-to-br from-indigo-600/20 to-violet-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-6 hover:scale-[1.02] transition-transform duration-300 flex flex-col justify-end items-center group"
+            >
+              <div className="text-white text-xl font-sora font-bold mb-1 group-hover:scale-110 transition-transform">
+                Faculty
+              </div>
+            </Link>
+
+            {/* Grade Calc Button */}
+            <Link
+              href="/gradecalc"
+              className="flex-1 bg-gradient-to-br from-rose-600/20 to-red-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-6 hover:scale-[1.02] transition-transform duration-300 flex flex-col justify-end items-center group"
+            >
+              <div className="text-white text-xl font-sora font-bold mb-1 group-hover:scale-110 transition-transform">
+                Grade Calc
+              </div>
+            </Link>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Re-auth Modal */}
@@ -1304,8 +1395,8 @@ export default function Dashboard() {
             >
               Sign In
             </NavigationButton>
-      </div>
-      </div>
+          </div>
+        </div>
       )}
     </div>
   );

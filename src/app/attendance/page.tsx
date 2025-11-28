@@ -19,6 +19,7 @@ import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { trackFeatureClick } from "@/lib/analytics";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { transformAttendanceIfNeeded } from "@/lib/dataFormatHandler";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, aggregateOdmlHours, type OdmlRecord } from '@/lib/odmlStorage';
@@ -83,20 +84,20 @@ interface CalendarEvent {
 
 
 // Component for displaying remaining hours (using proven utility functions)
-const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccurrences }: { 
-  courseTitle: string; 
+const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccurrences }: {
+  courseTitle: string;
   category: string;
   dayOrderStats: DayOrderStats | null;
   slotOccurrences: SlotOccurrence[];
 }) => {
   console.log(`[RemainingHoursDisplay] Calculating for: "${courseTitle}" (${category})`);
   console.log(`[RemainingHoursDisplay] Available slot occurrences:`, slotOccurrences.map(s => `"${s.courseTitle}" (${s.category}) - Slots: ${s.slot} - DO: ${s.dayOrders.join(',')} - Hours: ${JSON.stringify(s.dayOrderHours)}`));
-  
+
   // Use the EXACT SAME matching logic as the working prediction code
   const findSlotData = (courseTitle: string, category: string, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
     console.log(`[RemainingHoursDisplay] Finding slot data for: "${courseTitle}" (${category})`);
     console.log(`[RemainingHoursDisplay] Available slot occurrences:`, slotOccurrences.map(s => `"${s.courseTitle}" (${s.category})`));
-    
+
     // Normalize category function (same as working code)
     const normalizeCategory = (cat: string): string => {
       const normalized = cat.toLowerCase().trim();
@@ -105,82 +106,82 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
       if (normalized.includes('theory')) return 'theory';
       return normalized;
     };
-    
+
     // Try exact match first
-    let slotData = slotOccurrences.find(occurrence => 
+    let slotData = slotOccurrences.find(occurrence =>
       occurrence.courseTitle.toLowerCase().trim() === courseTitle.toLowerCase().trim() &&
       normalizeCategory(occurrence.category) === normalizeCategory(category)
     );
-    
+
     if (slotData) {
       console.log(`[RemainingHoursDisplay] Exact match found: "${slotData.courseTitle}" (${slotData.category})`);
       return slotData;
     }
-    
+
     // For subjects that might have both Theory and Lab versions, be EXTRA strict
     const subjectTitle = courseTitle.toLowerCase().trim();
     const subjectCategory = normalizeCategory(category);
-    
+
     // Check if this subject has both Theory and Lab versions
-    const hasBothVersions = slotOccurrences.some(occ => 
-      occ.courseTitle.toLowerCase().trim() === subjectTitle && 
+    const hasBothVersions = slotOccurrences.some(occ =>
+      occ.courseTitle.toLowerCase().trim() === subjectTitle &&
       normalizeCategory(occ.category) !== subjectCategory
     );
-    
+
     if (hasBothVersions) {
       console.log(`[RemainingHoursDisplay] Subject "${courseTitle}" has both Theory and Lab versions - requiring EXACT match`);
       // For subjects with both versions, require EXACT title match
-      slotData = slotOccurrences.find(occurrence => 
+      slotData = slotOccurrences.find(occurrence =>
         occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
         normalizeCategory(occurrence.category) === subjectCategory
       );
-      
+
       if (slotData) {
         console.log(`[RemainingHoursDisplay] Exact match for dual-version subject: "${slotData.courseTitle}" (${slotData.category})`);
         return slotData;
       }
-      
+
       // If no exact match found for dual-version subject, return null to prevent wrong matches
       console.warn(`[RemainingHoursDisplay] No exact match found for dual-version subject "${courseTitle}" (${category}) - returning null`);
       return null;
     }
-    
+
     // Try fuzzy matching with EXTREMELY strict criteria (only if no exact match and no dual versions)
     slotData = slotOccurrences.find(occurrence => {
       // Require exact category match for fuzzy matching
       if (normalizeCategory(occurrence.category) !== subjectCategory) {
         return false;
       }
-      
+
       // EXTREMELY strict title matching - require at least 90% character overlap
       const occurrenceTitle = occurrence.courseTitle.toLowerCase().trim();
-      
+
       // Calculate character overlap percentage
       const longerTitle = subjectTitle.length > occurrenceTitle.length ? subjectTitle : occurrenceTitle;
       const shorterTitle = subjectTitle.length > occurrenceTitle.length ? occurrenceTitle : subjectTitle;
-      
+
       let overlapCount = 0;
       for (let i = 0; i < shorterTitle.length; i++) {
         if (longerTitle.includes(shorterTitle[i])) {
           overlapCount++;
         }
       }
-      
+
       const overlapPercentage = (overlapCount / longerTitle.length) * 100;
       const courseTitleMatch = overlapPercentage >= 90 && Math.abs(subjectTitle.length - occurrenceTitle.length) <= 1;
-      
+
       if (courseTitleMatch) {
         console.log(`[RemainingHoursDisplay] Fuzzy match found: "${occurrence.courseTitle}" (${occurrence.category}) - ${overlapPercentage.toFixed(1)}% overlap`);
       }
-    
+
     return courseTitleMatch;
     });
-    
+
     if (!slotData) {
       console.warn(`[RemainingHoursDisplay] No slot data found for: "${courseTitle}" (${category})`);
       console.warn(`[RemainingHoursDisplay] Searched ${slotOccurrences.length} occurrences`);
     }
-    
+
     return slotData || null;
   };
 
@@ -208,13 +209,13 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
     totalRemainingHours += dayCount * hoursPerDay;
     console.log(`[RemainingHoursDisplay] DO${doNumber}: ${dayCount} days × ${hoursPerDay} hours = ${dayCount * hoursPerDay} hours`);
   });
-  
+
   console.log(`[RemainingHoursDisplay] Total remaining hours calculated: ${totalRemainingHours}`);
-  
+
   if (totalRemainingHours === 0) {
     return <span className="text-yellow-400">0 hours (no remaining days)</span>;
   }
-  
+
   return <span className="text-blue-400">{totalRemainingHours} hours</span>;
 };
 
@@ -222,7 +223,7 @@ export default function AttendancePage() {
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Track errors
   useErrorTracking(error, '/attendance');
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
@@ -241,17 +242,19 @@ export default function AttendancePage() {
   const [showODMLModal, setShowODMLModal] = useState(false);
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
-  const [currentFact, setCurrentFact] = useState(getRandomFact());
+  const [currentFact, setCurrentFact] = useState('');
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
   const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(null); // Store original data
-  
+
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
 
   useEffect(() => {
     fetchUnifiedData();
+    // Set initial fact on client side only to avoid hydration mismatch
+    setCurrentFact(getRandomFact());
   }, []);
 
   // Load and apply saved ODML when attendance data is available
@@ -301,12 +304,12 @@ export default function AttendancePage() {
       ...originalAttendanceData,
       all_subjects: originalAttendanceData.all_subjects.map(subject => {
         if (!subject) return subject;
-        
+
         const odmlHours = aggregatedHours[subject.subject_code] || 0;
         const currentConducted = parseInt(subject.hours_conducted) || 0;
         const currentAbsent = parseInt(subject.hours_absent) || 0;
         const currentPresent = currentConducted - currentAbsent;
-        
+
         // Apply ODML adjustments
         const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
         const adjustedPresent = currentPresent + odmlHours;
@@ -324,13 +327,13 @@ export default function AttendancePage() {
     // Calculate prediction results for display
     const results: PredictionResult[] = adjustedData.all_subjects.map(subject => {
       if (!subject) return null as any;
-      
+
       const odmlHours = aggregatedHours[subject.subject_code] || 0;
       const currentConducted = parseInt(originalAttendanceData.all_subjects.find(s => s?.subject_code === subject.subject_code)?.hours_conducted || '0') || 0;
       const currentAbsent = parseInt(originalAttendanceData.all_subjects.find(s => s?.subject_code === subject.subject_code)?.hours_absent || '0') || 0;
       const currentPresent = currentConducted - currentAbsent;
       const currentAttendance = currentConducted > 0 ? (currentPresent / currentConducted) * 100 : 0;
-      
+
       const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
       const adjustedPresent = currentPresent + odmlHours;
       const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
@@ -358,7 +361,7 @@ export default function AttendancePage() {
   // Rotate facts every 8 seconds while loading
   useEffect(() => {
     if (!loading) return;
-    
+
     const interval = setInterval(() => {
       setCurrentFact(getRandomFact());
     }, 8000);
@@ -368,14 +371,14 @@ export default function AttendancePage() {
 
   // Use ref to prevent duplicate calls
   const isCalculatingRef = useRef(false);
-  
+
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
     // Prevent duplicate calls
     if (isCalculatingRef.current) {
       console.log('[Attendance] Prediction calculation already in progress, skipping duplicate call');
       return;
     }
-    
+
     if (!attendanceData) {
       return;
     }
@@ -383,7 +386,7 @@ export default function AttendancePage() {
     // Mark as calculating
     isCalculatingRef.current = true;
     setIsCalculating(true);
-    
+
     try {
       const results = calculatePredictedAttendance(
         attendanceData,
@@ -405,14 +408,14 @@ export default function AttendancePage() {
 
   // Use ref to prevent duplicate calls for ODML
   const isOdmlCalculatingRef = useRef(false);
-  
+
   const handleODMLCalculate = async (periods: LeavePeriod[]) => {
     // Prevent duplicate calls
     if (isOdmlCalculatingRef.current) {
       console.log('[Attendance] OD/ML calculation already in progress, skipping duplicate call');
       return;
     }
-    
+
     if (!attendanceData) {
       return;
     }
@@ -420,7 +423,7 @@ export default function AttendancePage() {
     // Mark as calculating
     isOdmlCalculatingRef.current = true;
     setIsCalculating(true);
-    
+
     try {
       const results = calculateODMLAdjustedAttendance(
         attendanceData,
@@ -428,14 +431,14 @@ export default function AttendancePage() {
         calendarData,
         periods
       );
-      
+
       // Save each period to database
       const access_token = getStorageItem('access_token');
       if (access_token) {
         for (const period of periods) {
           // Calculate subject hours for this specific period
           const subjectHours: Record<string, number> = {};
-          
+
           if (attendanceData && attendanceData.all_subjects) {
             attendanceData.all_subjects.forEach(subject => {
               if (!subject) return;
@@ -449,7 +452,7 @@ export default function AttendancePage() {
               }
             });
           }
-          
+
           // Save to database
           await saveOdmlRecord(
             access_token,
@@ -458,12 +461,12 @@ export default function AttendancePage() {
             subjectHours
           );
         }
-        
+
         // Reload saved ODML records
         const savedRecords = await fetchOdmlRecords(access_token);
         setSavedOdmlRecords(savedRecords);
       }
-      
+
       setPredictionResults(results);
       setIsOdmlMode(true);
       setIsPredictionMode(false);
@@ -492,7 +495,7 @@ export default function AttendancePage() {
   const toggleOdmlView = () => {
     const newShowOdmlApplied = !showOdmlApplied;
     setShowOdmlApplied(newShowOdmlApplied);
-    
+
     if (newShowOdmlApplied) {
       // Show with ODML
       if (savedOdmlRecords.length > 0 && originalAttendanceData) {
@@ -512,13 +515,54 @@ export default function AttendancePage() {
     setShowPasswordModal(false);
   };
 
+  // Background fetch function - updates cache without blocking UI
+  const fetchFreshDataInBackground = async (access_token: string, forceRefresh: boolean) => {
+    try {
+      console.log('[Attendance] 🔄 Background fetch started...');
+
+      const requestKey = `fetch_unified_all_bg_${access_token.substring(0, 10)}`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await fetch('/api/data/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+        });
+
+        const result = await response.json();
+        return { response, result };
+      });
+
+      const response = apiResult.response;
+      const result = apiResult.result;
+
+      if (response.ok && result.success && result.data?.attendance) {
+        const attendanceDataObj = transformAttendanceIfNeeded(result.data.attendance) as AttendanceData;
+
+        // Update UI with fresh data
+        setAttendanceData(attendanceDataObj);
+        setOriginalAttendanceData(attendanceDataObj);
+        setSemester(attendanceDataObj.metadata?.semester || 1);
+
+        // Update cache
+        setClientCache('attendance', attendanceDataObj);
+
+        console.log('[Attendance] ✅ Background fetch completed - data updated');
+      } else {
+        console.log('[Attendance] ⚠️ Background fetch completed but no new data');
+      }
+    } catch (err) {
+      console.error('[Attendance] ❌ Background fetch error (non-critical):', err);
+      // Don't show error to user - we're already showing cached data
+    }
+  };
+
   const refreshAttendanceData = async () => {
     try {
       setLoading(true);
       setError(null);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Attendance] No access token found');
         setError('Please sign in to view attendance');
@@ -528,28 +572,9 @@ export default function AttendancePage() {
 
       console.log('[Attendance] 🔄 Force refreshing attendance data...');
 
-      const response = await fetch('/api/data/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...getRequestBodyWithPassword(access_token, false),
-          data_type: 'attendance'
-        })
-      });
-
-      const result = await response.json();
-      console.log('[Attendance] Refresh API response:', result);
-      console.log('[Attendance] Refresh API response data:', result.data);
-      console.log('[Attendance] Refresh API response data type:', typeof result.data);
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to refresh attendance data');
-      }
-
-      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
-      // Fetch from unified endpoint to get data in the correct processed format from cache
-      console.log('[Attendance] ✅ Refresh completed, fetching updated data from cache...');
-      await fetchUnifiedData(false);
+      // Clear cache and fetch fresh
+      removeClientCache('attendance');
+      await fetchUnifiedData(true);
     } catch (err) {
       console.error('[Attendance] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');
@@ -559,11 +584,8 @@ export default function AttendancePage() {
 
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
-      setLoading(true);
-      setError(null);
-
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Attendance] No access token found');
         setError('Please sign in to view attendance');
@@ -571,124 +593,131 @@ export default function AttendancePage() {
         return;
       }
 
-      // Check client-side cache first (unless force refresh)
+      // Check client-side cache FIRST before showing loading state
       let cachedAttendance: AttendanceData | null = null;
-      
+
       if (!forceRefresh) {
         cachedAttendance = getClientCache<AttendanceData>('attendance');
-        
+
         // Use cached data immediately (stale-while-revalidate)
         if (cachedAttendance) {
           console.log('[Attendance] ✅ Using client-side cache for attendance');
           setAttendanceData(cachedAttendance);
           setOriginalAttendanceData(cachedAttendance); // Store original
           setSemester(cachedAttendance.metadata?.semester || 1);
+          setLoading(false); // Don't show loading if we have cache
+          setError(null);
+
+          // Fetch in background to update cache (non-blocking)
+          console.log('[Attendance] 🔄 Fetching fresh data in background...');
+          fetchFreshDataInBackground(access_token, false);
+          return; // Return early - we'll update when background fetch completes
         }
       } else {
         // Force refresh: clear client cache
         removeClientCache('attendance');
         console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
       }
-      
-      // Only fetch if cache is missing or force refresh
-      if (!cachedAttendance || forceRefresh) {
-        console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
-        
-        // Use request deduplication - ensures only ONE page calls backend at a time
-        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
-        const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-          });
-          
-          const result = await response.json();
-          return { response, result };
+
+      // No cache found - show loading and fetch
+      setLoading(true);
+      setError(null);
+      console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(no cache, fetching)');
+
+      // Use request deduplication - ensures only ONE page calls backend at a time
+      const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await fetch('/api/data/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
         });
-        
-        const response = apiResult.response;
-        const result = apiResult.result;
-        console.log('[Attendance] API response:', result);
 
-        // Handle session expiry
-        if (!response.ok || (result.error === 'session_expired')) {
-          console.error('[Attendance] Session expired');
-          setError('Your session has expired. Please re-enter your password.');
-          setShowPasswordModal(true);
-          setLoading(false);
-          return;
-        }
+        const result = await response.json();
+        return { response, result };
+      });
 
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to fetch data');
-        }
+      const response = apiResult.response;
+      const result = apiResult.result;
+      console.log('[Attendance] API response:', result);
 
-        // Process attendance data from unified endpoint
-        // Unified endpoint returns: { success: boolean, data: { attendance: AttendanceData, ... }, error?: string }
-        let attendanceDataObj: AttendanceData | null = null;
-        let extractedSemester: number = 1;
-        
-        console.log('[Attendance] Processing attendance data from API response');
-        console.log('[Attendance] result.data type:', typeof result.data);
-        console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
-        
-        // Extract attendance from unified response: { data: { attendance: AttendanceData, ... } }
-        if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
-          const attendanceData = (result.data as { attendance?: unknown }).attendance;
-          
-          if (attendanceData && typeof attendanceData === 'object') {
-            // Handle both unwrapped and wrapped data structures within attendance
-            let dataToProcess = attendanceData;
-            
-            // Check if data is wrapped in an extra 'data' property (legacy format)
-            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
-              console.log('[Attendance] 🔄 Unwrapping nested data structure in frontend');
-              dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
-            }
-            
-            // Check if it's the expected AttendanceData format
-            if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
-              attendanceDataObj = dataToProcess as AttendanceData;
-              extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || 1;
-              console.log('[Attendance] ✅ Attendance data loaded');
-              console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
-              console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
-            } else {
-              console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
-              console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
-            }
+      // Handle session expiry
+      if (!response.ok || (result.error === 'session_expired')) {
+        console.error('[Attendance] Session expired');
+        setError('Your session has expired. Please re-enter your password.');
+        setShowPasswordModal(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch data');
+      }
+
+      // Process attendance data from unified endpoint
+      // Unified endpoint returns: { success: boolean, data: { attendance: AttendanceData, ... }, error?: string }
+      let attendanceDataObj: AttendanceData | null = null;
+      let extractedSemester: number = 1;
+
+      console.log('[Attendance] Processing attendance data from API response');
+      console.log('[Attendance] result.data type:', typeof result.data);
+      console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+
+      // Extract attendance from unified response: { data: { attendance: AttendanceData, ... } }
+      if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
+        const attendanceData = (result.data as { attendance?: unknown }).attendance;
+
+        if (attendanceData && typeof attendanceData === 'object') {
+          // Transform if needed (Go format -> Python format)
+          let dataToProcess = transformAttendanceIfNeeded(attendanceData) as typeof attendanceData;
+
+          // Check if data is wrapped in an extra 'data' property (legacy format)
+          if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
+            console.log('[Attendance] 🔄 Unwrapping nested data structure in frontend');
+            dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
           }
-        } else {
-          console.warn('[Attendance] ⚠️ result.data.attendance is not available');
-          console.warn('[Attendance] result.data structure:', result.data);
-        }
-        
-        if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
-          setAttendanceData(attendanceDataObj);
-          setOriginalAttendanceData(attendanceDataObj); // Store original
-          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
-          console.log('[Attendance] Extracted semester:', extractedSemester);
-          setSemester(extractedSemester);
-          
-          // Save to client cache
-          setClientCache('attendance', attendanceDataObj);
-        } else {
-          // Keep page visible even when attendance data is unavailable
-          // User can use refresh button to fetch data
-          console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
-          if (result && result.data) {
-            console.warn('[Attendance] Attendance data type:', typeof result.data);
-            console.warn('[Attendance] Attendance data value:', result.data);
+
+          // Check if it's the expected AttendanceData format
+          if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
+            attendanceDataObj = dataToProcess as AttendanceData;
+            extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || 1;
+            console.log('[Attendance] ✅ Attendance data loaded');
+            console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
+            console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
+          } else {
+            console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
+            console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
           }
-          setAttendanceData(null);
-          // Don't throw error, just log it so page remains visible
         }
-        
-        // Register attendance fetch for smart prefetch scheduling
-        if (result.success && attendanceDataObj) {
-          registerAttendanceFetch();
+      } else {
+        console.warn('[Attendance] ⚠️ result.data.attendance is not available');
+        console.warn('[Attendance] result.data structure:', result.data);
+      }
+
+      if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
+        setAttendanceData(attendanceDataObj);
+        setOriginalAttendanceData(attendanceDataObj); // Store original
+        console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
+        console.log('[Attendance] Extracted semester:', extractedSemester);
+        setSemester(extractedSemester);
+
+        // Save to client cache
+        setClientCache('attendance', attendanceDataObj);
+      } else {
+        // Keep page visible even when attendance data is unavailable
+        // User can use refresh button to fetch data
+        console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
+        if (result && result.data) {
+          console.warn('[Attendance] Attendance data type:', typeof result.data);
+          console.warn('[Attendance] Attendance data value:', result.data);
         }
+        setAttendanceData(null);
+        // Don't throw error, just log it so page remains visible
+      }
+
+      // Register attendance fetch for smart prefetch scheduling
+      if (result.success && attendanceDataObj) {
+        registerAttendanceFetch();
       }
 
     } catch (err) {
@@ -766,26 +795,26 @@ export default function AttendancePage() {
 
   // Calculate predicted margin: simply subtract absent hours during leave from current margin
   const getPredictedMargin = (
-    subject: AttendanceSubject, 
-    prediction: PredictionResult, 
+    subject: AttendanceSubject,
+    prediction: PredictionResult,
     requiredMargin: { type: string; value: number; text: string }
   ) => {
     // Get current margin value (positive for margin, negative for required)
     const currentMarginValue = requiredMargin.type === 'margin' ? requiredMargin.value : -requiredMargin.value;
-    
+
     // Get absent hours during leave period
     const absentHoursDuringLeave = prediction.absentHoursDuringLeave || 0;
-    
+
     // For OD/ML mode, we might have reduction hours (absences reduced), so adjust accordingly
     let adjustment = absentHoursDuringLeave;
     if (isOdmlMode && prediction.odmlReductionHours) {
       // OD/ML reduces absences, so margin should increase
       adjustment = -prediction.odmlReductionHours;
     }
-    
+
     // Calculate new margin: current margin minus absent hours
     const newMargin = currentMarginValue - adjustment;
-    
+
     if (newMargin < 0) {
       // Margin went negative, now it's required hours
       return {
@@ -837,7 +866,7 @@ export default function AttendancePage() {
         <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
         <div className="text-red-400 font-sora text-base sm:text-lg md:text-xl lg:text-xl text-center px-4">{error}</div>
         <div className="flex gap-3 sm:gap-4">
-          <button 
+          <button
             onClick={() => fetchUnifiedData()}
             className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
         >
@@ -862,23 +891,23 @@ export default function AttendancePage() {
     return (
       <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
         {/* Home Icon */}
-        <Link 
+        <Link
           href="/dashboard"
           className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
           aria-label="Go to Dashboard"
         >
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            fill="none" 
-            viewBox="0 0 24 24" 
-            strokeWidth={2} 
-            stroke="currentColor" 
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
             className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
           </svg>
         </Link>
-        
+
         <div className="flex flex-col items-center gap-4">
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
@@ -889,12 +918,12 @@ export default function AttendancePage() {
               aria-label="Refresh attendance data"
               title="Refresh attendance data"
             >
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                fill="none" 
-                viewBox="0 0 24 24" 
-                strokeWidth={2} 
-                stroke="currentColor" 
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
                 className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -902,7 +931,7 @@ export default function AttendancePage() {
             </button>
           </div>
         </div>
-        
+
         <div className="flex flex-col items-center justify-center gap-4 h-full">
           <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
             No attendance data available
@@ -926,23 +955,23 @@ export default function AttendancePage() {
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
       {/* Home Icon */}
-      <Link 
+      <Link
         href="/dashboard"
         className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
         aria-label="Go to Dashboard"
       >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+          stroke="currentColor"
           className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
         </svg>
       </Link>
-      
+
       <div className="flex flex-col items-center gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
@@ -953,12 +982,12 @@ export default function AttendancePage() {
             aria-label="Refresh attendance data"
             title="Refresh attendance data"
           >
-            <svg 
-              xmlns="http://www.w3.org/2000/svg" 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              strokeWidth={2} 
-              stroke="currentColor" 
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
               className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -966,7 +995,7 @@ export default function AttendancePage() {
           </button>
         </div>
       </div>
-      
+
       {/* Prediction Controls */}
       <div className="flex gap-4 items-center">
         {!isPredictionMode && !isOdmlMode ? (
@@ -978,10 +1007,10 @@ export default function AttendancePage() {
                       return;
                     }
                     isOpeningPredictionModal.current = true;
-                    
+
                     trackFeatureClick('predict_attendance', '/attendance');
                     setShowPredictionModal(true);
-                    
+
                     // Reset after a short delay
                     setTimeout(() => {
                       isOpeningPredictionModal.current = false;
@@ -989,10 +1018,10 @@ export default function AttendancePage() {
                   }}
                   className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
                   >
-                  <ShinyText 
-                      text="Predict Attendance" 
-                      disabled={false} 
-                      speed={3} 
+                  <ShinyText
+                      text="Predict Attendance"
+                      disabled={false}
+                      speed={3}
                       className="text-white"
                   />
               </button>
@@ -1003,10 +1032,10 @@ export default function AttendancePage() {
                       return;
                     }
                     isOpeningOdmlModal.current = true;
-                    
+
                     trackFeatureClick('predict_odml', '/attendance');
                     setShowODMLModal(true);
-                    
+
                     // Reset after a short delay
                     setTimeout(() => {
                       isOpeningOdmlModal.current = false;
@@ -1014,10 +1043,10 @@ export default function AttendancePage() {
                   }}
                   className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
                   >
-                  <ShinyText 
-                      text="Add OD/ML" 
-                      disabled={false} 
-                      speed={3} 
+                  <ShinyText
+                      text="Add OD/ML"
+                      disabled={false}
+                      speed={3}
                       className="text-white"
                   />
               </button>
@@ -1032,7 +1061,7 @@ export default function AttendancePage() {
                 className="text-white"
               />
             </div>
-            <button 
+            <button
               onClick={handleCancelPrediction}
               className="bg-red-600 hover:bg-red-700 text-white font-sora px-4 py-1.5 sm:px-5 sm:py-2 md:px-6 md:py-2 lg:px-6 lg:py-2 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
             >
@@ -1071,11 +1100,11 @@ export default function AttendancePage() {
           attendanceData.all_subjects.map((subject, index) => {
             if (!subject) return null; // Skip null subjects
           // Get prediction data if in prediction mode or OD/ML mode
-          const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p => 
-            p.subject.subject_code === subject.subject_code && 
+          const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p =>
+            p.subject.subject_code === subject.subject_code &&
             p.subject.category === subject.category
           ) : null;
-          
+
           const pieChartData = createPieChartData(subject);
           const attendancePercentage = prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance);
           const currentAttendance = prediction ? prediction.currentAttendance : getAttendancePercentage(subject.attendance);
@@ -1085,7 +1114,7 @@ export default function AttendancePage() {
 
           // Debug: Log attendance subject data
           console.log(`[Attendance] Subject: ${subject.course_title} (${subject.category})`);
-          
+
           // Debug: Log prediction matching
           if (prediction) {
             console.log(`[DEBUG] Found prediction for ${subject.course_title} (${subject.category}):`, {
@@ -1096,7 +1125,7 @@ export default function AttendancePage() {
           } else if (isPredictionMode || isOdmlMode) {
             console.warn(`[DEBUG] No prediction found for ${subject.course_title} (${subject.category})`);
           }
-          
+
   return (
             <div key={`${subject.subject_code}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
               {/* Main Card Content */}
@@ -1120,8 +1149,8 @@ export default function AttendancePage() {
                   <div className="flex flex-col justify-center items-start gap-3">
                     <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
               <span className="text-blue-400 text-xs sm:text-sm font-sora">Total: </span>
-                      {prediction ? 
-                        (isOdmlMode ? 
+                      {prediction ?
+                        (isOdmlMode ?
                           `${subject.hours_conducted} hours` : // OD/ML: total stays same
                           `${parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate} hours` // Prediction: add future hours
                         ) :
@@ -1140,8 +1169,8 @@ export default function AttendancePage() {
             </div>
                     <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
               <span className="text-red-400 text-xs sm:text-sm font-sora">Absent: </span>
-                      {prediction ? 
-                        (isOdmlMode ? 
+                      {prediction ?
+                        (isOdmlMode ?
                           `${prediction.absentHoursDuringLeave} hours` : // OD/ML: show adjusted absent
                           `${parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave} hours` // Prediction: add future absent
                         ) :
@@ -1160,8 +1189,8 @@ export default function AttendancePage() {
             </div>
                     <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
               <span className="text-green-400 text-xs sm:text-sm font-sora">Present: </span>
-                      {prediction ? 
-                        (isOdmlMode ? 
+                      {prediction ?
+                        (isOdmlMode ?
                           `${prediction.presentHoursTillStartDate} hours` : // OD/ML: show adjusted present
                           `${(parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate) - (parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave)} hours` // Prediction: calculate total present
                         ) :
@@ -1179,11 +1208,11 @@ export default function AttendancePage() {
                       )}
                     </div>
                     <div className={`bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora p-2 sm:p-3 ${
-                      predictedMargin ? 
+                      predictedMargin ?
                         (predictedMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10') :
                         (requiredMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10')
                     }`}>
-                      {predictedMargin ? 
+                      {predictedMargin ?
                         <>
                           <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${
                             predictedMargin.type === 'required' ? 'text-red-400' : 'text-green-400'
@@ -1220,8 +1249,8 @@ export default function AttendancePage() {
                     console.log('[PIE CHART DEBUG] hours_absent:', subject.hours_absent);
                     return null;
                   })()}
-                  <div 
-                    className="relative w-full h-full flex items-center justify-center" 
+                  <div
+                    className="relative w-full h-full flex items-center justify-center"
                     style={{ minWidth: '200px', minHeight: '200px' }}
                     ref={(el) => {
                       if (el) {
@@ -1301,11 +1330,11 @@ export default function AttendancePage() {
                     <div className="bg-white/10 border border-white/20 rounded-3xl p-3 sm:p-4">
                       <div className="text-white font-sora text-base sm:text-lg font-bold mb-2 sm:mb-3">Hours Remaining</div>
                       <div className="text-blue-400 font-sora text-xl sm:text-2xl font-bold">
-                        {prediction ? 
+                        {prediction ?
                           (() => {
                             // SIMPLE CALCULATION: Calculate actual remaining hours after prediction
                             const futureHours = prediction.totalHoursTillEndDate;
-                            
+
                             // Calculate original remaining hours using the same logic as RemainingHoursDisplay
                             const findSlotData = (courseTitle: string, category: string, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
                               const normalizeCategory = (cat: string): string => {
@@ -1315,34 +1344,34 @@ export default function AttendancePage() {
                                 if (normalized.includes('theory')) return 'theory';
                                 return normalized;
                               };
-                              
-                              let slotData = slotOccurrences.find(occurrence => 
+
+                              let slotData = slotOccurrences.find(occurrence =>
                                 occurrence.courseTitle.toLowerCase().trim() === courseTitle.toLowerCase().trim() &&
                                 normalizeCategory(occurrence.category) === normalizeCategory(category)
                               );
-                              
+
                               if (!slotData) {
                                 const subjectTitle = courseTitle.toLowerCase().trim();
                                 const subjectCategory = normalizeCategory(category);
-                                
-                                const hasBothVersions = slotOccurrences.some(occ => 
-                                  occ.courseTitle.toLowerCase().trim() === subjectTitle && 
+
+                                const hasBothVersions = slotOccurrences.some(occ =>
+                                  occ.courseTitle.toLowerCase().trim() === subjectTitle &&
                                   normalizeCategory(occ.category) !== subjectCategory
                                 );
-                                
+
                                 if (hasBothVersions) {
-                                  slotData = slotOccurrences.find(occurrence => 
+                                  slotData = slotOccurrences.find(occurrence =>
                                     occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
                                     normalizeCategory(occurrence.category) === subjectCategory
                                   );
                                 }
                               }
-                              
+
                               return slotData || null;
                             };
 
                             const slotData = findSlotData(subject.course_title, subject.category, slotOccurrences);
-                            
+
                             if (!slotData || !dayOrderStats) {
                               console.log(`[Attendance] Prediction - No timetable data for ${subject.course_title}`);
                               return <span className="text-red-400">0 hours (no timetable data)</span>;
@@ -1357,30 +1386,30 @@ export default function AttendancePage() {
                                 originalRemainingHours += dayCount * hoursPerDay;
                               });
                             }
-                            
+
                             // Calculate new remaining hours: original - future hours being added
                             const newRemainingHours = originalRemainingHours - futureHours;
-                            
+
                             console.log(`[Attendance] Prediction - Remaining hours calculation for ${subject.course_title}:`);
                             console.log(`[Attendance] Prediction - Original remaining: ${originalRemainingHours}`);
                             console.log(`[Attendance] Prediction - Future hours being added: ${futureHours}`);
                             console.log(`[Attendance] Prediction - New remaining: ${newRemainingHours}`);
-                            
+
                             if (newRemainingHours <= 0) {
                               return <span className="text-yellow-400">0 hours (completed)</span>;
                             }
-                            
+
                             return <span className="text-blue-400">{newRemainingHours} hours</span>;
                           })() :
-                          <RemainingHoursDisplay 
-                            courseTitle={subject.course_title} 
+                          <RemainingHoursDisplay
+                            courseTitle={subject.course_title}
                             category={subject.category}
                             dayOrderStats={dayOrderStats}
                             slotOccurrences={slotOccurrences}
                           />
                         }
                       </div>
-                      
+
                     </div>
 
                     {/* Absent Days */}
@@ -1418,7 +1447,7 @@ export default function AttendancePage() {
                   {isPredictionMode ? 'Predicted Attendance' : 'Overall Attendance'}
                 </div>
                 <div className="text-lg font-bold">
-                  {isPredictionMode && predictionResults && predictionResults.length > 0 ? 
+                  {isPredictionMode && predictionResults && predictionResults.length > 0 ?
                     `${(predictionResults.reduce((sum, p) => sum + (p?.predictedAttendance || 0), 0) / predictionResults.length).toFixed(1)}%` :
                     attendanceData.summary.overall_attendance_percentage || '0%'
                   }
@@ -1432,7 +1461,7 @@ export default function AttendancePage() {
             </div>
           </div>
         ) : null}
-      
+
       {/* Attendance Prediction Modal */}
       {attendanceData && (
         <AttendancePredictionModal
@@ -1447,7 +1476,7 @@ export default function AttendancePage() {
           isCalculating={isCalculating}
         />
       )}
-      
+
       {/* OD/ML Modal */}
       {attendanceData && (
         <ODMLModal

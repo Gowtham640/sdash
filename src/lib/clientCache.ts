@@ -4,6 +4,8 @@
  */
 
 import { getStorageItem, setStorageItem, removeStorageItem } from './browserStorage';
+import { isGoFormat as isGoFormatMarks } from './marksTransform';
+import { isGoFormat as isGoFormatAttendance } from './attendanceTransform';
 
 const CACHE_PREFIX = 'client_cache_';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour in milliseconds
@@ -22,22 +24,36 @@ export function getClientCache<T>(dataType: CacheDataType): T | null {
   try {
     const cacheKey = `${CACHE_PREFIX}${dataType}`;
     const cached = getStorageItem(cacheKey);
-    
+
     if (!cached) {
       return null;
     }
-    
+
     const entry: CacheEntry<T> = JSON.parse(cached);
     const now = Date.now();
     const age = now - entry.timestamp;
-    
+
     if (age > CACHE_TTL_MS) {
       // Cache expired, remove it
       removeStorageItem(cacheKey);
       console.log(`[ClientCache] Cache expired for ${dataType} (age: ${Math.round(age / 1000 / 60)} minutes)`);
       return null;
     }
-    
+
+    // Special handling for marks: invalidate if in Go format (old format)
+    if (dataType === 'marks' && isGoFormatMarks(entry.data)) {
+      removeStorageItem(cacheKey);
+      console.log(`[ClientCache] 🔄 Invalidated old marks format (Go format detected)`);
+      return null;
+    }
+
+    // Special handling for attendance: invalidate if in Go format (old format)
+    if (dataType === 'attendance' && isGoFormatAttendance(entry.data)) {
+      removeStorageItem(cacheKey);
+      console.log(`[ClientCache] 🔄 Invalidated old attendance format (Go format detected)`);
+      return null;
+    }
+
     const remainingMinutes = Math.round((CACHE_TTL_MS - age) / 1000 / 60);
     console.log(`[ClientCache] ✅ Cache hit for ${dataType} (${remainingMinutes} minutes remaining)`);
     return entry.data;
@@ -57,7 +73,7 @@ export function setClientCache<T>(dataType: CacheDataType, data: T): boolean {
       data,
       timestamp: Date.now(),
     };
-    
+
     const stored = setStorageItem(cacheKey, JSON.stringify(entry));
     if (stored) {
       console.log(`[ClientCache] ✅ Cached ${dataType} (expires in 1 hour)`);
@@ -96,4 +112,3 @@ export function isClientCacheValid(dataType: CacheDataType): boolean {
   const cached = getClientCache(dataType);
   return cached !== null;
 }
-
