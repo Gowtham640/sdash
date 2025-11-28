@@ -549,7 +549,7 @@ export default function AttendancePage() {
       // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
       // Fetch from unified endpoint to get data in the correct processed format from cache
       console.log('[Attendance] ✅ Refresh completed, fetching updated data from cache...');
-      await fetchUnifiedData(false);
+        await fetchUnifiedData(false);
     } catch (err) {
       console.error('[Attendance] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');
@@ -573,15 +573,40 @@ export default function AttendancePage() {
 
       // Check client-side cache first (unless force refresh)
       let cachedAttendance: AttendanceData | null = null;
+      let needsBackgroundRefresh = false;
       
       if (!forceRefresh) {
         cachedAttendance = getClientCache<AttendanceData>('attendance');
         
-        // Use cached data immediately (stale-while-revalidate)
-        if (cachedAttendance) {
+        // If client cache is expired, fetch Supabase cache (even if expired)
+        if (!cachedAttendance) {
+          console.log('[Attendance] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
+          try {
+            const result = await fetch('/api/data/cache', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ access_token, data_type: 'attendance' })
+            });
+            const cacheResult = await result.json();
+            if (cacheResult.success && cacheResult.data) {
+              console.log(`[Attendance] ✅ Found Supabase cache (expired: ${cacheResult.isExpired})`);
+              cachedAttendance = cacheResult.data as AttendanceData;
+              setAttendanceData(cachedAttendance);
+              setOriginalAttendanceData(cachedAttendance);
+              setSemester(cachedAttendance.metadata?.semester || 1);
+              if (cacheResult.isExpired) {
+                needsBackgroundRefresh = true;
+                console.log('[Attendance] ⚠️ Cache is expired, will refresh in background');
+              }
+            }
+          } catch (err) {
+            console.error('[Attendance] ❌ Error fetching Supabase cache:', err);
+          }
+        } else {
+          // Use client-side cached data
           console.log('[Attendance] ✅ Using client-side cache for attendance');
           setAttendanceData(cachedAttendance);
-          setOriginalAttendanceData(cachedAttendance); // Store original
+          setOriginalAttendanceData(cachedAttendance);
           setSemester(cachedAttendance.metadata?.semester || 1);
         }
       } else {
@@ -590,8 +615,8 @@ export default function AttendancePage() {
         console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
       }
       
-      // Only fetch if cache is missing or force refresh
-      if (!cachedAttendance || forceRefresh) {
+      // Only fetch if cache is missing or force refresh or expired
+      if (!cachedAttendance || forceRefresh || needsBackgroundRefresh) {
         console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
         
         // Use request deduplication - ensures only ONE page calls backend at a time

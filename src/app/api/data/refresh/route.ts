@@ -3,6 +3,7 @@ import { callBackendScraper } from '@/lib/scraperClient';
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { setSupabaseCache, deleteSupabaseCache } from "@/lib/supabaseCache";
 import { removeClientCache } from "@/lib/clientCache";
+import { transformGoBackendAttendance, transformGoBackendMarks } from "@/lib/dataTransformers";
 
 /**
  * Individual data type refresh endpoint
@@ -129,13 +130,13 @@ export async function POST(request: NextRequest) {
     let fetchError: string | null = null;
 
     try {
-      // Check if we need to re-authenticate with Go backend
-      // If password is provided and cookies might be missing/expired, login first
-      if (password) {
-        const { getBackendCookies, loginToGoBackend } = await import('@/lib/scraperClient');
-        const cookies = getBackendCookies();
-        
-        if (!cookies) {
+      // Always check for cookies first
+      const { getBackendCookies, loginToGoBackend } = await import('@/lib/scraperClient');
+      const cookies = getBackendCookies();
+      
+      // If no cookies found, we need to authenticate
+      if (!cookies) {
+        if (password) {
           console.log(`[API /data/refresh] 🔐 No cookies found, logging in to Go backend first...`);
           try {
             const loginResult = await loginToGoBackend(user_email, password);
@@ -143,12 +144,23 @@ export async function POST(request: NextRequest) {
               console.log(`[API /data/refresh] ✅ Go backend login successful - cookies stored`);
             } else {
               console.warn(`[API /data/refresh] ⚠️ Go backend login failed: ${loginResult.message || 'Unknown error'}`);
+              // Return error if login failed
+              fetchError = `Authentication failed: ${loginResult.message || 'Please check your credentials'}`;
+              throw new Error(fetchError);
             }
           } catch (loginError) {
             console.error(`[API /data/refresh] ❌ Go backend login error:`, loginError);
-            // Continue anyway - might still work if cookies are valid
+            fetchError = loginError instanceof Error ? loginError.message : 'Authentication failed. Please check your credentials.';
+            throw loginError;
           }
+        } else {
+          // No cookies and no password - can't proceed
+          console.error(`[API /data/refresh] ❌ No cookies found and no password provided`);
+          fetchError = 'Session expired. Please re-login with your password.';
+          throw new Error(fetchError);
         }
+      } else {
+        console.log(`[API /data/refresh] ✅ Cookies found, proceeding with backend call`);
       }
 
       const action = `get_${data_type}_data`;
@@ -207,12 +219,22 @@ export async function POST(request: NextRequest) {
           }
         }
         
+        // Transform Go backend format to frontend format if needed
+        if (data_type === 'attendance') {
+          console.log(`[API /data/refresh] 🔄 Transforming attendance data from Go backend format`);
+          dataToSave = transformGoBackendAttendance(dataToSave) as Record<string, unknown>;
+        } else if (data_type === 'marks') {
+          console.log(`[API /data/refresh] 🔄 Transforming marks data from Go backend format`);
+          dataToSave = transformGoBackendMarks(dataToSave) as Record<string, unknown>;
+        }
+        // Timetable transformation is handled in the frontend (timetable page)
+        
         freshData = dataToSave;
         
         // Save to Supabase cache (except calendar, which is always fetched from public.calendar table)
         if (data_type !== 'calendar') {
           try {
-            await setSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'timetable', freshData);
+            await setSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'timetable', freshData as Record<string, unknown>);
             console.log(`[API /data/refresh] ✅ Saved ${data_type} to Supabase cache`);
           } catch (cacheError) {
             console.error(`[API /data/refresh] ❌ Failed to save to cache:`);
@@ -243,12 +265,19 @@ export async function POST(request: NextRequest) {
     if (fetchError || !freshData) {
       console.error(`[API /data/refresh] ❌ Refresh failed (${totalTime}ms)`);
       console.log("===========================================");
+      
+      // Return 401 for authentication/session errors, 500 for other errors
+      const isAuthError = fetchError?.toLowerCase().includes('session expired') || 
+                         fetchError?.toLowerCase().includes('authentication failed') ||
+                         fetchError?.toLowerCase().includes('please re-login');
+      const statusCode = isAuthError ? 401 : 500;
+      
       return NextResponse.json(
         {
           success: false,
           error: fetchError || `Failed to fetch ${data_type} data`,
         },
-        { status: 500 }
+        { status: statusCode }
       );
     }
 

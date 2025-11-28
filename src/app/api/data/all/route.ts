@@ -5,6 +5,7 @@ import { requestQueueTracker } from "@/lib/requestQueue";
 import { getSupabaseCache, setSupabaseCache, getSupabaseCacheWithInfo, deleteSupabaseCache } from "@/lib/supabaseCache";
 import { removeClientCache } from "@/lib/clientCache";
 import { trackApiRequest, trackServerError } from "@/lib/analyticsServer";
+import { transformGoBackendAttendance, transformGoBackendMarks } from "@/lib/dataTransformers";
 
 /**
  * Unified data endpoint - Returns all data types in one call
@@ -334,7 +335,9 @@ export async function POST(request: NextRequest) {
           }
           if (dynamicDataData.attendance && needAttendance) {
             try {
-              await setSupabaseCache(user_id, 'attendance', dynamicDataData.attendance);
+              // Transform Go backend format to frontend format before saving
+              const transformedAttendance = transformGoBackendAttendance(dynamicDataData.attendance);
+              await setSupabaseCache(user_id, 'attendance', transformedAttendance);
             } catch (cacheError) {
               console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
               console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
@@ -343,7 +346,9 @@ export async function POST(request: NextRequest) {
           }
           if (dynamicDataData.marks && needMarks) {
             try {
-              await setSupabaseCache(user_id, 'marks', dynamicDataData.marks);
+              // Transform Go backend format to frontend format before saving
+              const transformedMarks = transformGoBackendMarks(dynamicDataData.marks);
+              await setSupabaseCache(user_id, 'marks', transformedMarks);
             } catch (cacheError) {
               console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
               console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
@@ -487,9 +492,11 @@ export async function POST(request: NextRequest) {
           console.log(`[API /data/all] 🔄 Backend scraper call: Fetching attendance`);
           const attendanceResult = await callPythonIndividualData(user_email, user_id, password, 'attendance');
           if (attendanceResult.success && attendanceResult.data) {
-            (dynamicData.data as { attendance?: unknown }).attendance = attendanceResult.data;
+            // Transform Go backend format to frontend format
+            const transformedAttendance = transformGoBackendAttendance(attendanceResult.data);
+            (dynamicData.data as { attendance?: unknown }).attendance = transformedAttendance;
             try {
-              await setSupabaseCache(user_id, 'attendance', attendanceResult.data);
+              await setSupabaseCache(user_id, 'attendance', transformedAttendance);
             } catch (cacheError) {
               console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
               console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
@@ -515,9 +522,11 @@ export async function POST(request: NextRequest) {
           console.log(`[API /data/all] 🔄 Backend scraper call: Fetching marks`);
           const marksResult = await callPythonIndividualData(user_email, user_id, password, 'marks');
           if (marksResult.success && marksResult.data) {
-            (dynamicData.data as { marks?: unknown }).marks = marksResult.data;
+            // Transform Go backend format to frontend format
+            const transformedMarks = transformGoBackendMarks(marksResult.data);
+            (dynamicData.data as { marks?: unknown }).marks = transformedMarks;
             try {
-              await setSupabaseCache(user_id, 'marks', marksResult.data);
+              await setSupabaseCache(user_id, 'marks', transformedMarks);
             } catch (cacheError) {
               console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
               console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
@@ -710,9 +719,9 @@ export async function POST(request: NextRequest) {
         semesterForCalendar = semesterFromAttendance;
         if (!semesterForCalendar) {
           console.log(`[API /data/all] 🔍 Semester not in database, fetching from database...`);
-          semesterForCalendar = await getSemesterFromDatabase(user_id);
+        semesterForCalendar = await getSemesterFromDatabase(user_id);
           console.log(`[API /data/all]   - Semester from database (fallback): ${semesterForCalendar || 'none'}`);
-        }
+      }
       }
       
       // If program not in database, use course from attendance or default to "B.Tech"
@@ -1429,11 +1438,15 @@ function mergeSplitDataResults(
     // Get attendance from dynamicData first, then fallback to cached data
     const attendanceFromDynamic = (dynamicData?.data as { attendance?: unknown } | undefined)?.attendance;
     if (attendanceFromDynamic && attendanceFromDynamic !== null) {
-      dataObject.attendance = attendanceFromDynamic;
+      // Transform if needed (data from backend might be in Go format)
+      const transformedAttendance = transformGoBackendAttendance(attendanceFromDynamic);
+      dataObject.attendance = transformedAttendance;
       console.log(`[API /data/all] ✅ Using attendance from dynamicData`);
     } else if (options?.cachedAttendance) {
       // Use cached attendance when dynamicData doesn't have it or it's null
-      dataObject.attendance = options.cachedAttendance;
+      // Transform if needed (cached data might be in Go format if saved before transformation was added)
+      const transformedCachedAttendance = transformGoBackendAttendance(options.cachedAttendance);
+      dataObject.attendance = transformedCachedAttendance;
       console.log(`[API /data/all] ✅ Using cached attendance (dynamicData had null or missing attendance)`);
     } else {
       dataObject.attendance = null;
@@ -1445,11 +1458,15 @@ function mergeSplitDataResults(
     // Get marks from dynamicData first, then fallback to cached data
     const marksFromDynamic = (dynamicData?.data as { marks?: unknown } | undefined)?.marks;
     if (marksFromDynamic && marksFromDynamic !== null) {
-      dataObject.marks = marksFromDynamic;
+      // Transform if needed (data from backend might be in Go format)
+      const transformedMarks = transformGoBackendMarks(marksFromDynamic);
+      dataObject.marks = transformedMarks;
       console.log(`[API /data/all] ✅ Using marks from dynamicData`);
     } else if (options?.cachedMarks) {
       // Use cached marks when dynamicData doesn't have it or it's null
-      dataObject.marks = options.cachedMarks;
+      // Transform if needed (cached data might be in Go format if saved before transformation was added)
+      const transformedCachedMarks = transformGoBackendMarks(options.cachedMarks);
+      dataObject.marks = transformedCachedMarks;
       console.log(`[API /data/all] ✅ Using cached marks (dynamicData had null or missing marks)`);
     } else {
       dataObject.marks = null;

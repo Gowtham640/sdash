@@ -120,7 +120,7 @@ export default function TimetablePage() {
       // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
       // Fetch from unified endpoint to get data in the correct processed format from cache
       console.log('[Timetable] ✅ Refresh completed, fetching updated data from cache...');
-      await fetchUnifiedData(false);
+        await fetchUnifiedData(false);
     } catch (err) {
       console.error('[Timetable] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');
@@ -149,6 +149,7 @@ export default function TimetablePage() {
       // Check client-side cache first (unless force refresh)
       let cachedTimetable: TimetableData | null = null;
       let hasValidCache = false;
+      let needsBackgroundRefresh = false;
       
       if (!forceRefresh) {
         const cachedTimetableRaw = getClientCache('timetable');
@@ -182,6 +183,47 @@ export default function TimetablePage() {
           } else {
             console.warn('[Timetable] ⚠️ Cached timetable has unexpected structure, will fetch fresh data');
           }
+        } else {
+          // Client cache expired, fetch Supabase cache (even if expired)
+          console.log('[Timetable] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
+          try {
+            const result = await fetch('/api/data/cache', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ access_token, data_type: 'timetable' })
+            });
+            const cacheResult = await result.json();
+            if (cacheResult.success && cacheResult.data) {
+              console.log(`[Timetable] ✅ Found Supabase cache (expired: ${cacheResult.isExpired})`);
+              let timetableDataToUse: TimetableData | null = null;
+              const cachedData = cacheResult.data;
+              
+              if (typeof cachedData === 'object' && cachedData !== null) {
+                if ('data' in cachedData && typeof (cachedData as { data?: unknown }).data === 'object' && (cachedData as { data?: unknown }).data !== null) {
+                  const wrappedData = (cachedData as { data?: TimetableData }).data;
+                  if (wrappedData && 'timetable' in wrappedData) {
+                    timetableDataToUse = wrappedData;
+                  }
+                } else if ('timetable' in cachedData || 'time_slots' in cachedData) {
+                  timetableDataToUse = cachedData as TimetableData;
+                }
+              }
+              
+              if (timetableDataToUse) {
+                cachedTimetable = timetableDataToUse;
+                hasValidCache = true;
+                setRawTimetableData(timetableDataToUse);
+                const convertedData = convertTimetableDataToTimeSlots(timetableDataToUse);
+                setTimetableData(convertedData);
+                if (cacheResult.isExpired) {
+                  needsBackgroundRefresh = true;
+                  console.log('[Timetable] ⚠️ Cache is expired, will refresh in background');
+                }
+              }
+            }
+          } catch (err) {
+            console.error('[Timetable] ❌ Error fetching Supabase cache:', err);
+          }
         }
       } else {
         // Force refresh: clear client cache
@@ -189,10 +231,10 @@ export default function TimetablePage() {
         console.log('[Timetable] 🗑️ Cleared client cache for force refresh');
       }
       
-      // Only fetch if cache is missing or force refresh
-      if (!hasValidCache || forceRefresh) {
+      // Only fetch if cache is missing or force refresh or expired
+      if (!hasValidCache || forceRefresh || needsBackgroundRefresh) {
         const apiStartTime = Date.now();
-        const fetchType = forceRefresh ? '(force refresh)' : '(fetching fresh data)';
+        const fetchType = forceRefresh ? '(force refresh)' : needsBackgroundRefresh ? '(background refresh - cache expired)' : '(fetching fresh data)';
         console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
         
         // Use request deduplication - ensures only ONE page calls backend at a time
@@ -288,37 +330,37 @@ export default function TimetablePage() {
               timetableDataObj = transformGoBackendTimetableToOldFormat(dataObj);
               console.log('[Timetable] ✅ Transformed Go backend timetable format');
             } else {
-              // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
-              let dataToProcess: unknown = timetableData;
-              
-              // Check if data is wrapped in a 'data' property (API response format from cache)
-              const dataToProcessObj = dataToProcess as Record<string, unknown>;
-              if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
-                console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
-                const wrappedData = dataToProcessObj.data as TimetableData;
-                if (wrappedData && 'timetable' in wrappedData) {
-                  dataToProcess = wrappedData;
-                }
+            // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+            let dataToProcess: unknown = timetableData;
+            
+            // Check if data is wrapped in a 'data' property (API response format from cache)
+            const dataToProcessObj = dataToProcess as Record<string, unknown>;
+            if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
+              console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
+              const wrappedData = dataToProcessObj.data as TimetableData;
+              if (wrappedData && 'timetable' in wrappedData) {
+                dataToProcess = wrappedData;
               }
-              // Check if it's already in TimetableData format (has timetable property at root)
-              else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
-                // Already in correct format
-                dataToProcess = dataToProcess;
-              }
-              
-              // Verify it's the expected TimetableData format
-              if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
+            }
+            // Check if it's already in TimetableData format (has timetable property at root)
+            else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
+              // Already in correct format
+              dataToProcess = dataToProcess;
+            }
+            
+            // Verify it's the expected TimetableData format
+            if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
                 const dataObj2 = dataToProcess as Record<string, unknown>;
                 if ('timetable' in dataObj2 || 'time_slots' in dataObj2) {
-                  timetableDataObj = dataToProcess as TimetableData;
-                  console.log('[Timetable] ✅ Timetable data loaded');
-                } else {
-                  console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-                  console.warn('[Timetable] Available keys:', Object.keys(dataObj2));
-                }
+                timetableDataObj = dataToProcess as TimetableData;
+                console.log('[Timetable] ✅ Timetable data loaded');
               } else {
                 console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-                console.warn('[Timetable] dataToProcess is not an object');
+                  console.warn('[Timetable] Available keys:', Object.keys(dataObj2));
+              }
+            } else {
+              console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+              console.warn('[Timetable] dataToProcess is not an object');
               }
             }
           }
@@ -821,7 +863,7 @@ export default function TimetablePage() {
                         className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor}`}
                       >
                         {courseName}
-                      </td>
+                    </td>
                     );
                   })}
                 </tr>
