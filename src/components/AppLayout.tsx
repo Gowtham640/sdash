@@ -38,9 +38,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }, []);
 
   return (
-    <div className="relative bg-black min-h-screen flex overflow-hidden">
+    <div className="relative bg-black min-h-screen flex">
       {/* Left Sidebar */}
-      <div className="w-64 bg-white/5 backdrop-blur-md border-r border-white/10 flex flex-col p-6">
+      <div className="fixed left-0 top-0 h-screen w-64 bg-white/5 backdrop-blur-md border-r border-white/10 flex flex-col p-6 z-10">
         {/* Logo Section */}
         <div className="mb-8 ml-3.5 mt-3">
           <h1 className="text-white text-5xl font-sora font-bold">SDash</h1>
@@ -90,7 +90,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 ml-64 overflow-y-auto">
         {children}
       </div>
     </div>

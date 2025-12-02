@@ -398,23 +398,6 @@ export default function MarksPage() {
 
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-      {/* Home Icon */}
-      <Link
-        href="/dashboard"
-        className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
-        aria-label="Go to Dashboard"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={2}
-          stroke="currentColor"
-          className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-        </svg>
-      </Link>
 
       <div className="flex flex-col items-center gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
@@ -441,7 +424,7 @@ export default function MarksPage() {
       </div>
 
       {/* Individual Course Cards */}
-      <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
+      <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-full items-center">
         {(() => {
           // Safety check: ensure marksData and all_courses exist
           if (!marksData || !marksData.all_courses || !Array.isArray(marksData.all_courses) || marksData.all_courses.length === 0) {
@@ -500,7 +483,7 @@ export default function MarksPage() {
             }
 
             return (
-              <div key={`${course.course_code}-${course.subject_type}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
+              <div key={`${course.course_code}-${course.subject_type}-${index}`} className="w-full bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
               {/* Main Card Content */}
               <div className="flex flex-col justify-start items-start p-4 sm:p-5 md:p-6 lg:p-6 gap-4 sm:gap-4 md:gap-5 lg:gap-6 min-h-[400px]">
                 {/* Course Details - UPDATED to show course title from mapping */}
