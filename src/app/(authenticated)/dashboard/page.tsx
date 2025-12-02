@@ -2,8 +2,10 @@
 import React, { useState, useEffect } from "react";
 import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
 import Link from "next/link";
-import PillNav from '../../components/PillNav';
-import StaggeredMenu from '../../components/StaggeredMenu';
+import PillNav from '@/components/PillNav';
+import StaggeredMenu from '@/components/StaggeredMenu';
+import MarksButton from '@/components/MarksButton';
+import AttendanceButton from '@/components/AttendanceButton';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
@@ -11,6 +13,7 @@ import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientC
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
+import { transformMarksIfNeeded } from "@/lib/dataFormatHandler";
 import { SkeletonLoader } from "@/components/ui/loading";
 
 // Import types
@@ -21,18 +24,6 @@ interface CalendarEvent {
   day_order: string;
 }
 
-interface AttendanceSubject {
-  course_title: string;
-  category: string;
-  hours_conducted: string;
-  hours_absent: string;
-  hours_required: string;
-  attendance_percentage: string;
-}
-
-interface AttendanceData {
-  all_subjects: AttendanceSubject[];
-}
 
 interface MarksCourse {
   course_code: string;
@@ -58,7 +49,6 @@ interface TimeSlot {
 
 export default function Dashboard() {
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
-  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [marksData, setMarksData] = useState<MarksData | null>(null);
   const [timetableData, setTimetableData] = useState<{
     timetable?: Record<string, { do_name?: string; time_slots?: Record<string, unknown> }>;
@@ -215,12 +205,13 @@ export default function Dashboard() {
   useEffect(() => {
     console.log('[Dashboard] 📊 State update:');
     console.log('[Dashboard]   - calendarData length:', Array.isArray(calendarData) ? calendarData.length : 'not array');
-    console.log('[Dashboard]   - attendanceData:', attendanceData ? `has ${attendanceData.all_subjects?.length || 0} subjects` : 'null');
-    console.log('[Dashboard]   - marksData:', marksData ? `has ${marksData.all_courses?.length || 0} courses` : 'null');
     console.log('[Dashboard]   - timetableData:', timetableData ? 'exists' : 'null');
     console.log('[Dashboard]   - loading:', loading);
     console.log('[Dashboard]   - error:', error);
-  }, [calendarData, attendanceData, marksData, timetableData, loading, error]);
+  }, [calendarData, timetableData, loading, error]);
+
+
+  // Fetch marks data specifically (similar to marks page)
 
   const checkAdminStatus = async () => {
     try {
@@ -343,31 +334,16 @@ export default function Dashboard() {
         }
       }
 
-      let cachedAttendance: AttendanceData | null = null;
       let cachedMarks: MarksData | null = null;
       let cachedTimetable: unknown | null = null;
 
       if (!forceRefresh) {
-        cachedAttendance = getClientCache<AttendanceData>('attendance');
         cachedMarks = getClientCache<MarksData>('marks');
         cachedTimetable = getClientCache('timetable');
 
         // Update cache status for skeleton display
-        const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
+        const hasAnyCache = !!(cachedMarks || cachedTimetable);
         setHasCache(hasAnyCache);
-
-        // Use cached data immediately (stale-while-revalidate)
-        // Only use cached attendance if it has actual data
-        if (cachedAttendance) {
-          const hasSubjects = cachedAttendance.all_subjects && Array.isArray(cachedAttendance.all_subjects) && cachedAttendance.all_subjects.length > 0;
-          if (hasSubjects) {
-            console.log('[Dashboard] ✅ Using client-side cache for attendance');
-            setAttendanceData(cachedAttendance);
-          } else {
-            console.log('[Dashboard] ⚠️ Cached attendance has no subjects, will fetch fresh');
-            cachedAttendance = null; // Force fetch
-          }
-        }
         // Only use cached marks if it has actual data
         if (cachedMarks) {
           const hasCourses = cachedMarks.all_courses && Array.isArray(cachedMarks.all_courses) && cachedMarks.all_courses.length > 0;
@@ -434,7 +410,6 @@ export default function Dashboard() {
         }
       } else {
         // Force refresh: clear client caches
-        removeClientCache('attendance');
         removeClientCache('marks');
         removeClientCache('timetable');
         removeClientCache('unified');
@@ -442,16 +417,14 @@ export default function Dashboard() {
       }
 
       // Determine what needs to be fetched
-      const needAttendance = !cachedAttendance || forceRefresh;
       const needMarks = !cachedMarks || forceRefresh;
       const needTimetable = !cachedTimetable || forceRefresh;
-      const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
+      const missingCount = [needMarks, needTimetable].filter(Boolean).length;
 
       console.log('[Dashboard] 📊 Cache status:');
-      console.log(`[Dashboard]   - Attendance: ${cachedAttendance ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Marks: ${cachedMarks ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
+      console.log(`[Dashboard]   - Missing count: ${missingCount}/2`);
 
       // Always use unified API endpoint with request deduplication
       // This ensures only one page calls the backend at a time
@@ -613,7 +586,6 @@ export default function Dashboard() {
         // All cached, but still need calendar - fetch only calendar
         // Also check if cached data is actually valid (has items)
         const needsRefresh =
-          (cachedAttendance && (!cachedAttendance.all_subjects || cachedAttendance.all_subjects.length === 0)) ||
           (cachedMarks && (!cachedMarks.all_courses || cachedMarks.all_courses.length === 0)) ||
           (cachedTimetable && (!cachedTimetable || typeof cachedTimetable !== 'object'));
 
@@ -732,38 +704,17 @@ export default function Dashboard() {
       // Extract semester from multiple sources with fallbacks
       let extractedSemester: number | null = null;
 
-      // 1. Try attendance data first - handle both direct and wrapped formats
-      if (result.data.attendance && typeof result.data.attendance === 'object') {
-        // Direct format: {metadata: {semester: ...}, ...}
-        if ('metadata' in result.data.attendance && result.data.attendance.metadata && typeof result.data.attendance.metadata === 'object' && 'semester' in result.data.attendance.metadata) {
-          extractedSemester = (result.data.attendance.metadata as { semester?: number }).semester || null;
-          console.log('[Dashboard] Semester from attendance.metadata.semester (direct):', extractedSemester);
-        }
-        // Wrapped format: {data: {metadata: {semester: ...}}, ...}
-        else if ('data' in result.data.attendance && result.data.attendance.data && typeof result.data.attendance.data === 'object' && 'metadata' in result.data.attendance.data) {
-          const attendanceData = result.data.attendance.data as { metadata?: { semester?: number } };
-          if (attendanceData.metadata?.semester) {
-            extractedSemester = attendanceData.metadata.semester;
-            console.log('[Dashboard] Semester from attendance.data.metadata.semester (wrapped):', extractedSemester);
-          }
-        }
-        // Legacy: direct semester property
-        else if ('semester' in result.data.attendance) {
-          extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
-          console.log('[Dashboard] Semester from attendance.semester (legacy):', extractedSemester);
-        }
-      }
-      // 2. Try response metadata
-      else if (result.metadata?.semester) {
+      // 1. Try response metadata
+      if (result.metadata?.semester) {
         extractedSemester = result.metadata.semester;
         console.log('[Dashboard] Semester from metadata.semester:', extractedSemester);
       }
-      // 3. Try response root
+      // 2. Try response root
       else if ((result as { semester?: number }).semester) {
         extractedSemester = (result as { semester?: number }).semester!;
         console.log('[Dashboard] Semester from root.semester:', extractedSemester);
       }
-      // 4. Try storage cache
+      // 3. Try storage cache
       else {
         const cachedSemester = getStorageItem('user_semester');
         if (cachedSemester) {
@@ -820,66 +771,6 @@ export default function Dashboard() {
       setCalendarData([]);
     }
 
-    // Process attendance data - handle both direct format and wrapped format
-    let attendanceDataObj: AttendanceData | null = null;
-
-    if (result.data.attendance && typeof result.data.attendance === 'object') {
-      // Check if it's direct format (has all_subjects, summary, metadata at root)
-      if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
-        // Direct format
-        attendanceDataObj = result.data.attendance as AttendanceData;
-        console.log('[Dashboard] Attendance data is direct format');
-      }
-      // Check if it's wrapped format: {success: true, data: {...}}
-      else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
-        const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
-        const successValue = attendanceWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && attendanceWrapper.data) {
-          attendanceDataObj = attendanceWrapper.data;
-          console.log('[Dashboard] Attendance data is wrapped format');
-        }
-      }
-      // Check legacy nested format: {data: {...}} or {success: {data: {...}}}
-      else if ('data' in result.data.attendance) {
-        const legacyData = (result.data.attendance as { data?: AttendanceData }).data;
-        if (legacyData && ('all_subjects' in legacyData || 'summary' in legacyData)) {
-          attendanceDataObj = legacyData;
-          console.log('[Dashboard] Attendance data is legacy nested format');
-        }
-      }
-    }
-
-    if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
-      setAttendanceData(attendanceDataObj);
-      console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0, 'subjects');
-      if (attendanceDataObj.all_subjects && attendanceDataObj.all_subjects.length > 0) {
-        console.log('[Dashboard]   - First subject:', JSON.stringify(attendanceDataObj.all_subjects[0], null, 2).substring(0, 300));
-      }
-    } else if (result.data.attendance !== undefined && result.data.attendance !== null) {
-      // Only overwrite if attendance was explicitly provided in result (not undefined/null)
-      // This prevents overwriting cached data when only calendar is fetched
-      console.warn('[Dashboard] ⚠️ No attendance data found in processed result');
-      console.warn('[Dashboard] Attendance data type:', typeof result.data.attendance);
-      console.warn('[Dashboard] Attendance data value:', JSON.stringify(result.data.attendance).substring(0, 500));
-
-      // Try to extract data directly if structure is unexpected
-      if (typeof result.data.attendance === 'object') {
-        const rawAttendance = result.data.attendance as Record<string, unknown>;
-        if ('all_subjects' in rawAttendance && Array.isArray(rawAttendance.all_subjects)) {
-          console.log('[Dashboard] 🔄 Found all_subjects in unexpected location, extracting...');
-          setAttendanceData({ all_subjects: rawAttendance.all_subjects as AttendanceSubject[] });
-          console.log('[Dashboard] ✅ Attendance data extracted from unexpected structure');
-        } else {
-          setAttendanceData(null);
-        }
-      } else {
-        setAttendanceData(null);
-      }
-    } else {
-      // result.data.attendance is undefined/null - don't overwrite existing state (likely from cache)
-      console.log('[Dashboard] ℹ️ Attendance not in API response, keeping existing state (likely from cache)');
-    }
 
     // Process marks data - handle both direct format and wrapped format
     let marksDataObj: MarksData | null = null;
@@ -1037,7 +928,6 @@ export default function Dashboard() {
     // Note: Calendar is NOT cached - it's always fetched fresh from public.calendar table
     const cacheData = {
       data: {
-        attendance: attendanceDataObj || attendanceData,
         marks: marksDataObj || marksData,
         timetable: timetableDataObj || timetableData,
       },
@@ -1070,6 +960,7 @@ export default function Dashboard() {
     });
   };
 
+
   if (loading && !showSkeleton) {
     // Show minimal loading state for first 2 seconds if no cache
     return (
@@ -1082,25 +973,7 @@ export default function Dashboard() {
   if (loading && showSkeleton) {
     // Show skeleton UI after 2s delay or immediately if cache exists
     return (
-      <div className="relative bg-black min-h-screen flex overflow-hidden">
-        {/* Left Sidebar */}
-        <div className="w-64 bg-white/5 backdrop-blur-md border-r border-white/10 flex flex-col p-6">
-          {/* Logo Section */}
-          <div className="mb-8">
-            <h1 className="text-white text-2xl font-sora font-bold">SDash</h1>
-          </div>
-
-          {/* Navigation Links */}
-          <nav className="flex-1 space-y-2">
-            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">TimeTable</div>
-            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">Attendance</div>
-            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">Marks</div>
-            <div className="block px-4 py-3 text-white/70 rounded-lg font-sora text-sm">Calendar</div>
-          </nav>
-        </div>
-
-        {/* Main Content Area */}
-        <div className="flex-1 overflow-y-auto p-8 flex flex-col">
+      <div className="flex flex-col p-8">
           <SkeletonLoader className="w-64 h-16 mb-2" />
           <SkeletonLoader className="w-96 h-8 mb-8" />
           <SkeletonLoader className="w-full h-32 mb-8 rounded-2xl" />
@@ -1118,7 +991,6 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      </div>
     );
   }
 
@@ -1144,53 +1016,7 @@ export default function Dashboard() {
   const currentDayOrder = getCurrentDayOrder();
 
   return (
-    <div className="relative bg-black min-h-screen flex overflow-hidden">
-      {/* Left Sidebar */}
-      <div className="w-64 bg-white/5 backdrop-blur-md border-r border-white/10 flex flex-col p-6">
-        {/* Logo Section */}
-        <div className="mb-8 ml-3.5  mt-3">
-          <h1 className="text-white text-5xl font-sora font-bold">SDash</h1>
-        </div>
-
-        {/* Navigation Links */}
-        <nav className="flex-1 space-y-2">
-          <Link
-            href="/timetable"
-            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
-          >
-            TimeTable
-          </Link>
-          <Link
-            href="/attendance"
-            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
-          >
-            Attendance
-          </Link>
-          <Link
-            href="/marks"
-            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
-          >
-            Marks
-          </Link>
-          <Link
-            href="/calender"
-            className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
-          >
-            Calendar
-          </Link>
-          {isAdmin && (
-            <Link
-              href="/admin"
-              className="block px-4 py-3 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all font-sora text-sm"
-            >
-              Admin
-            </Link>
-          )}
-        </nav>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-8 flex flex-col">
+    <div className="h-full p-8 flex flex-col">
         {/* Clock, Date, Day Section */}
         <div className="mb-8">
           <div className="text-white text-5xl font-sora font-bold mb-2">
@@ -1217,98 +1043,16 @@ export default function Dashboard() {
           {/* Left Side - 2x2 Grid */}
           <div className="w-[65%] grid grid-cols-2 gap-4 items-end transition-all duration-500 ease-in-out">
             {/* Marks Button */}
-            <div
-              onClick={(e) => {
-                if (expandedButton !== 'marks') {
-                  e.preventDefault();
-                  setExpandedButton('marks');
-                }
-              }}
-              className={`relative bg-gradient-to-br from-purple-600/20 to-pink-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group cursor-pointer ${
-                expandedButton === 'marks'
-                  ? 'col-span-2 row-span-2 h-[29rem] self-end'
-                  : expandedButton
-                    ? 'opacity-0 scale-50 h-0 overflow-hidden'
-                    : 'h-56 opacity-100 scale-100'
-              }`}
-            >
-              {/* Four-way arrow icon */}
-              {expandedButton === 'marks' && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setExpandedButton(null);
-                  }}
-                  className="absolute top-4 right-4 text-white/70 hover:text-white hover:scale-110 transition-all duration-200 z-10"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
-                </button>
-              )}
-              {!expandedButton && (
-                <div
-                  className="absolute top-4 right-4 text-white/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
-                </div>
-              )}
-              <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
-                Marks
-              </div>
-              <div className="text-white/70 text-sm font-sora text-center">
-                View your academic performance
-              </div>
-            </div>
+            <MarksButton
+              expandedButton={expandedButton}
+              onExpand={setExpandedButton}
+            />
 
             {/* Attendance Button */}
-            <div
-              onClick={(e) => {
-                if (expandedButton !== 'attendance') {
-                  e.preventDefault();
-                  setExpandedButton('attendance');
-                }
-              }}
-              className={`relative bg-gradient-to-br from-blue-600/20 to-cyan-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group cursor-pointer ${
-                expandedButton === 'attendance'
-                  ? 'col-span-2 row-span-2 h-[29rem] self-end'
-                  : expandedButton
-                    ? 'opacity-0 scale-50 h-0 overflow-hidden'
-                    : 'h-56 opacity-100 scale-100'
-              }`}
-            >
-              {/* Four-way arrow icon */}
-              {expandedButton === 'attendance' && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setExpandedButton(null);
-                  }}
-                  className="absolute top-4 right-4 text-white/70 hover:text-white hover:scale-110 transition-all duration-200 z-10"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
-                </button>
-              )}
-              {!expandedButton && (
-                <div
-                  className="absolute top-4 right-4 text-white/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
-                </div>
-              )}
-              <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
-                Attendance
-              </div>
-              <div className="text-white/70 text-sm font-sora text-center">
-                Check attendance
-              </div>
-            </div>
+            <AttendanceButton
+              expandedButton={expandedButton}
+              onExpand={setExpandedButton}
+            />
 
             {/* TimeTable Button */}
             <Link
@@ -1316,7 +1060,7 @@ export default function Dashboard() {
               className={`bg-gradient-to-br from-green-600/20 to-emerald-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group ${
                 expandedButton
                   ? 'opacity-0 scale-50 h-0 overflow-hidden pointer-events-none'
-                  : 'h-56 opacity-100 scale-100'
+                  : 'h-56 opacity-100 scale-100 order-3'
               }`}
             >
               <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
@@ -1333,7 +1077,7 @@ export default function Dashboard() {
               className={`bg-gradient-to-br from-orange-600/20 to-red-600/20 backdrop-blur-md border border-white/10 rounded-2xl p-8 hover:scale-[1.02] transition-all duration-500 ease-in-out flex flex-col justify-end items-center group ${
                 expandedButton
                   ? 'opacity-0 scale-50 h-0 overflow-hidden pointer-events-none'
-                  : 'h-56 opacity-100 scale-100'
+                  : 'h-56 opacity-100 scale-100 order-4'
               }`}
             >
               <div className="text-white text-3xl font-sora font-bold mb-2 group-hover:scale-110 transition-transform">
@@ -1380,24 +1124,5 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Re-auth Modal */}
-      {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
-            <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
-            <p className="text-gray-300 mb-6">
-              Your portal session has expired. Please sign in again to continue.
-            </p>
-            <NavigationButton
-              path="/auth"
-              onClick={handleReAuthenticate}
-              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
-            >
-              Sign In
-            </NavigationButton>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }

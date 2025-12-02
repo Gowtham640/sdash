@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import ShinyText from '../../components/ShinyText';
+import ShinyText from '@/components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
@@ -358,24 +358,7 @@ export default function MarksPage() {
   // Show empty state if no marks data but no error (allows refresh button to work)
   if (!marksData) {
     return (
-      <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-        {/* Home Icon */}
-        <Link
-          href="/dashboard"
-          className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
-          aria-label="Go to Dashboard"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-            stroke="currentColor"
-            className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-          </svg>
-        </Link>
+      <div className="flex flex-col justify-start items-center py-8 gap-8">
 
         <div className="flex flex-col items-center gap-4">
           <div className="flex items-center gap-3 sm:gap-4">

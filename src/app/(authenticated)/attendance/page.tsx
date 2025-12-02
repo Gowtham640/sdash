@@ -11,7 +11,7 @@ import { markSaturdaysAsHolidays } from '@/lib/calendarHolidays';
 import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
-import ShinyText from '../../components/ShinyText';
+import ShinyText from '@/components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
@@ -659,22 +659,26 @@ export default function AttendancePage() {
       let attendanceDataObj: AttendanceData | null = null;
       let extractedSemester: number = 1;
 
-      console.log('[Attendance] Processing attendance data from API response');
-      console.log('[Attendance] result.data type:', typeof result.data);
-      console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
+      console.log('[Attendance] 🔍 Processing attendance data from API response...');
+      console.log('[Attendance] 📋 Full API result:', JSON.stringify(result, null, 2));
+      console.log('[Attendance] 📋 result.data type:', typeof result.data);
+      console.log('[Attendance] 📋 result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
 
       // Extract attendance from unified response: { data: { attendance: AttendanceData, ... } }
       if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
-        const attendanceData = (result.data as { attendance?: unknown }).attendance;
+        const attendanceDataRaw = (result.data as { attendance?: unknown }).attendance;
+        console.log('[Attendance] 📋 Raw attendance data:', JSON.stringify(attendanceDataRaw, null, 2));
 
-        if (attendanceData && typeof attendanceData === 'object') {
+        if (attendanceDataRaw && typeof attendanceDataRaw === 'object') {
           // Transform if needed (Go format -> Python format)
-          let dataToProcess = transformAttendanceIfNeeded(attendanceData) as typeof attendanceData;
+          console.log('[Attendance] 🔄 Applying transformAttendanceIfNeeded...');
+          let dataToProcess = transformAttendanceIfNeeded(attendanceDataRaw) as typeof attendanceDataRaw;
+          console.log('[Attendance] ✅ Transformed data:', JSON.stringify(dataToProcess, null, 2));
 
           // Check if data is wrapped in an extra 'data' property (legacy format)
           if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
             console.log('[Attendance] 🔄 Unwrapping nested data structure in frontend');
-            dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
+            dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceDataRaw;
           }
 
           // Check if it's the expected AttendanceData format
@@ -684,14 +688,24 @@ export default function AttendancePage() {
             console.log('[Attendance] ✅ Attendance data loaded');
             console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
             console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
+
+            // Log each subject to see the data structure
+            if (attendanceDataObj.all_subjects) {
+              attendanceDataObj.all_subjects.forEach((subject, index) => {
+                console.log(`[Attendance] 📋 Subject ${index + 1}:`, JSON.stringify(subject, null, 2));
+              });
+            }
           } else {
             console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
             console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
+            console.warn('[Attendance] 📋 Full dataToProcess for debugging:', JSON.stringify(dataToProcess, null, 2));
           }
+        } else {
+          console.log('[Attendance] ❌ Attendance data is not an object:', typeof attendanceDataRaw);
         }
       } else {
-        console.warn('[Attendance] ⚠️ result.data.attendance is not available');
-        console.warn('[Attendance] result.data structure:', result.data);
+        console.log('[Attendance] ❌ No attendance in result.data');
+        console.log('[Attendance] 📋 Available keys in result.data:', result.data ? Object.keys(result.data) : 'null');
       }
 
       if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
@@ -735,8 +749,11 @@ export default function AttendancePage() {
   };
 
   const getAttendancePercentage = (attendanceStr: string): number => {
+    console.log(`[Attendance] 🔢 getAttendancePercentage called with: "${attendanceStr}"`);
     const match = attendanceStr.match(/(\d+(?:\.\d+)?)/);
-    return match ? parseFloat(match[1]) : 0;
+    const result = match ? parseFloat(match[1]) : 0;
+    console.log(`[Attendance] 🔢 getAttendancePercentage result: ${result} (match: ${match ? match[0] : 'none'})`);
+    return result;
   };
 
   const createPieChartData = (subject: AttendanceSubject) => {
@@ -889,24 +906,7 @@ export default function AttendancePage() {
   // Show empty state if no attendance data but no error (allows refresh button to work)
   if (!attendanceData) {
     return (
-      <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-        {/* Home Icon */}
-        <Link
-          href="/dashboard"
-          className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
-          aria-label="Go to Dashboard"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-            stroke="currentColor"
-            className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-          </svg>
-        </Link>
+      <div className="flex flex-col justify-start items-center py-8 gap-8">
 
         <div className="flex flex-col items-center gap-4">
           <div className="flex items-center gap-3 sm:gap-4">
@@ -1096,8 +1096,12 @@ export default function AttendancePage() {
 
       {/* Individual Subject Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
-        {attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
-          attendanceData.all_subjects.map((subject, index) => {
+        {(() => {
+          console.log('[Attendance] 🎨 Rendering subjects...');
+          console.log('[Attendance] 🎨 attendanceData.all_subjects count:', attendanceData?.all_subjects?.length || 0);
+
+          return attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
+            attendanceData.all_subjects.map((subject, index) => {
             if (!subject) return null; // Skip null subjects
           // Get prediction data if in prediction mode or OD/ML mode
           const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p =>
@@ -1113,17 +1117,35 @@ export default function AttendancePage() {
           const isExpanded = expandedSubjects.has(subject.subject_code);
 
           // Debug: Log attendance subject data
-          console.log(`[Attendance] Subject: ${subject.course_title} (${subject.category})`);
+          console.log(`[Attendance] 🎨 Subject: ${subject.course_title} (${subject.category})`);
+          console.log(`[Attendance] 🎨 Subject data:`, {
+            course_title: subject.course_title,
+            subject_code: subject.subject_code,
+            attendance: subject.attendance,
+            attendance_percentage: subject.attendance_percentage,
+            hours_conducted: subject.hours_conducted,
+            hours_absent: subject.hours_absent,
+            category: subject.category,
+            raw_attendance: subject.attendance,
+            raw_percentage: subject.attendance_percentage,
+            calculated_percentage: getAttendancePercentage(subject.attendance),
+            prediction: prediction ? {
+              predictedAttendance: prediction.predictedAttendance,
+              currentAttendance: prediction.currentAttendance,
+              totalHoursTillEndDate: prediction.totalHoursTillEndDate,
+              absentHoursDuringLeave: prediction.absentHoursDuringLeave
+            } : null
+          });
 
           // Debug: Log prediction matching
           if (prediction) {
-            console.log(`[DEBUG] Found prediction for ${subject.course_title} (${subject.category}):`, {
+            console.log(`[Attendance] 🎯 Found prediction for ${subject.course_title} (${subject.category}):`, {
               predictedAttendance: prediction.predictedAttendance,
               totalHoursTillEndDate: prediction.totalHoursTillEndDate,
               absentHoursDuringLeave: prediction.absentHoursDuringLeave
             });
           } else if (isPredictionMode || isOdmlMode) {
-            console.warn(`[DEBUG] No prediction found for ${subject.course_title} (${subject.category})`);
+            console.warn(`[Attendance] ⚠️ No prediction found for ${subject.course_title} (${subject.category})`);
           }
 
   return (
@@ -1429,7 +1451,8 @@ export default function AttendancePage() {
           <div className="text-white/70 text-center p-8">
             <p>No attendance data available. Please refresh to fetch your attendance.</p>
           </div>
-        )}
+        );
+        })()}
       </div>
         {/* Summary Stats */}
         {attendanceData && attendanceData.summary ? (

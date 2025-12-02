@@ -120,7 +120,7 @@ export default function AdminPage() {
     const padding = 5;
     const graphWidth = width - padding * 2;
     const graphHeight = height - padding * 2;
-    
+
     // Create smooth curved path using quadratic bezier curves
     if (data.length > 1) {
       const points = data.map((d, i) => {
@@ -128,7 +128,7 @@ export default function AdminPage() {
         const y = padding + graphHeight - (d.count / maxCount) * graphHeight;
         return { x, y };
       });
-      
+
       // Create a smooth path with bezier curves
       let path = `M ${points[0].x} ${points[0].y}`;
       for (let i = 0; i < points.length - 1; i++) {
@@ -136,7 +136,7 @@ export default function AdminPage() {
         const next = points[i + 1];
         const midX = (current.x + next.x) / 2;
         const midY = (current.y + next.y) / 2;
-        
+
         // Use quadratic bezier for smooth curves
         if (i === 0) {
           path += ` Q ${current.x} ${current.y} ${midX} ${midY}`;
@@ -150,7 +150,7 @@ export default function AdminPage() {
       // Complete the path to the last point
       const lastPoint = points[points.length - 1];
       path += ` Q ${lastPoint.x} ${lastPoint.y} ${lastPoint.x} ${lastPoint.y}`;
-      
+
       return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" style="position: absolute; bottom: 0; right: 0; width: 100%; height: 100%; pointer-events: none;"><path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.25" /></svg>`;
     } else {
       // Single point - show a simple curved line
@@ -207,15 +207,15 @@ export default function AdminPage() {
           // Scroll within the container, not the whole page
           const container = scrollContainerRef.current;
           const element = currentDateElement as HTMLElement;
-          
+
           // Get element position relative to container
           const elementTop = element.offsetTop;
           const elementHeight = element.offsetHeight;
           const containerHeight = container.clientHeight;
-          
+
           // Calculate scroll position to center the element
           const scrollPosition = elementTop - (containerHeight / 2) + (elementHeight / 2);
-          
+
           container.scrollTo({
             top: Math.max(0, scrollPosition),
             behavior: 'smooth'
@@ -285,7 +285,7 @@ export default function AdminPage() {
       const course = selectedCourses[0] || 'BTech';
       const semester = selectedSemesters[0] || 1;
       console.log(`[Admin] Fetching calendar for course: ${course}, semester: ${semester}`);
-      
+
       const response = await fetch(`/api/admin/calendar?course=${encodeURIComponent(course)}&semester=${semester}`);
       const result = await response.json();
 
@@ -295,7 +295,7 @@ export default function AdminPage() {
         console.log('[Admin] Calendar data received:', result.data);
         // Store the full calendar JSON structure
         setFullCalendarData(result.data);
-        
+
         // Extract events array for display (handle both array and object structures)
         let events: CalendarEvent[] = [];
         if (Array.isArray(result.data)) {
@@ -327,7 +327,7 @@ export default function AdminPage() {
             }
           }
         }
-        
+
         // Sort events chronologically by date (DD/MM/YYYY format)
         if (events.length > 0) {
           events.sort((a, b) => {
@@ -339,7 +339,7 @@ export default function AdminPage() {
             return parseDate(a.date).getTime() - parseDate(b.date).getTime();
           });
         }
-        
+
         console.log('[Admin] Final events count:', events.length);
         setCalendarEvents(events);
       } else {
@@ -408,7 +408,7 @@ export default function AdminPage() {
     try {
       // Start with the full calendar JSON structure (or create new one if none exists)
       let updatedFullCalendar: any;
-      
+
       if (fullCalendarData === null || fullCalendarData === undefined) {
         // No existing data - create new structure as array
         updatedFullCalendar = [];
@@ -423,7 +423,7 @@ export default function AdminPage() {
       // Find the events array within the structure
       let eventsArray: CalendarEvent[] = [];
       let eventsPath: string[] = [];
-      
+
       if (Array.isArray(updatedFullCalendar)) {
         // Direct array format
         eventsArray = updatedFullCalendar;
@@ -455,7 +455,7 @@ export default function AdminPage() {
           content: editingContent || null, // Allow null/empty content
           day_order: editingDayOrder
         };
-        
+
         if (eventIndex >= 0) {
           // Update existing event
           eventsArray[eventIndex] = updatedEvent;
@@ -540,7 +540,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="relative bg-black min-h-screen flex overflow-hidden">
+    <div>
       {/* Menu Toggle Button - Visible on all screen sizes */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -627,7 +627,7 @@ export default function AdminPage() {
                   value={analyticsTimeRange}
                   onChange={(e) => setAnalyticsTimeRange(e.target.value)}
                   className="w-full sm:w-auto px-3 sm:px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-blue-400/50 transition-all text-sm sm:text-base"
-                  style={{ 
+                  style={{
                     background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.6) 0%, rgba(37, 99, 235, 0.7) 100%)',
                     border: '1px solid rgba(96, 165, 250, 0.4)',
                     color: '#ffffff',
@@ -650,7 +650,7 @@ export default function AdminPage() {
                   value={analyticsSemester}
                   onChange={(e) => setAnalyticsSemester(e.target.value)}
                   className="w-full sm:w-auto px-3 sm:px-4 py-2 rounded-lg font-sora focus:outline-none focus:ring-2 focus:ring-violet-400/50 transition-all text-sm sm:text-base"
-                  style={{ 
+                  style={{
                     background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.6) 0%, rgba(124, 58, 237, 0.7) 100%)',
                     border: '1px solid rgba(167, 139, 250, 0.4)',
                     color: '#ffffff',
@@ -677,78 +677,78 @@ export default function AdminPage() {
                 {/* Summary Stats Cards */}
                 <div className="flex flex-col gap-4">
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-emerald-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-emerald-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.4) 0%, rgba(5, 150, 105, 0.5) 100%)', boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Total Users', 'totalUsersOverTime', '#10b981')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.totalUsersOverTime || [], '#10b981') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Total Users</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalUsers || 0}</div>
                           </div>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-blue-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-blue-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.5) 100%)', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Page Views', 'pageVisitsOverTime', '#3b82f6')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.pageVisitsOverTime || [], '#3b82f6') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Page Views</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.pageViews || 0}</div>
                           </div>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-purple-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-purple-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.4) 0%, rgba(147, 51, 234, 0.5) 100%)', boxShadow: '0 4px 15px rgba(168, 85, 247, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Cache Hits', 'cacheHitsOverTime', '#a855f7')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.cacheHitsOverTime || [], '#a855f7') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Cache Hits</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.cacheHits || 0}</div>
                         </div>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-amber-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-amber-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.4) 0%, rgba(245, 158, 11, 0.5) 100%)', boxShadow: '0 4px 15px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('API Requests', 'apiRequestsOverTime', '#fbbf24')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.apiRequestsOverTime || [], '#fbbf24') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">API Requests</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.apiRequests || 0}</div>
                       </div>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-rose-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-rose-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.4) 0%, rgba(225, 29, 72, 0.5) 100%)', boxShadow: '0 4px 15px rgba(244, 63, 94, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Errors', 'errorsOverTime', '#f43f5e')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.errorsOverTime || [], '#f43f5e') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Errors</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.errors || 0}</div>
                   </div>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-fuchsia-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-fuchsia-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(240, 171, 252, 0.4) 0%, rgba(217, 70, 239, 0.5) 100%)', boxShadow: '0 4px 15px rgba(240, 171, 252, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Feature Used', 'featureClicksOverTime', '#e879f9')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.featureClicksOverTime || [], '#e879f9') }}
                     ></div>
@@ -756,31 +756,31 @@ export default function AdminPage() {
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.featureClicks || 0}</div>
                   </div>
                   </div>
-                  
+
                   {/* Expandable Additional Stats */}
                   <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 transition-all duration-300 overflow-hidden ${
                     statsExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
                   }`}>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-cyan-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-cyan-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(34, 211, 238, 0.4) 0%, rgba(6, 182, 212, 0.5) 100%)', boxShadow: '0 4px 15px rgba(34, 211, 238, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Site Opens', 'siteOpensOverTime', '#22d3ee')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.siteOpensOverTime || [], '#22d3ee') }}
                     ></div>
                     <div className="relative text-white/90 text-xs font-sora mb-1">Site Opens</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.siteOpens || 0}</div>
                           </div>
-                  <div 
-                    className="relative p-4 backdrop-blur rounded-2xl border border-indigo-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105" 
+                  <div
+                    className="relative p-4 backdrop-blur rounded-2xl border border-indigo-400/30 overflow-hidden cursor-pointer transition-transform hover:scale-105"
                     style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.4) 0%, rgba(79, 70, 229, 0.5) 100%)', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
                     onClick={() => openStatModal('Unique Sessions', 'uniqueSessionsOverTime', '#6366f1')}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
-                    <div 
+                    <div
                       className="absolute bottom-0 right-0 w-20 h-10 sm:w-24 sm:h-16"
                       dangerouslySetInnerHTML={{ __html: generateMiniGraph(analyticsData.charts?.uniqueSessionsOverTime || [], '#6366f1') }}
                     ></div>
@@ -813,7 +813,7 @@ export default function AdminPage() {
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.metrics?.avgSiteOpensPerUser?.toFixed(1) || '0.0'}</div>
                   </div>
                   </div>
-                  
+
                   {/* Expand/Collapse Button */}
                   <button
                     onClick={() => setStatsExpanded(!statsExpanded)}
@@ -847,16 +847,16 @@ export default function AdminPage() {
                         <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={analyticsData.charts.pageVisitsOverTime}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis 
-                            dataKey="date" 
-                            stroke="#ffffff80" 
+                          <XAxis
+                            dataKey="date"
+                            stroke="#ffffff80"
                             tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
                             interval={2}
                           />
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                          <Tooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(0, 0, 0, 0.8)',
                               border: '1px solid rgba(255, 255, 255, 0.2)',
                               borderRadius: '8px',
                               fontFamily: 'Sora'
@@ -879,16 +879,16 @@ export default function AdminPage() {
                         <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={analyticsData.charts.siteOpensOverTime}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis 
-                            dataKey="date" 
-                            stroke="#ffffff80" 
+                          <XAxis
+                            dataKey="date"
+                            stroke="#ffffff80"
                             tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
                             interval={2}
                           />
                           <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                          <Tooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(0, 0, 0, 0.8)',
                               border: '1px solid rgba(255, 255, 255, 0.2)',
                               borderRadius: '8px',
                               fontFamily: 'Sora'
@@ -1295,7 +1295,7 @@ export default function AdminPage() {
 
              {/* Calendar Display - Same style as calendar page */}
              <div className="relative p-3 sm:p-4 md:p-4.5 lg:p-5 z-10 w-full h-[65vh] sm:h-[68vh] md:h-[69vh] lg:h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center overflow-y-auto">
-               <div 
+               <div
                  ref={scrollContainerRef}
                  className="relative overflow-y-auto p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-[55vh] sm:h-[58vh] md:h-[59vh] lg:h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-2 sm:gap-2.5 md:gap-3 lg:gap-3 justify-start items-center"
                >
@@ -1312,18 +1312,18 @@ export default function AdminPage() {
                    calendarEvents.map((event, index) => {
                      // Check if it's a holiday
                      const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.day_order === "Holiday" || (event.content && event.content.toLowerCase().includes('holiday'));
-                     
+
                      // Check if it's the current date
                      const currentDateStr = getCurrentDateString();
                      const isCurrentDate = event.date === currentDateStr;
-                     
+
                      // Check if date is selected
                      const isSelected = selectedDates.has(event.date);
-                     
+
                      // Determine background color and text color
                      let bgColor = 'bg-white/10';
                      let textColor = 'text-white';
-                     
+
                      if (isSelected) {
                        bgColor = 'bg-blue-500/80';
                        textColor = 'text-white';
@@ -1334,12 +1334,12 @@ export default function AdminPage() {
                        bgColor = 'bg-green-500/80';
                        textColor = 'text-white';
                      }
-                     
+
                      const hoverColor = isSelected ? 'bg-blue-500' : (isCurrentDate ? 'bg-gray-100' : (isHoliday ? 'bg-green-500' : 'bg-white/20'));
                      const doText = isHoliday ? 'Holiday' : event.day_order;
-                     
+
   return (
-                       <div 
+                       <div
                          key={index}
                          data-date={event.date}
                          onClick={(e) => {
@@ -1378,14 +1378,14 @@ export default function AdminPage() {
 
              {/* Modal for editing */}
              {showModal && (
-               <div 
+               <div
                  className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
                  onClick={() => {
                    setShowModal(false);
                    setError(null);
                  }}
                >
-                 <div 
+                 <div
                    className="relative p-6 backdrop-blur bg-white/10 border border-white/20 rounded-3xl max-w-md w-full animate-in zoom-in-95 duration-200 shadow-2xl"
                    onClick={(e) => e.stopPropagation()}
                  >
@@ -1468,13 +1468,13 @@ export default function AdminPage() {
 
       {/* Stat Card Detail Modal */}
       {modalOpen && modalData && (
-        <div 
+        <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
           onClick={() => setModalOpen(false)}
         >
-          <div 
+          <div
             className="relative w-[90%] max-w-4xl p-6 backdrop-blur rounded-3xl border overflow-hidden"
-            style={{ 
+            style={{
               background: `linear-gradient(135deg, ${modalData.color}20 0%, ${modalData.color}30 100%)`,
               borderColor: `${modalData.color}40`,
               boxShadow: `0 8px 32px ${modalData.color}30, inset 0 1px 0 rgba(255, 255, 255, 0.15)`
@@ -1495,23 +1495,23 @@ export default function AdminPage() {
               <ResponsiveContainer width="100%" height={400}>
                 <LineChart data={modalData.data}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                  <XAxis 
-                    dataKey="date" 
-                    stroke="#ffffff80" 
+                  <XAxis
+                    dataKey="date"
+                    stroke="#ffffff80"
                     tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }}
                     angle={-45}
                     textAnchor="end"
                     height={80}
                     interval={2}
                   />
-                  <YAxis 
-                    stroke="#ffffff80" 
+                  <YAxis
+                    stroke="#ffffff80"
                     tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
                     label={{ value: 'Count', angle: -90, position: 'insideLeft', fill: '#ffffff80', fontFamily: 'Sora' }}
                   />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.8)',
                       border: '1px solid rgba(255, 255, 255, 0.2)',
                       borderRadius: '8px',
                       fontFamily: 'Sora'
@@ -1519,13 +1519,13 @@ export default function AdminPage() {
                     labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
                     itemStyle={{ color: modalData.color, fontFamily: 'Sora' }}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="count" 
-                    stroke={modalData.color} 
-                    strokeWidth={3} 
-                    dot={{ fill: modalData.color, r: 5 }} 
-                    isAnimationActive={true} 
+                  <Line
+                    type="monotone"
+                    dataKey="count"
+                    stroke={modalData.color}
+                    strokeWidth={3}
+                    dot={{ fill: modalData.color, r: 5 }}
+                    isAnimationActive={true}
                     animationDuration={500}
                   />
                 </LineChart>
