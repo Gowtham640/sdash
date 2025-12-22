@@ -169,6 +169,7 @@ export async function POST(request: NextRequest) {
       let result = await callBackendScraper(action, {
         email: user_email,
         ...(password ? { password } : {}),
+        user_id,
       });
 
       const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
@@ -186,6 +187,7 @@ export async function POST(request: NextRequest) {
             result = await callBackendScraper(action, {
               email: user_email,
               password,
+              user_id,
             });
             console.log(`[API /data/refresh] ✅ Retry successful after re-login`);
           } else {

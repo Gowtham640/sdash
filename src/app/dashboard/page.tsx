@@ -97,6 +97,42 @@ export default function Dashboard() {
     return `${day}/${month}/${year}`;
   };
 
+  // Convert calendar event date from "DD/Month 'YY" format to "DD/MM/YYYY" format
+  const normalizeCalendarDate = (dateStr: string): string => {
+    if (!dateStr) return dateStr;
+
+    // Check if date is already in DD/MM/YYYY format
+    const ddMMYYYYRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+    if (ddMMYYYYRegex.test(dateStr)) {
+      return dateStr;
+    }
+
+    // Handle "DD/Month 'YY" format (e.g., "19/Jul '25")
+    const parts = dateStr.split('/');
+    if (parts.length === 2) {
+      const [day, monthYear] = parts;
+      const [monthName, yearStr] = monthYear.split(' ');
+      
+      const monthNames: { [key: string]: number } = {
+        'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+        'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+      };
+      
+      const monthNum = monthNames[monthName];
+      if (monthNum && yearStr) {
+        // Extract year from "'YY" format
+        const shortYear = yearStr.replace("'", "");
+        const fullYear = 2000 + parseInt(shortYear);
+        const month = monthNum.toString().padStart(2, '0');
+        const dayPadded = day.padStart(2, '0');
+        return `${dayPadded}/${month}/${fullYear}`;
+      }
+    }
+
+    // Return original if unable to parse
+    return dateStr;
+  };
+
   // Get yesterday, today, and tomorrow dates
   const getThreeDayDates = () => {
     const today = new Date();
@@ -814,9 +850,22 @@ export default function Dashboard() {
         console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
         console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
       }
-      // Display calendar data as-is without holiday modifications
-      setCalendarData(calendarEvents);
-      console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', calendarEvents.length, 'events');
+      
+      // Normalize calendar event dates from "DD/Month 'YY" to "DD/MM/YYYY" format for proper matching
+      const normalizedCalendarEvents = calendarEvents.map(event => ({
+        ...event,
+        date: normalizeCalendarDate(event.date)
+      }));
+      
+      console.log('[Dashboard] 📋 Normalized calendar dates:');
+      if (normalizedCalendarEvents.length > 0) {
+        console.log('[Dashboard] 📋   - First normalized date:', normalizedCalendarEvents[0]?.date);
+        console.log('[Dashboard] 📋   - Last normalized date:', normalizedCalendarEvents[normalizedCalendarEvents.length - 1]?.date);
+      }
+      
+      // Display calendar data with normalized dates
+      setCalendarData(normalizedCalendarEvents);
+      console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', normalizedCalendarEvents.length, 'events');
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
       console.warn('[Dashboard] Calendar data type:', typeof result.data.calendar);
@@ -1216,7 +1265,16 @@ export default function Dashboard() {
           {threeDayDates.map((dayInfo) => {
             const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
             const isToday = dayInfo.dateStr === getCurrentDateString();
-            const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
+            
+            // Enhanced holiday detection: check day_order and content
+            const dayOrder = event?.day_order || '';
+            const content = event?.content || '';
+            const isHoliday = 
+              dayOrder === "-" || 
+              dayOrder === "DO -" || 
+              dayOrder.toLowerCase() === "holiday" ||
+              dayOrder.toLowerCase().includes('holiday') ||
+              (content && content.toLowerCase().includes('holiday'));
             
             let bgColor = 'bg-white/10';
             let textColor = 'text-white';
@@ -1228,6 +1286,9 @@ export default function Dashboard() {
               bgColor = 'bg-green-500/80';
               textColor = 'text-white';
             }
+            
+            // Display content (handle empty string as 'No events')
+            const displayContent = content && content.trim() !== '' ? content : 'No events';
             
             return (
               <div 
@@ -1243,10 +1304,10 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
-                  {event?.content || 'No events'}
+                  {displayContent}
                 </p>
                 <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
-                  {event?.day_order || '-'}
+                  {dayOrder || '-'}
                 </p>
               </div>
             );

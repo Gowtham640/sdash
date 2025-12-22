@@ -791,66 +791,19 @@ export async function checkBackendHealth(): Promise<boolean> {
   }
 }
 
-// Keep-warm interval ID (similar to analytics pattern)
-let keepWarmIntervalId: NodeJS.Timeout | null = null;
+
 
 /**
- * Keep backend warm by pinging /hello endpoint every 14 minutes
- * Prevents Render.com free tier from spinning down (15 min timeout)
- * Follows the same pattern as analytics periodic tasks
+ * Start keep-warm mechanism (sends test ping immediately)
+ * Keeps the backend scraper service warm by sending periodic health checks
  */
-export function startKeepWarm(): void {
-  // Clear any existing interval
-  if (keepWarmIntervalId) {
-    clearInterval(keepWarmIntervalId);
-    keepWarmIntervalId = null;
-  }
-
-  // Ping every 14 minutes (840,000 ms) - Render.com spins down after 15 minutes
-  const KEEP_WARM_INTERVAL_MS = 14 * 60 * 1000; // 14 minutes
-
-  // Ping immediately on start (test ping)
-  console.log('[Keep Warm] 🔥 Sending initial test ping to backend...');
-  checkBackendHealth()
-    .then((isHealthy) => {
-      if (isHealthy) {
-        console.log('[Keep Warm] ✅ Initial test ping successful - backend is alive');
-      } else {
-        console.warn('[Keep Warm] ⚠️ Initial test ping failed - backend may be sleeping');
-      }
-    })
-    .catch(() => {
-      console.warn('[Keep Warm] ⚠️ Initial test ping error (silent fail)');
-    });
-
-  // Then ping every 14 minutes
-  keepWarmIntervalId = setInterval(() => {
-    checkBackendHealth()
-      .then((isHealthy) => {
-        if (isHealthy) {
-          console.log('[Keep Warm] ✅ Backend ping successful');
-        } else {
-          console.warn('[Keep Warm] ⚠️ Backend ping failed (backend may be sleeping)');
-        }
-      })
-      .catch(() => {
-        // Silently fail - this is just a keep-alive ping
-        console.warn('[Keep Warm] ⚠️ Backend ping error (silent fail)');
-      });
-  }, KEEP_WARM_INTERVAL_MS);
-
-  console.log(`[Keep Warm] ✅ Started - pinging backend every 14 minutes (${KEEP_WARM_INTERVAL_MS}ms)`);
-}
-
-/**
- * Stop the keep-warm mechanism
- */
-export function stopKeepWarm(): void {
-  if (keepWarmIntervalId) {
-    clearInterval(keepWarmIntervalId);
-    keepWarmIntervalId = null;
-    console.log('[Keep Warm] 🛑 Stopped');
+export async function startKeepWarm(): Promise<void> {
+  // Send immediate test ping to warm up the backend
+  console.log('[Scraper Client] Sending immediate keep-warm ping to backend');
+  const isHealthy = await checkBackendHealth();
+  if (isHealthy) {
+    console.log('[Scraper Client] Backend is healthy (keep-warm ping successful)');
+  } else {
+    console.warn('[Scraper Client] Backend health check failed (keep-warm ping unsuccessful)');
   }
 }
-
-

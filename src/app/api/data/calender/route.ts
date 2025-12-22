@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const email = searchParams.get('email');
     const password = searchParams.get('password');
+    const user_id = searchParams.get('user_id');
     
     // Validate input
     if (!email || !password) {
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
     console.log(`[API] Calling Python scraper for: ${email}`);
     
     // Call Python scraper
-    const result = await callPythonCalendarFunction(email, password);
+    const result = await callPythonCalendarFunction(email, password, user_id || undefined);
     
     console.log('[API] Python scraper completed');
     console.log('[API] Result:', result);
@@ -60,9 +61,10 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function callPythonCalendarFunction(email: string, password: string) {
+async function callPythonCalendarFunction(email: string, password: string, user_id?: string) {
   return await callBackendScraper('get_calendar_data', {
     email,
     password,
+    user_id,
   });
 }
