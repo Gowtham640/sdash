@@ -45,6 +45,7 @@ export interface ScraperRequest {
   email: string;
   password?: string;
   force_refresh?: boolean;
+  user_id?: string;
 }
 
 export interface ScraperResponse<T = unknown> {
