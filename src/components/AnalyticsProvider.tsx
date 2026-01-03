@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { initializeAnalytics, trackPageView } from '@/lib/analytics';
-import { startKeepWarm } from '@/lib/scraperClient';
+// import { startKeepWarm } from '@/lib/scraperClient'; // TODO: Implement keep-warm functionality
 
 /**
  * Analytics Provider Component
@@ -18,7 +18,7 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
     // Initialize analytics only once
     if (!initializedRef.current) {
       initializeAnalytics();
-      startKeepWarm(); // Start keep-warm mechanism (sends test ping immediately)
+      // startKeepWarm(); // TODO: Start keep-warm mechanism (sends test ping immediately)
       initializedRef.current = true;
     }
   }, []);
