@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 /**
  * Decode JWT token to extract user info
  */
-function decodeJWT(token: string): { sub?: string; email?: string } | null {
+function decodeJWT(token: string): { user_id?: string; email?: string } | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) {
@@ -14,7 +14,7 @@ function decodeJWT(token: string): { sub?: string; email?: string } | null {
     const payload = parts[1];
     const decoded = Buffer.from(payload, 'base64').toString('utf-8');
     const claims = JSON.parse(decoded) as { sub?: string; email?: string };
-    
+
     return {
       user_id: claims.sub,
       email: claims.email,
@@ -41,14 +41,14 @@ export async function GET(request: NextRequest) {
     }
 
     const decoded = decodeJWT(token);
-    if (!decoded || !decoded.sub) {
+    if (!decoded || !decoded.user_id) {
       return NextResponse.json(
         { success: false, error: "Invalid token" },
         { status: 401 }
       );
     }
 
-    const user_id = decoded.sub;
+    const user_id = decoded.user_id;
 
     const { data, error } = await supabaseAdmin
       .from('user_odml')
@@ -93,14 +93,14 @@ export async function POST(request: NextRequest) {
     }
 
     const decoded = decodeJWT(token);
-    if (!decoded || !decoded.sub) {
+    if (!decoded || !decoded.user_id) {
       return NextResponse.json(
         { success: false, error: "Invalid token" },
         { status: 401 }
       );
     }
 
-    const user_id = decoded.sub;
+    const user_id = decoded.user_id;
     const body = await request.json();
     const { period_from, period_to, subject_hours } = body;
 
@@ -173,14 +173,14 @@ export async function DELETE(request: NextRequest) {
     }
 
     const decoded = decodeJWT(token);
-    if (!decoded || !decoded.sub) {
+    if (!decoded || !decoded.user_id) {
       return NextResponse.json(
         { success: false, error: "Invalid token" },
         { status: 401 }
       );
     }
 
-    const user_id = decoded.sub;
+    const user_id = decoded.user_id;
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 

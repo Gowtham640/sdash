@@ -95,7 +95,7 @@ export async function syncUserDataFromBackend(
       updateData.section = userData.section;
     }
     if (userData.specialization !== undefined) {
-      updateData.specialization = userData.specialization || null;
+      updateData.specialization = userData.specialization;
     }
 
     // Update database (fire and forget - don't block)

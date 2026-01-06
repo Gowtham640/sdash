@@ -12,8 +12,6 @@ import { getStorageItem, setStorageItem, removeStorageItem } from "./browserStor
 function getBackendUrl(): string {
   // Check environment variables (available in both client and server contexts)
   const backendUrl = 
-    process.env.NEXT_PUBLIC_BACKEND_URL || 
-    process.env.BACKEND_URL || 
     'http://localhost:8080';
   
   // Validate and return
