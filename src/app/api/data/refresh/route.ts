@@ -3,6 +3,7 @@ import { callBackendScraper } from '@/lib/scraperClient';
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { setSupabaseCache, deleteSupabaseCache } from "@/lib/supabaseCache";
 import { removeClientCache } from "@/lib/clientCache";
+import { transformGoBackendAttendance, transformGoBackendMarks } from "@/lib/dataTransformers";
 
 /**
  * Individual data type refresh endpoint
@@ -129,28 +130,113 @@ export async function POST(request: NextRequest) {
     let fetchError: string | null = null;
 
     try {
+      // Always check for cookies first
+      const { getBackendCookies, loginToGoBackend } = await import('@/lib/scraperClient');
+      const cookies = getBackendCookies();
+      
+      // If no cookies found, we need to authenticate
+      if (!cookies) {
+        if (password) {
+          console.log(`[API /data/refresh] 🔐 No cookies found, logging in to Go backend first...`);
+          try {
+            const loginResult = await loginToGoBackend(user_email, password);
+            if (loginResult.authenticated && loginResult.cookies) {
+              console.log(`[API /data/refresh] ✅ Go backend login successful - cookies stored`);
+            } else {
+              console.warn(`[API /data/refresh] ⚠️ Go backend login failed: ${loginResult.message || 'Unknown error'}`);
+              // Return error if login failed
+              fetchError = `Authentication failed: ${loginResult.message || 'Please check your credentials'}`;
+              throw new Error(fetchError);
+            }
+          } catch (loginError) {
+            console.error(`[API /data/refresh] ❌ Go backend login error:`, loginError);
+            fetchError = loginError instanceof Error ? loginError.message : 'Authentication failed. Please check your credentials.';
+            throw loginError;
+          }
+        } else {
+          // No cookies and no password - can't proceed
+          console.error(`[API /data/refresh] ❌ No cookies found and no password provided`);
+          fetchError = 'Session expired. Please re-login with your password.';
+          throw new Error(fetchError);
+        }
+      } else {
+        console.log(`[API /data/refresh] ✅ Cookies found, proceeding with backend call`);
+      }
+
       const action = `get_${data_type}_data`;
       console.log(`[API /data/refresh] 🔄 Calling backend: ${action}`);
       
-      const result = await callBackendScraper(action, {
+      let result = await callBackendScraper(action, {
         email: user_email,
         ...(password ? { password } : {}),
+        user_id,
       });
 
-      const backendDuration = Date.now() - backendStartTime;
       const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
       
-      console.log(`[API /data/refresh] 📡 Backend call completed: ${backendDuration}ms`);
-      console.log(`[API /data/refresh]   - Success: ${resultTyped.success || false}`);
-      console.log(`[API /data/refresh]   - Error: ${resultTyped.error || "none"}`);
+      // If we get a session expired error and password is available, try to re-login and retry
+      if (!resultTyped.success && resultTyped.error?.includes('Session expired') && password) {
+        console.log(`[API /data/refresh] 🔄 Session expired, attempting to re-login and retry...`);
+        try {
+          const { loginToGoBackend } = await import('@/lib/scraperClient');
+          const loginResult = await loginToGoBackend(user_email, password);
+          
+          if (loginResult.authenticated && loginResult.cookies) {
+            console.log(`[API /data/refresh] ✅ Re-login successful, retrying request...`);
+            // Retry the request after successful login
+            result = await callBackendScraper(action, {
+              email: user_email,
+              password,
+              user_id,
+            });
+            console.log(`[API /data/refresh] ✅ Retry successful after re-login`);
+          } else {
+            console.warn(`[API /data/refresh] ⚠️ Re-login failed: ${loginResult.message || 'Unknown error'}`);
+          }
+        } catch (loginError) {
+          console.error(`[API /data/refresh] ❌ Re-login error:`, loginError);
+        }
+      }
 
-      if (resultTyped.success) {
-        freshData = resultTyped.data || result;
+      const backendDuration = Date.now() - backendStartTime;
+      const finalResultTyped = result as { success?: boolean; error?: string; data?: unknown };
+      
+      console.log(`[API /data/refresh] 📡 Backend call completed: ${backendDuration}ms`);
+      console.log(`[API /data/refresh]   - Success: ${finalResultTyped.success || false}`);
+      console.log(`[API /data/refresh]   - Error: ${finalResultTyped.error || "none"}`);
+
+      if (finalResultTyped.success) {
+        // Extract the actual data - handle Go backend response format
+        // Go backend might return: { status: 200, error: null, marks: {...}, ... }
+        // scraperClient extracts to: { marks: {...}, ... } (removes status/error)
+        // We need to extract the actual data type field (marks, attendance, timetable)
+        let dataToSave = finalResultTyped.data || result;
+        
+        // If data is wrapped in the data type field (e.g., { marks: {...} }), extract it
+        if (dataToSave && typeof dataToSave === 'object' && data_type in dataToSave) {
+          const extractedData = (dataToSave as Record<string, unknown>)[data_type];
+          if (extractedData !== undefined && extractedData !== null) {
+            console.log(`[API /data/refresh] 🔄 Extracting ${data_type} from wrapped response`);
+            dataToSave = extractedData;
+          }
+        }
+        
+        // Transform Go backend format to frontend format if needed
+        if (data_type === 'attendance') {
+          console.log(`[API /data/refresh] 🔄 Transforming attendance data from Go backend format`);
+          dataToSave = transformGoBackendAttendance(dataToSave) as Record<string, unknown>;
+        } else if (data_type === 'marks') {
+          console.log(`[API /data/refresh] 🔄 Transforming marks data from Go backend format`);
+          dataToSave = transformGoBackendMarks(dataToSave) as Record<string, unknown>;
+        }
+        // Timetable transformation is handled in the frontend (timetable page)
+        
+        freshData = dataToSave;
         
         // Save to Supabase cache (except calendar, which is always fetched from public.calendar table)
         if (data_type !== 'calendar') {
           try {
-            await setSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'timetable', freshData);
+            await setSupabaseCache(user_id, data_type as 'attendance' | 'marks' | 'timetable', freshData as Record<string, unknown>);
             console.log(`[API /data/refresh] ✅ Saved ${data_type} to Supabase cache`);
           } catch (cacheError) {
             console.error(`[API /data/refresh] ❌ Failed to save to cache:`);
@@ -181,12 +267,19 @@ export async function POST(request: NextRequest) {
     if (fetchError || !freshData) {
       console.error(`[API /data/refresh] ❌ Refresh failed (${totalTime}ms)`);
       console.log("===========================================");
+      
+      // Return 401 for authentication/session errors, 500 for other errors
+      const isAuthError = fetchError?.toLowerCase().includes('session expired') || 
+                         fetchError?.toLowerCase().includes('authentication failed') ||
+                         fetchError?.toLowerCase().includes('please re-login');
+      const statusCode = isAuthError ? 401 : 500;
+      
       return NextResponse.json(
         {
           success: false,
           error: fetchError || `Failed to fetch ${data_type} data`,
         },
-        { status: 500 }
+        { status: statusCode }
       );
     }
 

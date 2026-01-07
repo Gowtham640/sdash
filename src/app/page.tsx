@@ -22,7 +22,7 @@ export default function Home() {
     <div className="relative  bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
       {/* LiquidEther Background - Behind everything */}
       {showLiquidEther && (
-        <div className="absolute inset-0 z-0">
+        <div className="absolute inset-0 z-0 pointer-events-none">
           <Suspense fallback={null}>
             <LiquidEther
               colors={[ '#FFFFFF', '#FFFFFF', '#000000' ]}
@@ -46,7 +46,7 @@ export default function Home() {
       )}
 
       {/* Content - Above LiquidEther */}
-      <div className="relative z-10 flex flex-col items-center justify-center gap-6">
+      <div className="relative z-10 flex flex-col items-center justify-center gap-6 pointer-events-auto">
         <div className="text-white text-4xl font-sora font-bold">Informed Decisions are Right decisions</div>
         <div className="text-gray-200 text-xl font-sora font-light">Make the best decisions with the right context</div>
         <NavigationButton
@@ -63,18 +63,18 @@ export default function Home() {
       </div>
 
       {/* Arcs - Above LiquidEther but below content */}
-      <div className="absolute top-60 left-1/2 -translate-x-1/2 translate-y-1/2 z-20
+      <div className="absolute top-60 left-1/2 -translate-x-1/2 translate-y-1/2 z-20 pointer-events-none
         w-[100vw] h-[120vh] rounded-[50%] border-[100px]
         border-green-400
         rotate-180 shadow-2xl shadow-green-400/30 overflow-hidden"
       />
-      <div className="absolute top-40 left-1/2 -translate-x-1/2 translate-y-1/2 z-20
+      <div className="absolute top-40 left-1/2 -translate-x-1/2 translate-y-1/2 z-20 pointer-events-none
         w-[100vw] h-[120vh] rounded-[50%] border-[100px]
         border-green-400
         rotate-180 shadow-2xl shadow-green-400/30 overflow-hidden"
       />
        {/* Outer glow */}
-       <div className="absolute bottom-0 left-1/2 h-[600px] w-[600px] -translate-x-1/2 translate-y-1/2 rounded-full bg-green-500/20 blur-[100px] z-20" />
+       <div className="absolute bottom-0 left-1/2 h-[600px] w-[600px] -translate-x-1/2 translate-y-1/2 rounded-full bg-green-500/20 blur-[100px] z-20 pointer-events-none" />
       {/*<div className="relative z-10 w-[20vw] h-[20vh] backdrop-blur- bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora">HEY</div>*/}
     </div>
   );

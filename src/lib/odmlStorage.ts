@@ -1,0 +1,141 @@
+/**
+ * ODML Storage Utility
+ * Helper functions for managing ODML records
+ */
+
+export interface OdmlRecord {
+  id: string;
+  user_id: string;
+  period_from: string; // ISO date string
+  period_to: string; // ISO date string
+  subject_hours: Record<string, number>; // { "MA101": 4, "CS101": 2, ... }
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface LeavePeriod {
+  from: Date;
+  to: Date;
+  id: string;
+}
+
+/**
+ * Fetch all ODML records for the current user
+ */
+export async function fetchOdmlRecords(access_token: string): Promise<OdmlRecord[]> {
+  try {
+    const response = await fetch('/api/odml', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      console.error('[ODML Storage] Error fetching ODML records:', result.error);
+      return [];
+    }
+
+    return result.data || [];
+  } catch (error) {
+    console.error('[ODML Storage] Exception fetching ODML records:', error);
+    return [];
+  }
+}
+
+/**
+ * Save ODML record
+ */
+export async function saveOdmlRecord(
+  access_token: string,
+  period_from: Date,
+  period_to: Date,
+  subject_hours: Record<string, number>
+): Promise<OdmlRecord | null> {
+  try {
+    const response = await fetch('/api/odml', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        period_from: period_from.toISOString().split('T')[0], // YYYY-MM-DD format
+        period_to: period_to.toISOString().split('T')[0],
+        subject_hours
+      })
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      console.error('[ODML Storage] Error saving ODML record:', result.error);
+      return null;
+    }
+
+    return result.data;
+  } catch (error) {
+    console.error('[ODML Storage] Exception saving ODML record:', error);
+    return null;
+  }
+}
+
+/**
+ * Delete ODML record
+ */
+export async function deleteOdmlRecord(access_token: string, recordId: string): Promise<boolean> {
+  try {
+    const response = await fetch(`/api/odml?id=${recordId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      console.error('[ODML Storage] Error deleting ODML record:', result.error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('[ODML Storage] Exception deleting ODML record:', error);
+    return false;
+  }
+}
+
+/**
+ * Convert ODML records to aggregated subject hours
+ * Sums hours across all periods for each subject
+ */
+export function aggregateOdmlHours(records: OdmlRecord[]): Record<string, number> {
+  const aggregated: Record<string, number> = {};
+
+  records.forEach(record => {
+    Object.entries(record.subject_hours).forEach(([subjectCode, hours]) => {
+      aggregated[subjectCode] = (aggregated[subjectCode] || 0) + hours;
+    });
+  });
+
+  return aggregated;
+}
+
+/**
+ * Convert ODML records to LeavePeriod format for calculation
+ */
+export function odmlRecordsToLeavePeriods(records: OdmlRecord[]): LeavePeriod[] {
+  return records.map(record => ({
+    from: new Date(record.period_from),
+    to: new Date(record.period_to),
+    id: record.id
+  }));
+}
+
+
+

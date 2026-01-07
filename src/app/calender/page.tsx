@@ -520,7 +520,7 @@ export default function CalendarPage() {
             ) : (
               sortedEvents.map((event, index) => {
               // Check if it's a holiday based on DO value being "-", "DO -", or "Holiday", or content includes "holiday"
-              const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.day_order === "Holiday" || event.content.toLowerCase().includes('holiday');
+              const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.day_order === "Holiday" || (event.content && event.content.toLowerCase().includes('holiday'));
               
               // Check if it's the current date
               const currentDateStr = getCurrentDateString();

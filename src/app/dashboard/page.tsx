@@ -97,6 +97,42 @@ export default function Dashboard() {
     return `${day}/${month}/${year}`;
   };
 
+  // Convert calendar event date from "DD/Month 'YY" format to "DD/MM/YYYY" format
+  const normalizeCalendarDate = (dateStr: string): string => {
+    if (!dateStr) return dateStr;
+
+    // Check if date is already in DD/MM/YYYY format
+    const ddMMYYYYRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+    if (ddMMYYYYRegex.test(dateStr)) {
+      return dateStr;
+    }
+
+    // Handle "DD/Month 'YY" format (e.g., "19/Jul '25")
+    const parts = dateStr.split('/');
+    if (parts.length === 2) {
+      const [day, monthYear] = parts;
+      const [monthName, yearStr] = monthYear.split(' ');
+      
+      const monthNames: { [key: string]: number } = {
+        'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+        'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+      };
+      
+      const monthNum = monthNames[monthName];
+      if (monthNum && yearStr) {
+        // Extract year from "'YY" format
+        const shortYear = yearStr.replace("'", "");
+        const fullYear = 2000 + parseInt(shortYear);
+        const month = monthNum.toString().padStart(2, '0');
+        const dayPadded = day.padStart(2, '0');
+        return `${dayPadded}/${month}/${fullYear}`;
+      }
+    }
+
+    // Return original if unable to parse
+    return dateStr;
+  };
+
   // Get yesterday, today, and tomorrow dates
   const getThreeDayDates = () => {
     const today = new Date();
@@ -325,17 +361,119 @@ export default function Dashboard() {
       let cachedAttendance: AttendanceData | null = null;
       let cachedMarks: MarksData | null = null;
       let cachedTimetable: unknown | null = null;
+      let needsBackgroundRefresh = false;
       
       if (!forceRefresh) {
+        // Check client-side cache first
         cachedAttendance = getClientCache<AttendanceData>('attendance');
         cachedMarks = getClientCache<MarksData>('marks');
         cachedTimetable = getClientCache('timetable');
         
-        // Update cache status for skeleton display
-        const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-        setHasCache(hasAnyCache);
+        // If client cache is expired, fetch Supabase cache (even if expired)
+        if (!cachedAttendance || !cachedMarks || !cachedTimetable) {
+          console.log('[Dashboard] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
+          
+          // Fetch Supabase cache for missing data types
+          const supabaseCachePromises: Promise<void>[] = [];
+          
+          if (!cachedAttendance) {
+            supabaseCachePromises.push(
+              fetch('/api/data/cache', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_token, data_type: 'attendance' })
+              })
+                .then(res => res.json())
+                .then(result => {
+                  if (result.success && result.data) {
+                    console.log(`[Dashboard] ✅ Found Supabase cache for attendance (expired: ${result.isExpired})`);
+                    cachedAttendance = result.data as AttendanceData;
+                    setAttendanceData(cachedAttendance);
+                    if (result.isExpired) {
+                      needsBackgroundRefresh = true;
+                      console.log('[Dashboard] ⚠️ Attendance cache is expired, will refresh in background');
+                    }
+                  }
+                })
+                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase attendance cache:', err))
+            );
+          }
+          
+          if (!cachedMarks) {
+            supabaseCachePromises.push(
+              fetch('/api/data/cache', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_token, data_type: 'marks' })
+              })
+                .then(res => res.json())
+                .then(result => {
+                  if (result.success && result.data) {
+                    console.log(`[Dashboard] ✅ Found Supabase cache for marks (expired: ${result.isExpired})`);
+                    cachedMarks = result.data as MarksData;
+                    setMarksData(cachedMarks);
+                    if (result.isExpired) {
+                      needsBackgroundRefresh = true;
+                      console.log('[Dashboard] ⚠️ Marks cache is expired, will refresh in background');
+                    }
+                  }
+                })
+                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase marks cache:', err))
+            );
+          }
+          
+          if (!cachedTimetable) {
+            supabaseCachePromises.push(
+              fetch('/api/data/cache', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_token, data_type: 'timetable' })
+              })
+                .then(res => res.json())
+                .then(result => {
+                  if (result.success && result.data) {
+                    console.log(`[Dashboard] ✅ Found Supabase cache for timetable (expired: ${result.isExpired})`);
+                    cachedTimetable = result.data;
+                    // Process timetable data
+                    let timetableDataToUse: typeof timetableData | null = null;
+                    if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
+                      if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
+                        const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
+                        if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
+                          timetableDataToUse = cachedData;
+                        }
+                      } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
+                        timetableDataToUse = cachedTimetable as typeof timetableData;
+                      }
+                    }
+                    if (timetableDataToUse) {
+                      setTimetableData(timetableDataToUse);
+                      try {
+                        const timetableForUtils = {
+                          timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
+                          slot_mapping: timetableDataToUse.slot_mapping,
+                        } as TimetableData;
+                        const occurrences = getSlotOccurrences(timetableForUtils);
+                        setSlotOccurrences(occurrences);
+                      } catch (err) {
+                        console.error('[Dashboard] ❌ Error processing cached timetable:', err);
+                      }
+                    }
+                    if (result.isExpired) {
+                      needsBackgroundRefresh = true;
+                      console.log('[Dashboard] ⚠️ Timetable cache is expired, will refresh in background');
+                    }
+                  }
+                })
+                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase timetable cache:', err))
+            );
+          }
+          
+          // Wait for all Supabase cache fetches to complete
+          await Promise.all(supabaseCachePromises);
+        }
         
-        // Use cached data immediately (stale-while-revalidate)
+        // Use client-side cached data if available (highest priority)
         if (cachedAttendance) {
           console.log('[Dashboard] ✅ Using client-side cache for attendance');
           setAttendanceData(cachedAttendance);
@@ -346,20 +484,16 @@ export default function Dashboard() {
         }
         if (cachedTimetable) {
           console.log('[Dashboard] ✅ Using client-side cache for timetable');
-          // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
           let timetableDataToUse: typeof timetableData | null = null;
           
           if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
-            // Check if cached data has 'data' property (wrapped API response format)
             if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
               const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
               if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
                 timetableDataToUse = cachedData;
                 console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
               }
-            }
-            // Check if cached data is already in direct format (has timetable property at root)
-            else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
+            } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
               timetableDataToUse = cachedTimetable as typeof timetableData;
               console.log('[Dashboard] ✅ Using timetable in direct format');
             }
@@ -367,7 +501,6 @@ export default function Dashboard() {
           
           if (timetableDataToUse) {
             setTimetableData(timetableDataToUse);
-            // Also set slot occurrences for day order stats
             try {
               const timetableForUtils = {
                 timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
@@ -383,6 +516,10 @@ export default function Dashboard() {
             console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
           }
         }
+        
+        // Update cache status for skeleton display
+        const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
+        setHasCache(hasAnyCache);
       } else {
         // Force refresh: clear client caches
         removeClientCache('attendance');
@@ -393,9 +530,10 @@ export default function Dashboard() {
       }
       
       // Determine what needs to be fetched
-      const needAttendance = !cachedAttendance || forceRefresh;
-      const needMarks = !cachedMarks || forceRefresh;
-      const needTimetable = !cachedTimetable || forceRefresh;
+      // If Supabase cache is expired, we still need to fetch fresh data
+      const needAttendance = !cachedAttendance || forceRefresh || needsBackgroundRefresh;
+      const needMarks = !cachedMarks || forceRefresh || needsBackgroundRefresh;
+      const needTimetable = !cachedTimetable || forceRefresh || needsBackgroundRefresh;
       const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
       
       console.log('[Dashboard] 📊 Cache status:');
@@ -417,10 +555,10 @@ export default function Dashboard() {
       let result: any = null;
       let response: Response | null = null;
       
-      if (missingCount > 0 || forceRefresh) {
+      if (missingCount > 0 || forceRefresh || needsBackgroundRefresh) {
         // Fetch from API with automatic retry on password-related session_expired
         let apiStartTime = Date.now();
-        const fetchType = forceRefresh ? '(force refresh all)' : '(fetching all data)';
+        const fetchType = forceRefresh ? '(force refresh all)' : needsBackgroundRefresh ? '(background refresh - cache expired)' : '(fetching all data)';
         
         // Use request deduplication for unified API calls - ensures only ONE call at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
@@ -712,9 +850,22 @@ export default function Dashboard() {
         console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
         console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
       }
-      // Display calendar data as-is without holiday modifications
-      setCalendarData(calendarEvents);
-      console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', calendarEvents.length, 'events');
+      
+      // Normalize calendar event dates from "DD/Month 'YY" to "DD/MM/YYYY" format for proper matching
+      const normalizedCalendarEvents = calendarEvents.map(event => ({
+        ...event,
+        date: normalizeCalendarDate(event.date)
+      }));
+      
+      console.log('[Dashboard] 📋 Normalized calendar dates:');
+      if (normalizedCalendarEvents.length > 0) {
+        console.log('[Dashboard] 📋   - First normalized date:', normalizedCalendarEvents[0]?.date);
+        console.log('[Dashboard] 📋   - Last normalized date:', normalizedCalendarEvents[normalizedCalendarEvents.length - 1]?.date);
+      }
+      
+      // Display calendar data with normalized dates
+      setCalendarData(normalizedCalendarEvents);
+      console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', normalizedCalendarEvents.length, 'events');
     } else {
       console.warn('[Dashboard] ⚠️ No calendar data found');
       console.warn('[Dashboard] Calendar data type:', typeof result.data.calendar);
@@ -1114,7 +1265,16 @@ export default function Dashboard() {
           {threeDayDates.map((dayInfo) => {
             const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
             const isToday = dayInfo.dateStr === getCurrentDateString();
-            const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
+            
+            // Enhanced holiday detection: check day_order and content
+            const dayOrder = event?.day_order || '';
+            const content = event?.content || '';
+            const isHoliday = 
+              dayOrder === "-" || 
+              dayOrder === "DO -" || 
+              dayOrder.toLowerCase() === "holiday" ||
+              dayOrder.toLowerCase().includes('holiday') ||
+              (content && content.toLowerCase().includes('holiday'));
             
             let bgColor = 'bg-white/10';
             let textColor = 'text-white';
@@ -1126,6 +1286,9 @@ export default function Dashboard() {
               bgColor = 'bg-green-500/80';
               textColor = 'text-white';
             }
+            
+            // Display content (handle empty string as 'No events')
+            const displayContent = content && content.trim() !== '' ? content : 'No events';
             
             return (
               <div 
@@ -1141,10 +1304,10 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
-                  {event?.content || 'No events'}
+                  {displayContent}
                 </p>
                 <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
-                  {event?.day_order || '-'}
+                  {dayOrder || '-'}
                 </p>
               </div>
             );

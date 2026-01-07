@@ -29,6 +29,28 @@ interface CalendarEvent {
   year?: string;
 }
 
+// New calendar structure interfaces
+interface CalendarDay {
+  date: string;
+  day: string;
+  event: string;
+  dayOrder: string;
+}
+
+interface CalendarMonth {
+  month: string;
+  days: CalendarDay[];
+}
+
+interface CalendarResponse {
+  error: boolean;
+  status: number;
+  today: CalendarDay;
+  tomorrow: CalendarDay;
+  index: number;
+  calendar: CalendarMonth[];
+}
+
 export default function AdminPage() {
   const [activePage, setActivePage] = useState<PageType>('analytics');
   const [loading, setLoading] = useState(true);
@@ -295,48 +317,124 @@ export default function AdminPage() {
         console.log('[Admin] Calendar data received:', result.data);
         // Store the full calendar JSON structure
         setFullCalendarData(result.data);
-        
-        // Extract events array for display (handle both array and object structures)
+
+        // Extract events array for display - handle new calendar structure
         let events: CalendarEvent[] = [];
-        if (Array.isArray(result.data)) {
-          // Direct array format
-          events = result.data;
-          console.log('[Admin] Calendar is direct array, events count:', events.length);
-        } else if (result.data && typeof result.data === 'object') {
-          // Check if it has an events array or data array
-          if (Array.isArray(result.data.events)) {
-            events = result.data.events;
-            console.log('[Admin] Calendar has events array, count:', events.length);
-          } else if (Array.isArray(result.data.data)) {
-            events = result.data.data;
-            console.log('[Admin] Calendar has data array, count:', events.length);
-          } else if (Array.isArray(result.data.calendar)) {
-            events = result.data.calendar;
-            console.log('[Admin] Calendar has calendar array, count:', events.length);
+
+        if (result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
+          const calendarData = result.data as CalendarResponse;
+
+          // Check if this is the new calendar structure
+          if (calendarData.calendar && Array.isArray(calendarData.calendar)) {
+            console.log('[Admin] Detected new calendar structure with months');
+
+            // Transform the new calendar structure into CalendarEvent format
+            events = calendarData.calendar.flatMap((monthObj: CalendarMonth) => {
+              // Validate month object and month string
+              if (!monthObj || !monthObj.month || typeof monthObj.month !== 'string') {
+                console.warn('[Admin] Skipping invalid month object:', monthObj);
+                return [];
+              }
+
+              const monthParts = monthObj.month.split(' ');
+              if (monthParts.length < 2) {
+                console.warn('[Admin] Month string not in expected format "Month \'YY":', monthObj.month);
+                return [];
+              }
+
+              const [monthName, year] = monthParts;
+
+              // Validate days array
+              if (!monthObj.days || !Array.isArray(monthObj.days)) {
+                console.warn('[Admin] Month object missing valid days array:', monthObj);
+                return [];
+              }
+
+              return monthObj.days.map((day: CalendarDay) => {
+                // Validate day object
+                if (!day || typeof day !== 'object') {
+                  console.warn('[Admin] Skipping invalid day object:', day);
+                  return null;
+                }
+
+                const event: CalendarEvent = {
+                  date: `${day.date || '01'}/${monthObj.month}`, // Format: "19/Jul '25"
+                  day_name: day.day || 'Mon', // "Fri"
+                  content: day.event || null, // Event description or null
+                  day_order: day.dayOrder || '-', // "1", "2", etc. or "-"
+                  month: monthObj.month, // "Jul '25"
+                  month_name: monthName, // "Jul"
+                  year: year, // "'25"
+                };
+
+                return event;
+              }).filter((event): event is CalendarEvent => event !== null); // Remove null entries
+            });
+
+            console.log('[Admin] Transformed new calendar structure, events count:', events.length);
           } else {
-            // If it's an object but no array found, try to extract all date-based properties
-            console.warn('[Admin] Calendar data is object but no events array found. Data structure:', Object.keys(result.data));
-            // Try to find any array property
-            const keys = Object.keys(result.data);
-            for (const key of keys) {
-              if (Array.isArray(result.data[key])) {
-                events = result.data[key];
-                console.log(`[Admin] Found array in key "${key}", count:`, events.length);
-                break;
+            // Fallback to old structure handling
+            console.log('[Admin] Calendar data is object, checking for arrays...');
+            // Check if it has an events array or data array (using any type for backward compatibility)
+            const legacyData = calendarData as any;
+            if (Array.isArray(legacyData.events)) {
+              events = legacyData.events;
+              console.log('[Admin] Calendar has events array, count:', events.length);
+            } else if (Array.isArray(legacyData.data)) {
+              events = legacyData.data;
+              console.log('[Admin] Calendar has data array, count:', events.length);
+            } else {
+              // If it's an object but no array found, try to extract all date-based properties
+              console.warn('[Admin] Calendar data is object but no events array found. Data structure:', Object.keys(legacyData));
+              // Try to find any array property
+              const keys = Object.keys(legacyData);
+              for (const key of keys) {
+                if (Array.isArray(legacyData[key])) {
+                  events = legacyData[key];
+                  console.log(`[Admin] Found array in key "${key}", count:`, events.length);
+                  break;
+                }
               }
             }
           }
+        } else if (Array.isArray(result.data)) {
+          // Direct array format (old structure)
+          events = result.data;
+          console.log('[Admin] Calendar is direct array, events count:', events.length);
         }
         
-        // Sort events chronologically by date (DD/MM/YYYY format)
+        // Sort events chronologically by date (handle both DD/MM/YYYY and DD/Month 'YY formats)
         if (events.length > 0) {
           events.sort((a, b) => {
             if (!a.date || !b.date) return 0;
+
             const parseDate = (dateStr: string) => {
+              // Handle new format: "19/Jul '25"
+              if (dateStr.includes('/')) {
+                const parts = dateStr.split('/');
+                if (parts.length === 2) {
+                  const [day, monthYear] = parts;
+                  const [month, year] = monthYear.split(' ');
+                  const monthNames: { [key: string]: number } = {
+                    'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+                    'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+                  };
+                  const monthNum = monthNames[month];
+                  const yearNum = year ? 2000 + parseInt(year.replace("'", "")) : new Date().getFullYear();
+                  return new Date(yearNum, monthNum, parseInt(day));
+                }
+              }
+              // Fallback to old DD/MM/YYYY format
               const [day, month, year] = dateStr.split('/').map(Number);
               return new Date(year, month - 1, day);
             };
-            return parseDate(a.date).getTime() - parseDate(b.date).getTime();
+
+            try {
+              return parseDate(a.date).getTime() - parseDate(b.date).getTime();
+            } catch (error) {
+              console.warn('[Admin] Error parsing date for sorting:', a.date, b.date);
+              return 0;
+            }
           });
         }
         
@@ -357,9 +455,10 @@ export default function AdminPage() {
   const getCurrentDateString = () => {
     const now = new Date();
     const day = now.getDate().toString().padStart(2, '0');
-    const month = (now.getMonth() + 1).toString().padStart(2, '0');
-    const year = now.getFullYear();
-    return `${day}/${month}/${year}`;
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = monthNames[now.getMonth()];
+    const year = `'${now.getFullYear().toString().slice(-2)}`;
+    return `${day}/${month} ${year}`;
   };
 
   const handleToggleDateSelection = (date: string) => {
@@ -465,11 +564,48 @@ export default function AdminPage() {
         }
       });
 
-      // Sort events by date
+      // Sort events by date (handle both DD/MM/YYYY and DD/Month 'YY formats)
       eventsArray.sort((a, b) => {
-        const dateA = new Date(a.date.split('/').reverse().join('-'));
-        const dateB = new Date(b.date.split('/').reverse().join('-'));
-        return dateA.getTime() - dateB.getTime();
+        // Handle undefined/null dates
+        if (!a?.date) return 1; // Move items without dates to end
+        if (!b?.date) return -1; // Move items without dates to end
+
+        const parseDate = (dateStr: string) => {
+          try {
+            // Handle new format: "19/Jul '25"
+            if (dateStr.includes('/')) {
+              const parts = dateStr.split('/');
+              if (parts.length === 2) {
+                const [day, monthYear] = parts;
+                const [month, year] = monthYear.split(' ');
+                const monthNames: { [key: string]: number } = {
+                  'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+                  'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+                };
+                const monthNum = monthNames[month];
+                if (monthNum !== undefined) {
+                  const yearNum = year ? 2000 + parseInt(year.replace("'", "")) : new Date().getFullYear();
+                  return new Date(yearNum, monthNum, parseInt(day));
+                }
+              }
+            }
+            // Fallback to old DD/MM/YYYY format or simple parsing
+            const dateParts = dateStr.split('/').reverse();
+            return new Date(dateParts.join('-'));
+          } catch (error) {
+            console.warn('[Admin] Error parsing individual date:', dateStr, error);
+            return new Date(); // Return current date as fallback
+          }
+        };
+
+        try {
+          const dateA = parseDate(a.date);
+          const dateB = parseDate(b.date);
+          return dateA.getTime() - dateB.getTime();
+        } catch (error) {
+          console.warn('[Admin] Error comparing dates for sorting:', a.date, b.date, error);
+          return 0;
+        }
       });
 
       // Update the events array in the full structure

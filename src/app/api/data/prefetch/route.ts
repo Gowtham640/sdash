@@ -52,6 +52,7 @@ export async function POST(request: NextRequest) {
     // Verify and decode JWT token
     console.log("[Prefetch] Verifying access token...");
     let user_email: string;
+    let user_id: string;
 
     try {
       const decoded = decodeJWT(access_token);
@@ -60,13 +61,18 @@ export async function POST(request: NextRequest) {
         throw new Error("Invalid token format");
       }
 
-      // Safely extract email from decoded token
+      // Safely extract email and user_id from decoded token
       const decodedEmail = decoded.email;
       const decodedSub = decoded.sub;
       user_email = (typeof decodedEmail === 'string' ? decodedEmail : null) || (typeof decodedSub === 'string' ? decodedSub : '') || '';
+      user_id = typeof decodedSub === 'string' ? decodedSub : '';
 
       if (!user_email) {
         throw new Error("Missing user email in token");
+      }
+
+      if (!user_id) {
+        throw new Error("Missing user ID in token");
       }
 
     } catch (tokenError) {
@@ -77,13 +83,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[Prefetch] Session valid for user: ${user_email}`);
+    console.log(`[Prefetch] Session valid for user: ${user_email} (${user_id})`);
 
     // Trigger background fetch (DON'T WAIT)
     console.log(`[Prefetch] 🔄 Starting background fetch for ${user_email}`);
     
     // Trigger async fetch but return immediately
-    triggerBackgroundFetch(user_email).catch(err => {
+    triggerBackgroundFetch(user_email, user_id).catch(err => {
       console.error(`[Prefetch] Background fetch error for ${user_email}:`, err);
     });
 
@@ -109,11 +115,11 @@ export async function POST(request: NextRequest) {
  * Trigger background fetch without waiting
  * Returns immediately, fetch continues in background
  */
-async function triggerBackgroundFetch(email: string): Promise<void> {
+async function triggerBackgroundFetch(email: string, user_id: string): Promise<void> {
   console.log(`[Prefetch] Background fetch starting for ${email}`);
   
   try {
-    const result = await callPythonUnifiedData(email);
+    const result = await callPythonUnifiedData(email, user_id);
 
     if (result.success) {
       console.log(`[Prefetch] ✅ Background fetch completed for ${email}`);
@@ -130,9 +136,10 @@ async function triggerBackgroundFetch(email: string): Promise<void> {
  * Call backend scraper to get all data using HTTP API
  * Note: This uses get_all_data (fallback for prefetch)
  */
-async function callPythonUnifiedData(email: string): Promise<Record<string, unknown>> {
+async function callPythonUnifiedData(email: string, user_id: string): Promise<Record<string, unknown>> {
   const result = await callBackendScraper('get_all_data', {
     email,
+    user_id,
   });
   return result as unknown as Record<string, unknown>;
 }

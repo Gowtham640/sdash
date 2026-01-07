@@ -11,6 +11,9 @@ import {
   type LeavePeriod
 } from '@/lib/attendancePrediction';
 import { type SlotOccurrence } from '@/lib/timetableUtils';
+import { type OdmlRecord } from '@/lib/odmlStorage';
+import { getStorageItem } from '@/lib/browserStorage';
+import { deleteOdmlRecord } from '@/lib/odmlStorage';
 
 interface ODMLModalProps {
   attendanceData: AttendanceData | null;
@@ -22,6 +25,9 @@ interface ODMLModalProps {
   odmlPeriods: LeavePeriod[];
   setOdmlPeriods: (periods: LeavePeriod[]) => void;
   isCalculating: boolean;
+  savedOdmlRecords?: OdmlRecord[];
+  onDeleteSaved?: (recordId: string) => Promise<void>;
+  onRefreshSaved?: () => Promise<void>;
 }
 
 export const ODMLModal: React.FC<ODMLModalProps> = ({
@@ -33,7 +39,10 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
   onCalculate,
   odmlPeriods,
   setOdmlPeriods,
-  isCalculating
+  isCalculating,
+  savedOdmlRecords = [],
+  onDeleteSaved,
+  onRefreshSaved
 }) => {
   const [error, setError] = useState<string | null>(null);
   const [currentDateRange, setCurrentDateRange] = useState<DateRange | undefined>({
@@ -75,6 +84,20 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
 
   const removeODMLPeriod = (periodId: string) => {
     setOdmlPeriods(odmlPeriods.filter(p => p.id !== periodId));
+  };
+
+  const handleDeleteSaved = async (recordId: string) => {
+    if (!onDeleteSaved) {
+      const access_token = getStorageItem('access_token');
+      if (access_token) {
+        await deleteOdmlRecord(access_token, recordId);
+        if (onRefreshSaved) {
+          await onRefreshSaved();
+        }
+      }
+    } else {
+      await onDeleteSaved(recordId);
+    }
   };
 
   const handleCalculate = async () => {
@@ -153,7 +176,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
           <label className="text-white font-sora text-lg font-bold mb-3 block">
             Add OD/ML Period:
           </label>
-          <div className="bg-white/10 border border-white/20 rounded-2xl p-钢笔">
+          <div className="bg-white/10 border border-white/20 rounded-2xl p-4">
             <Calendar
               mode="range"
               selected={currentDateRange}
@@ -199,11 +222,48 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
           )}
         </div>
 
-        {/* OD/ML Periods List */}
+        {/* Saved OD/ML Periods */}
+        {savedOdmlRecords.length > 0 && (
+          <div className="mb-6">
+            <label className="text-white font-sora text-lg font-bold mb-3 block">
+              Saved OD/ML Periods ({savedOdmlRecords.length}):
+            </label>
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {savedOdmlRecords.map((record, index) => {
+                const fromDate = new Date(record.period_from);
+                const toDate = new Date(record.period_to);
+                const subjectCount = Object.keys(record.subject_hours).length;
+                const totalHours = Object.values(record.subject_hours).reduce((sum, hours) => sum + hours, 0);
+                
+                return (
+                  <div key={record.id} className="bg-white/10 border border-white/20 rounded-2xl p-4 flex items-center justify-between">
+                    <div className="text-white font-sora flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-400">Saved {index + 1}:</span>
+                        <span>{formatDateRange(fromDate, toDate)}</span>
+                      </div>
+                      <div className="text-gray-400 text-xs mt-1">
+                        {subjectCount} subject{subjectCount !== 1 ? 's' : ''} • {totalHours} total hours
+                      </div>
+                    </div>
+                    <Button 
+                      onClick={() => handleDeleteSaved(record.id)}
+                      className="bg-red-600 hover:bg-red-700 text-white font-sora px-3 py-1.5 rounded-lg text-sm"
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* New OD/ML Periods List */}
         {odmlPeriods.length > 0 && (
           <div className="mb-6">
             <label className="text-white font-sora text-lg font-bold mb-3 block">
-              OD/ML Periods ({odmlPeriods.length}):
+              New OD/ML Periods ({odmlPeriods.length}):
             </label>
             <div className="space-y-2">
               {odmlPeriods.map((period, index) => (

@@ -24,23 +24,23 @@ export async function GET(request: NextRequest) {
       recordExists = true;
       console.log(`[API /admin/calendar] ✅ Calendar fetched from public.calendar for course: ${course}, semester: ${semester}`);
     } else if (specificError && specificError.code === 'PGRST116') {
-      // Specific record doesn't exist, use default/0 as base
-      console.log(`[API /admin/calendar] ℹ️ No calendar found for course: ${course}, semester: ${semester} - using default/0 as base`);
-      
+      // Specific record doesn't exist, use Default/0 as base
+      console.log(`[API /admin/calendar] ℹ️ No calendar found for course: ${course}, semester: ${semester} - using Default/0 as base`);
+
       const { data: fallbackCalendarData, error: fallbackError } = await supabaseAdmin
         .from('calendar')
         .select('data')
-        .eq('course', 'default')
+        .eq('course', 'Default')
         .eq('semester', 0)
         .single();
-      
+
       if (!fallbackError && fallbackCalendarData && fallbackCalendarData.data) {
         calendarData = fallbackCalendarData.data;
         recordExists = false;
-        console.log(`[API /admin/calendar] ✅ Using default/0 calendar as base for course: ${course}, semester: ${semester}`);
+        console.log(`[API /admin/calendar] ✅ Using Default/0 calendar as base for course: ${course}, semester: ${semester}`);
       } else if (fallbackError && fallbackError.code === 'PGRST116') {
-        // No default/0 calendar found, try to get any calendar as last resort
-        console.log(`[API /admin/calendar] ℹ️ No default calendar found (default/0), trying to fetch any available calendar`);
+        // No Default/0 calendar found, try to get any calendar as last resort
+        console.log(`[API /admin/calendar] ℹ️ No default calendar found (Default/0), trying to fetch any available calendar`);
         const { data: anyCalendarData, error: anyCalendarError } = await supabaseAdmin
           .from('calendar')
           .select('data')
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
           console.log(`[API /admin/calendar] ℹ️ No calendar found in database at all`);
         }
       } else if (fallbackError) {
-        console.warn(`[API /admin/calendar] ⚠️ Error fetching default calendar from public.calendar: ${fallbackError.message}`);
+        console.warn(`[API /admin/calendar] ⚠️ Error fetching Default calendar from public.calendar: ${fallbackError.message}`);
       }
     } else if (specificError) {
       console.warn(`[API /admin/calendar] ⚠️ Error fetching calendar from public.calendar: ${specificError.message}`);

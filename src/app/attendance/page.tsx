@@ -6,7 +6,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence } from '@/lib/timetableUtils';
 import { AttendancePredictionModal } from '@/components/AttendancePredictionModal';
 import { ODMLModal } from '@/components/ODMLModal';
-import { calculatePredictedAttendance, calculateODMLAdjustedAttendance, calculateSubjectHoursInDateRange, type PredictionResult, type LeavePeriod } from '@/lib/attendancePrediction';
+import { calculatePredictedAttendance, calculateODMLAdjustedAttendance, calculateSubjectHoursInDateRange, getDayOrderStatsForDateRange, type PredictionResult, type LeavePeriod } from '@/lib/attendancePrediction';
 import { markSaturdaysAsHolidays } from '@/lib/calendarHolidays';
 import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ import { trackFeatureClick } from "@/lib/analytics";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, aggregateOdmlHours, type OdmlRecord } from '@/lib/odmlStorage';
 
 interface AttendanceSubject {
   row_number: number;
@@ -241,6 +242,9 @@ export default function AttendancePage() {
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+  const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
+  const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
+  const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(null); // Store original data
   
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
@@ -249,6 +253,107 @@ export default function AttendancePage() {
   useEffect(() => {
     fetchUnifiedData();
   }, []);
+
+  // Load and apply saved ODML when attendance data is available
+  useEffect(() => {
+    const loadSavedOdml = async () => {
+      if (!attendanceData || !originalAttendanceData || !slotOccurrences.length || !calendarData.length) {
+        return;
+      }
+
+      const access_token = getStorageItem('access_token');
+      if (!access_token) {
+        return;
+      }
+
+      try {
+        const savedRecords = await fetchOdmlRecords(access_token);
+        setSavedOdmlRecords(savedRecords);
+
+        if (savedRecords.length > 0 && showOdmlApplied) {
+          applySavedOdml(savedRecords);
+        } else if (savedRecords.length === 0 && showOdmlApplied && isOdmlMode) {
+          // No saved records but was in ODML mode, restore original
+          setAttendanceData(originalAttendanceData);
+          setPredictionResults([]);
+          setIsOdmlMode(false);
+        }
+      } catch (error) {
+        console.error('[Attendance] Error loading saved ODML:', error);
+      }
+    };
+
+    loadSavedOdml();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attendanceData, originalAttendanceData, slotOccurrences, calendarData, showOdmlApplied]);
+
+  // Apply saved ODML to attendance data
+  const applySavedOdml = (records: OdmlRecord[]) => {
+    if (!attendanceData || !originalAttendanceData) {
+      return;
+    }
+
+    // Aggregate hours across all periods
+    const aggregatedHours = aggregateOdmlHours(records);
+
+    // Create adjusted attendance data
+    const adjustedData: AttendanceData = {
+      ...originalAttendanceData,
+      all_subjects: originalAttendanceData.all_subjects.map(subject => {
+        if (!subject) return subject;
+        
+        const odmlHours = aggregatedHours[subject.subject_code] || 0;
+        const currentConducted = parseInt(subject.hours_conducted) || 0;
+        const currentAbsent = parseInt(subject.hours_absent) || 0;
+        const currentPresent = currentConducted - currentAbsent;
+        
+        // Apply ODML adjustments
+        const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
+        const adjustedPresent = currentPresent + odmlHours;
+        const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
+
+        return {
+          ...subject,
+          hours_absent: adjustedAbsent.toString(),
+          attendance: adjustedAttendance.toFixed(2),
+          attendance_percentage: adjustedAttendance.toFixed(2)
+        };
+      })
+    };
+
+    // Calculate prediction results for display
+    const results: PredictionResult[] = adjustedData.all_subjects.map(subject => {
+      if (!subject) return null as any;
+      
+      const odmlHours = aggregatedHours[subject.subject_code] || 0;
+      const currentConducted = parseInt(originalAttendanceData.all_subjects.find(s => s?.subject_code === subject.subject_code)?.hours_conducted || '0') || 0;
+      const currentAbsent = parseInt(originalAttendanceData.all_subjects.find(s => s?.subject_code === subject.subject_code)?.hours_absent || '0') || 0;
+      const currentPresent = currentConducted - currentAbsent;
+      const currentAttendance = currentConducted > 0 ? (currentPresent / currentConducted) * 100 : 0;
+      
+      const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
+      const adjustedPresent = currentPresent + odmlHours;
+      const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
+
+      return {
+        subject,
+        currentAttendance,
+        predictedAttendance: adjustedAttendance,
+        totalHoursTillEndDate: 0,
+        presentHoursTillStartDate: adjustedPresent,
+        absentHoursDuringLeave: adjustedAbsent,
+        leavePeriods: [],
+        leavePeriod: 'OD/ML Adjusted',
+        odmlPeriods: [],
+        odmlReductionHours: odmlHours
+      };
+    }).filter(r => r !== null);
+
+    setAttendanceData(adjustedData);
+    setPredictionResults(results);
+    setIsOdmlMode(true);
+    setIsPredictionMode(false);
+  };
 
   // Rotate facts every 8 seconds while loading
   useEffect(() => {
@@ -323,6 +428,42 @@ export default function AttendancePage() {
         calendarData,
         periods
       );
+      
+      // Save each period to database
+      const access_token = getStorageItem('access_token');
+      if (access_token) {
+        for (const period of periods) {
+          // Calculate subject hours for this specific period
+          const subjectHours: Record<string, number> = {};
+          
+          if (attendanceData && attendanceData.all_subjects) {
+            attendanceData.all_subjects.forEach(subject => {
+              if (!subject) return;
+              const periodHours = calculateSubjectHoursInDateRange(
+                subject,
+                slotOccurrences,
+                getDayOrderStatsForDateRange(calendarData, period.from, period.to)
+              );
+              if (periodHours > 0) {
+                subjectHours[subject.subject_code] = periodHours;
+              }
+            });
+          }
+          
+          // Save to database
+          await saveOdmlRecord(
+            access_token,
+            period.from,
+            period.to,
+            subjectHours
+          );
+        }
+        
+        // Reload saved ODML records
+        const savedRecords = await fetchOdmlRecords(access_token);
+        setSavedOdmlRecords(savedRecords);
+      }
+      
       setPredictionResults(results);
       setIsOdmlMode(true);
       setIsPredictionMode(false);
@@ -341,6 +482,30 @@ export default function AttendancePage() {
     setPredictionResults([]);
     setLeavePeriods([]);
     setOdmlPeriods([]);
+    // Restore original attendance data
+    if (originalAttendanceData) {
+      setAttendanceData(originalAttendanceData);
+    }
+  };
+
+  // Toggle ODML view
+  const toggleOdmlView = () => {
+    const newShowOdmlApplied = !showOdmlApplied;
+    setShowOdmlApplied(newShowOdmlApplied);
+    
+    if (newShowOdmlApplied) {
+      // Show with ODML
+      if (savedOdmlRecords.length > 0 && originalAttendanceData) {
+        applySavedOdml(savedOdmlRecords);
+      }
+    } else {
+      // Show without ODML
+      if (originalAttendanceData) {
+        setAttendanceData(originalAttendanceData);
+        setPredictionResults([]);
+        setIsOdmlMode(false);
+      }
+    }
   };
 
   const handleReAuthenticate = () => {
@@ -381,24 +546,10 @@ export default function AttendancePage() {
         throw new Error(result.error || 'Failed to refresh attendance data');
       }
 
-      // If refresh endpoint returns data directly, set it immediately
-      // Extract attendance from unified endpoint response: { data: { attendance: AttendanceData, ... } }
-      if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
-        const attendanceData = (result.data as { attendance?: unknown }).attendance;
-        if (attendanceData && typeof attendanceData === 'object' && ('all_subjects' in attendanceData || 'summary' in attendanceData)) {
-          console.log('[Attendance] Setting attendance data directly from refresh response');
-          const attendanceDataObj = attendanceData as AttendanceData;
-          const extractedSemester = attendanceDataObj.metadata?.semester || 1;
-          
-          setAttendanceData(attendanceDataObj);
-          setSemester(extractedSemester);
-          setLoading(false);
-          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects from refresh');
-        }
-      } else {
-        // After refresh, fetch unified data to get updated attendance
+      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
+      // Fetch from unified endpoint to get data in the correct processed format from cache
+      console.log('[Attendance] ✅ Refresh completed, fetching updated data from cache...');
         await fetchUnifiedData(false);
-      }
     } catch (err) {
       console.error('[Attendance] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');
@@ -422,14 +573,40 @@ export default function AttendancePage() {
 
       // Check client-side cache first (unless force refresh)
       let cachedAttendance: AttendanceData | null = null;
+      let needsBackgroundRefresh = false;
       
       if (!forceRefresh) {
         cachedAttendance = getClientCache<AttendanceData>('attendance');
         
-        // Use cached data immediately (stale-while-revalidate)
-        if (cachedAttendance) {
+        // If client cache is expired, fetch Supabase cache (even if expired)
+        if (!cachedAttendance) {
+          console.log('[Attendance] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
+          try {
+            const result = await fetch('/api/data/cache', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ access_token, data_type: 'attendance' })
+            });
+            const cacheResult = await result.json();
+            if (cacheResult.success && cacheResult.data) {
+              console.log(`[Attendance] ✅ Found Supabase cache (expired: ${cacheResult.isExpired})`);
+              cachedAttendance = cacheResult.data as AttendanceData;
+              setAttendanceData(cachedAttendance);
+              setOriginalAttendanceData(cachedAttendance);
+              setSemester(cachedAttendance.metadata?.semester || 1);
+              if (cacheResult.isExpired) {
+                needsBackgroundRefresh = true;
+                console.log('[Attendance] ⚠️ Cache is expired, will refresh in background');
+              }
+            }
+          } catch (err) {
+            console.error('[Attendance] ❌ Error fetching Supabase cache:', err);
+          }
+        } else {
+          // Use client-side cached data
           console.log('[Attendance] ✅ Using client-side cache for attendance');
           setAttendanceData(cachedAttendance);
+          setOriginalAttendanceData(cachedAttendance);
           setSemester(cachedAttendance.metadata?.semester || 1);
         }
       } else {
@@ -438,8 +615,8 @@ export default function AttendancePage() {
         console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
       }
       
-      // Only fetch if cache is missing or force refresh
-      if (!cachedAttendance || forceRefresh) {
+      // Only fetch if cache is missing or force refresh or expired
+      if (!cachedAttendance || forceRefresh || needsBackgroundRefresh) {
         console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
         
         // Use request deduplication - ensures only ONE page calls backend at a time
@@ -514,6 +691,7 @@ export default function AttendancePage() {
         
         if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
           setAttendanceData(attendanceDataObj);
+          setOriginalAttendanceData(attendanceDataObj); // Store original
           console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
           console.log('[Attendance] Extracted semester:', extractedSemester);
           setSemester(extractedSemester);
@@ -888,6 +1066,29 @@ export default function AttendancePage() {
           </div>
         )}
       </div>
+
+      {/* ODML Banner */}
+      {savedOdmlRecords.length > 0 && (
+        <div className="w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] bg-green-500/20 border border-green-500/50 rounded-3xl p-4 sm:p-5 md:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">📋</span>
+            <div className="flex flex-col">
+              <div className="text-white font-sora text-base sm:text-lg md:text-xl font-bold">
+                {showOdmlApplied ? 'Attendance shown with OD/ML applied' : 'Showing attendance without OD/ML'}
+              </div>
+              <div className="text-green-300/80 font-sora text-xs sm:text-sm mt-1">
+                {savedOdmlRecords.length} OD/ML period{savedOdmlRecords.length !== 1 ? 's' : ''} saved
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={toggleOdmlView}
+            className="bg-white/10 hover:bg-white/20 border border-white/30 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 rounded-2xl transition-all duration-200 text-sm sm:text-base"
+          >
+            {showOdmlApplied ? 'Show without OD/ML' : 'Show with OD/ML'}
+          </button>
+        </div>
+      )}
 
       {/* Individual Subject Cards */}
       <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
@@ -1284,6 +1485,31 @@ export default function AttendancePage() {
           odmlPeriods={odmlPeriods}
           setOdmlPeriods={setOdmlPeriods}
           isCalculating={isCalculating}
+          savedOdmlRecords={savedOdmlRecords}
+          onDeleteSaved={async (recordId: string) => {
+            const access_token = getStorageItem('access_token');
+            if (access_token) {
+              await deleteOdmlRecord(access_token, recordId);
+              const savedRecords = await fetchOdmlRecords(access_token);
+              setSavedOdmlRecords(savedRecords);
+              // Re-apply if showing with ODML
+              if (showOdmlApplied && savedRecords.length > 0 && originalAttendanceData) {
+                applySavedOdml(savedRecords);
+              } else if (showOdmlApplied && savedRecords.length === 0 && originalAttendanceData) {
+                // No more saved records, show without ODML
+                setAttendanceData(originalAttendanceData);
+                setPredictionResults([]);
+                setIsOdmlMode(false);
+              }
+            }
+          }}
+          onRefreshSaved={async () => {
+            const access_token = getStorageItem('access_token');
+            if (access_token) {
+              const savedRecords = await fetchOdmlRecords(access_token);
+              setSavedOdmlRecords(savedRecords);
+            }
+          }}
         />
       )}
 

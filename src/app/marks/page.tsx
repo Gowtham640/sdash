@@ -123,22 +123,10 @@ export default function MarksPage() {
         throw new Error(result.error || 'Failed to refresh marks data');
       }
 
-      // If refresh endpoint returns data directly, set it immediately
-      // Extract marks from unified endpoint response: { data: { marks: MarksData, ... } }
-      if (result.data && typeof result.data === 'object' && 'marks' in result.data) {
-        const marksData = (result.data as { marks?: unknown }).marks;
-        if (marksData && typeof marksData === 'object' && ('all_courses' in marksData || 'summary' in marksData)) {
-          console.log('[Marks] Setting marks data directly from refresh response');
-          const marksDataObj = marksData as MarksData;
-          
-          setMarksData(marksDataObj);
-          setLoading(false);
-          console.log('[Marks] Loaded marks with', marksDataObj.all_courses?.length || 0, 'courses from refresh');
-        }
-      } else {
-        // After refresh, fetch unified data to get updated marks
+      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
+      // Fetch from unified endpoint to get data in the correct processed format from cache
+      console.log('[Marks] ✅ Refresh completed, fetching updated data from cache...');
         await fetchUnifiedData(false);
-      }
     } catch (err) {
       console.error('[Marks] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh marks data');
@@ -162,12 +150,35 @@ export default function MarksPage() {
 
       // Check client-side cache first (unless force refresh)
       let cachedMarks: MarksData | null = null;
+      let needsBackgroundRefresh = false;
       
       if (!forceRefresh) {
         cachedMarks = getClientCache<MarksData>('marks');
         
-        // Use cached data immediately (stale-while-revalidate)
-        if (cachedMarks) {
+        // If client cache is expired, fetch Supabase cache (even if expired)
+        if (!cachedMarks) {
+          console.log('[Marks] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
+          try {
+            const result = await fetch('/api/data/cache', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ access_token, data_type: 'marks' })
+            });
+            const cacheResult = await result.json();
+            if (cacheResult.success && cacheResult.data) {
+              console.log(`[Marks] ✅ Found Supabase cache (expired: ${cacheResult.isExpired})`);
+              cachedMarks = cacheResult.data as MarksData;
+              setMarksData(cachedMarks);
+              if (cacheResult.isExpired) {
+                needsBackgroundRefresh = true;
+                console.log('[Marks] ⚠️ Cache is expired, will refresh in background');
+              }
+            }
+          } catch (err) {
+            console.error('[Marks] ❌ Error fetching Supabase cache:', err);
+          }
+        } else {
+          // Use client-side cached data
           console.log('[Marks] ✅ Using client-side cache for marks');
           setMarksData(cachedMarks);
         }
@@ -177,8 +188,8 @@ export default function MarksPage() {
         console.log('[Marks] 🗑️ Cleared client cache for force refresh');
       }
       
-      // Only fetch if cache is missing or force refresh
-      if (!cachedMarks || forceRefresh) {
+      // Only fetch if cache is missing or force refresh or expired
+      if (!cachedMarks || forceRefresh || needsBackgroundRefresh) {
         console.log('[Marks] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
         
         // Use request deduplication - ensures only ONE page calls backend at a time
