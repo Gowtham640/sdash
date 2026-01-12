@@ -54,49 +54,80 @@ export async function handleUserSignIn(
       };
     }
 
-    // Step 2: Check if user exists in users table
-    console.log(`[Auth] Checking if user exists: ${email}`);
-    const { data: existingUser, error: queryError } = await supabaseAdmin
-      .from("users")
-      .select("id, email, role")
-      .eq("email", email)
-      .single();
+    // Step 2: Check if user exists in auth.users table
+    console.log(`[Auth] Checking if user exists in auth.users: ${email}`);
+    const { data: usersList, error: authQueryError } = await supabaseAdmin.auth.admin.listUsers();
 
-    // Handle query errors (PGRST116 = no rows found, which is expected for new users)
-    if (queryError && queryError.code !== "PGRST116") {
-      console.error(`[Auth] Error querying user: ${queryError.message}`);
-      console.error(`[Auth] Error code: ${queryError.code}`);
-      console.error(`[Auth] Error details:`, JSON.stringify(queryError, null, 2));
-      
-      // Check if table doesn't exist
-      if (queryError.code === "42P01" || queryError.message.includes("does not exist")) {
-        console.error(`[Auth] Table 'users' does not exist!`);
-        console.error(`[Auth] Please create the table using the schema in tables.md`);
-        
-        return {
-          session: null,
-          error: "Database table 'users' does not exist. Please create it in Supabase.",
-          errorCode: AuthErrorCode.SUPABASE_QUERY_ERROR,
-        };
-      }
-      
+    if (authQueryError) {
+      console.error(`[Auth] Error querying auth.users: ${authQueryError.message}`);
       return {
         session: null,
-        error: `Database error: ${queryError.message}`,
+        error: `Database error: ${authQueryError.message}`,
         errorCode: AuthErrorCode.SUPABASE_QUERY_ERROR,
       };
     }
 
-    // Log the result
-    if (existingUser) {
-      console.log(`[Auth] User found in database: ${existingUser.id}`);
-    } else {
-      console.log(`[Auth] User not found in database (new user)`);
+    // Find all users with this email (there might be duplicates)
+    const usersWithEmail = usersList ? usersList.users.filter(u => u.email === email) : [];
+
+    // Handle duplicate users - keep the most recently created one
+    let existingAuthUser = null;
+    if (usersWithEmail.length > 1) {
+      console.warn(`[Auth] Found ${usersWithEmail.length} users with email ${email}, keeping the most recent`);
+      // Sort by created_at descending and take the first (most recent)
+      usersWithEmail.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      existingAuthUser = { user: usersWithEmail[0] };
+
+      // Delete older duplicate users
+      const duplicatesToDelete = usersWithEmail.slice(1);
+      for (const duplicate of duplicatesToDelete) {
+        console.log(`[Auth] Deleting duplicate user: ${duplicate.id}`);
+        try {
+          await supabaseAdmin.auth.admin.deleteUser(duplicate.id);
+        } catch (deleteError) {
+          console.error(`[Auth] Failed to delete duplicate user ${duplicate.id}:`, deleteError);
+        }
+      }
+    } else if (usersWithEmail.length === 1) {
+      existingAuthUser = { user: usersWithEmail[0] };
     }
 
-    // Step 3: If user exists, sign them in
-    if (existingUser) {
-      console.log(`[Auth] User exists, signing in via Supabase: ${email}`);
+    // Step 3: Check if user exists in public.users table
+    console.log(`[Auth] Checking if user exists in public.users: ${email}`);
+    const { data: publicUserData, error: publicUserError } = await supabaseAdmin
+      .from('users')
+      .select('id, email, name, regnumber, role')
+      .eq('email', email)
+      .single();
+
+    if (publicUserError && publicUserError.code !== 'PGRST116') { // PGRST116 is "not found"
+      console.error(`[Auth] Error querying public.users: ${publicUserError.message}`);
+      return {
+        session: null,
+        error: `Database error: ${publicUserError.message}`,
+        errorCode: AuthErrorCode.SUPABASE_QUERY_ERROR,
+      };
+    }
+
+    const existingPublicUser = publicUserData ? publicUserData : null;
+
+    // Log the results
+    if (existingAuthUser?.user) {
+      console.log(`[Auth] User found in auth.users: ${existingAuthUser.user.id}`);
+    } else {
+      console.log(`[Auth] User not found in auth.users`);
+    }
+
+    if (existingPublicUser) {
+      console.log(`[Auth] User found in public.users: ${existingPublicUser.id}`);
+    } else {
+      console.log(`[Auth] User not found in public.users`);
+    }
+
+    // Step 4: Decision logic based on where user exists
+    if (existingAuthUser?.user && existingPublicUser) {
+      // Case 1: User exists in both auth.users and public.users - redirect to dashboard
+      console.log(`[Auth] User exists in both tables, redirecting to dashboard: ${email}`);
 
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
@@ -105,6 +136,87 @@ export async function handleUserSignIn(
 
       if (error) {
         console.error(`[Auth] Supabase sign-in failed: ${error.message}`);
+        // Even if Supabase sign-in fails, user data exists, so this might be a confirmation issue
+        // Return user data but no session - frontend can handle dashboard access
+        return {
+          session: data?.session || null,
+          user: {
+            id: existingAuthUser.user.id,
+            email: existingAuthUser.user.email || email,
+            role: existingPublicUser.role || 'public',
+          },
+        };
+      }
+
+      console.log(`[Auth] Successfully signed in existing user with complete profile: ${email}`);
+      return {
+        session: data.session,
+        user: {
+          id: existingAuthUser.user.id,
+          email: existingAuthUser.user.email || email,
+          role: existingPublicUser.role || 'public',
+        },
+      };
+    }
+
+    if (!existingAuthUser?.user) {
+      // Case 2: User doesn't exist in auth.users - send GET login request to Go backend
+      console.log(`[Auth] User not found in auth.users, sending GET login request to Go backend: ${email}`);
+
+      const backendUrl = 'http://localhost:8080/login';
+      const loginRequest = {
+        account: email, // SRM registration number/account
+        password: password,
+        cdigest: undefined, // Optional captcha digest
+        captcha: undefined  // Optional captcha solution
+      };
+
+      console.log(`[Auth] Sending POST request to ${backendUrl}`);
+      const loginResponse = await fetch(backendUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(loginRequest)
+      });
+
+      const backendResult = await loginResponse.json();
+
+      if (!backendResult.success) {
+        const errorMessage = backendResult.error || "Authentication failed";
+        console.error(`[Auth] Go backend login failed: ${errorMessage}`);
+        return {
+          session: null,
+          error: errorMessage,
+          errorCode: AuthErrorCode.INVALID_CREDENTIALS,
+        };
+      }
+
+      console.log(`[Auth] Go backend login successful`);
+      // Since user doesn't exist in auth.users, we can't create a session
+      // Return success but no session - frontend should handle accordingly
+      return {
+        session: null,
+        user: {
+          id: 'temp-user-id', // Placeholder since we don't have a real user ID
+          email: email,
+          role: 'public',
+        },
+      };
+    }
+
+    if (existingAuthUser?.user && !existingPublicUser) {
+      // Case 3: User exists in auth.users but not in public.users - send GET user request to Go backend
+      console.log(`[Auth] User exists in auth.users but not in public.users, fetching user data from Go backend: ${email}`);
+
+      // Try to sign in first to get a session for the user
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        console.error(`[Auth] Supabase sign-in failed: ${signInError.message}`);
         return {
           session: null,
           error: AuthErrorMessages[AuthErrorCode.SUPABASE_AUTH_ERROR],
@@ -112,153 +224,53 @@ export async function handleUserSignIn(
         };
       }
 
-      console.log(
-        `[Auth] Successfully signed in existing user: ${email}`
-      );
+      // Now fetch user data from Go backend
+      console.log(`[Auth] Sending GET /user request to fetch user info`);
+      const userUrl = 'http://localhost:8080/user';
+      const userResponse = await fetch(userUrl, {
+        method: 'GET',
+        headers: {
+          'X-User-Id': existingAuthUser.user.id, // Use the auth user ID
+          'X-Email': email
+        }
+      });
+
+      const userResult = await userResponse.json();
+
+      if (!userResult.success) {
+        console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || 'Unknown error'}`);
+        // Continue with authentication even if GET /user fails
+      } else {
+        console.log(`[Auth] Successfully fetched user data from backend`);
+      }
+
+      console.log(`[Auth] Successfully authenticated user and fetched profile data: ${email}`);
       return {
-        session: data.session,
+        session: signInData.session,
         user: {
-          id: existingUser.id,
-          email: existingUser.email,
-          role: existingUser.role,
+          id: existingAuthUser.user.id,
+          email: existingAuthUser.user.email || email,
+          role: 'public', // Default role until synced
         },
       };
     }
 
-    // Step 4: User doesn't exist - validate via Go backend
-    console.log(`[Auth] User not found, validating via Go backend: ${email}`);
-    const backendResult = await loginToGoBackend(email, password);
-
-    if (!backendResult.authenticated) {
-      const errorMessage = backendResult.message || backendResult.errors?.join(', ') || "Invalid credentials";
-      console.error(
-        `[Auth] Go backend validation failed: ${errorMessage}`
-      );
+    // Case 4: User exists in public.users but not in auth.users - data inconsistency
+    if (!existingAuthUser?.user && existingPublicUser) {
+      console.error(`[Auth] Data inconsistency: User exists in public.users but not in auth.users: ${email}`);
       return {
         session: null,
-        error: errorMessage,
-        errorCode: AuthErrorCode.INVALID_CREDENTIALS,
-      };
-    }
-
-    // Step 5: Go backend validation succeeded - create auth user only
-    console.log(`[Auth] Go backend validation successful, creating auth user: ${email}`);
-
-    // Create auth user via admin client
-    const { data: authData, error: authError } =
-      await supabaseAdmin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true, // Auto-confirm since portal validated them
-      });
-
-    if (authError) {
-      console.error(`[Auth] Failed to create auth user: ${authError.message}`);
-      return {
-        session: null,
-        error: AuthErrorMessages[AuthErrorCode.USER_CREATION_FAILED],
-        errorCode: AuthErrorCode.USER_CREATION_FAILED,
-      };
-    }
-
-    if (!authData.user) {
-      console.error("[Auth] Auth user created but no user data returned");
-      return {
-        session: null,
-        error: AuthErrorMessages[AuthErrorCode.USER_CREATION_FAILED],
-        errorCode: AuthErrorCode.USER_CREATION_FAILED,
-      };
-    }
-
-    const userId = authData.user.id;
-    console.log(`[Auth] Auth user created with ID: ${userId}`);
-
-    // Step 6: Fetch user data from Go backend using GET /user with CSRF token
-    console.log(`[Auth] Fetching user data from Go backend via GET /user`);
-    const { fetchUserDataFromGoBackend } = await import('@/lib/scraperClient');
-
-    // Extract session token from login response
-    const sessionToken = backendResult.token;
-    if (!sessionToken) {
-      console.error(`[Auth] No session token received from login response`);
-      // Cleanup - delete the auth user since we can't proceed
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      return {
-        session: null,
-        error: "Authentication failed - no session token",
+        error: "Account data inconsistency. Please contact support.",
         errorCode: AuthErrorCode.INTERNAL_ERROR,
       };
     }
 
-    const userDataResult = await fetchUserDataFromGoBackend(sessionToken, userId, email);
-
-    if (!userDataResult.success) {
-      console.warn(`[Auth] Warning: Failed to fetch user data: ${userDataResult.error}`);
-      console.log(`[Auth] Continuing with auth user creation despite GET /user failure`);
-      // Note: Not deleting auth user - keeping it even if GET /user fails
-      // User data check will happen in Supabase query below
-    }
-
-    // Step 7: Check Supabase public.users table for user data
-    // Note: We do NOT push user data to Supabase - it should already be there
-    console.log(`[Auth] Checking Supabase public.users table for user data: ${userId}`);
-    const { data: existingUserData, error: userCheckError } = await supabaseAdmin
-      .from("users")
-      .select("*")
-      .eq("id", userId)
-      .single();
-
-    if (userCheckError && userCheckError.code !== 'PGRST116') { // PGRST116 = no rows found
-      console.error(`[Auth] Error checking user data in Supabase: ${userCheckError.message}`);
-      // Cleanup - delete the auth user since we couldn't verify user data
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      return {
-        session: null,
-        error: AuthErrorMessages[AuthErrorCode.SUPABASE_QUERY_ERROR],
-        errorCode: AuthErrorCode.SUPABASE_QUERY_ERROR,
-      };
-    }
-
-    if (!existingUserData) {
-      console.error(`[Auth] User data not found in Supabase public.users table after GET /user success`);
-      // Cleanup - delete the auth user since user data is missing
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      return {
-        session: null,
-        error: "User profile data not available",
-        errorCode: AuthErrorCode.INTERNAL_ERROR,
-      };
-    }
-
-    console.log(`[Auth] User data found in Supabase for: ${userId}`);
-
-    // Step 8: Create session via client
-    console.log(`[Auth] Creating session for new user: ${email}`);
-    const { data: sessionData, error: sessionError } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-    if (sessionError || !sessionData.session) {
-      console.error(`[Auth] Failed to create session: ${sessionError?.message}`);
-      // Cleanup: delete the created auth user only (don't touch users table)
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      return {
-        session: null,
-        error: AuthErrorMessages[AuthErrorCode.SESSION_CREATION_FAILED],
-        errorCode: AuthErrorCode.SESSION_CREATION_FAILED,
-      };
-    }
-
-    console.log(`[Auth] Successfully authenticated new user and session: ${email}`);
+    // This should never be reached, but add a fallback
+    console.error(`[Auth] Unexpected code path reached for user: ${email}`);
     return {
-      session: sessionData.session,
-      user: {
-        id: userId,
-        email: existingUserData.email,
-        role: existingUserData.role,
-      },
+      session: null,
+      error: AuthErrorMessages[AuthErrorCode.INTERNAL_ERROR],
+      errorCode: AuthErrorCode.INTERNAL_ERROR,
     };
   } catch (error) {
     console.error(

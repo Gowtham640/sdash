@@ -19,6 +19,9 @@ interface CalendarEvent {
   day_name: string;
   content: string;
   day_order: string;
+  month?: string;
+  month_name?: string;
+  year?: number;
 }
 
 interface AttendanceSubject {
@@ -768,10 +771,34 @@ export default function Dashboard() {
     let calendarEvents: CalendarEvent[] | null = null;
     
     if (Array.isArray(result.data.calendar)) {
-      // Direct array format
-      calendarEvents = result.data.calendar;
-      console.log('[Dashboard] ✅ Calendar data is direct array format');
-      console.log('[Dashboard]   - Total events:', calendarEvents.length);
+      // Check if it's the new nested format: [{month: "Jan '26", dates: [{day, date, event, day_order}, ...]}, ...]
+      const firstItem = result.data.calendar[0];
+      if (firstItem && typeof firstItem === 'object' && 'month' in firstItem && 'dates' in firstItem) {
+        // New nested format: [{month: "Jan '26", dates: [{day, date, event, day_order}, ...]}, ...]
+        console.log('[Dashboard] 🔄 Detected new nested calendar format - flattening...');
+        calendarEvents = [];
+        result.data.calendar.forEach((monthData: any) => {
+          if (monthData.month && Array.isArray(monthData.dates)) {
+            monthData.dates.forEach((dateData: any) => {
+              calendarEvents!.push({
+                date: dateData.date?.toString() || '',
+                day_name: dateData.day || '',
+                content: dateData.event || '',
+                day_order: dateData.day_order || '',
+                month: monthData.month,
+                month_name: monthData.month?.split(' ')[0] || '',
+                year: monthData.month?.split(' ')[1] || ''
+              });
+            });
+          }
+        });
+        console.log(`[Dashboard] ✅ Flattened ${calendarEvents.length} calendar events from nested format`);
+      } else {
+        // Direct array format (legacy)
+        calendarEvents = result.data.calendar;
+        console.log('[Dashboard] ✅ Calendar data is direct array format');
+        console.log('[Dashboard]   - Total events:', calendarEvents.length);
+      }
     } else if (result.data.calendar && typeof result.data.calendar === 'object') {
       // Check if it's wrapped format: {success: true, data: [...]}
       if ('success' in result.data.calendar && 'data' in result.data.calendar) {

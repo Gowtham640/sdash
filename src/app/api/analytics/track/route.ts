@@ -84,7 +84,36 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     
     // Extract user info from request
     const { user_id, user_email } = getUserInfo(request);
-    
+
+    // Validate that user_id exists in auth.users if provided
+    if (user_id) {
+      try {
+        const { data: usersList, error: authQueryError } = await supabaseAdmin.auth.admin.listUsers();
+        if (authQueryError) {
+          console.error("[API /analytics/track] Error querying auth.users:", authQueryError.message);
+          return NextResponse.json(
+            { success: false, error: "Authentication service error" },
+            { status: 500 }
+          );
+        }
+
+        const userExists = usersList?.users.some(u => u.id === user_id);
+        if (!userExists) {
+          console.error(`[API /analytics/track] User ID ${user_id} does not exist in auth.users`);
+          return NextResponse.json(
+            { success: false, error: "Invalid user session" },
+            { status: 401 }
+          );
+        }
+      } catch (error) {
+        console.error("[API /analytics/track] Error validating user existence:", error);
+        return NextResponse.json(
+          { success: false, error: "Authentication validation error" },
+          { status: 500 }
+        );
+      }
+    }
+
     // Deduplicate events server-side (check for existing events with same fingerprint)
     // For session_end and site_open, check for duplicates in the last 5 seconds
     const deduplicatedEvents: QueuedEvent[] = [];

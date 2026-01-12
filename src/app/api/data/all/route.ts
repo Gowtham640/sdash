@@ -1148,33 +1148,31 @@ async function callGoBackendForDataRefresh(
     console.log(`[API /data/all] 📡 ${dataType} refresh call completed: ${backendCallDuration}ms`);
     console.log(`[API /data/all]   - Success: ${result.success}`);
     console.log(`[API /data/all]   - Error: ${result.error || "none"}`);
-    
+    console.log(`[API /data/all]   - Data received: ${result.data ? "✓" : "✗"}`);
+
     if (!result.success) {
       return {
         success: false,
         error: result.error || 'Go backend refresh failed',
       };
     }
-    
-    // Step 2: Fetch updated data from Supabase
-    console.log(`[API /data/all] 📊 Fetching updated ${dataType} from Supabase...`);
-    const supabaseStart = Date.now();
-    const cachedData = await getSupabaseCache(user_id, dataType);
-    const supabaseDuration = Date.now() - supabaseStart;
-    
-    if (!cachedData) {
-      console.warn(`[API /data/all] ⚠️ No data found in Supabase after refresh (${supabaseDuration}ms)`);
-      return {
-        success: false,
-        error: 'Data not found in Supabase after refresh',
-      };
+
+    // Step 2: Store the data from Go backend to Supabase cache
+    if (result.data) {
+      console.log(`[API /data/all] 💾 Storing ${dataType} data to Supabase cache...`);
+      const { setSupabaseCache } = await import('@/lib/supabaseCache');
+      const cacheSaved = await setSupabaseCache(user_id, dataType, result.data);
+      if (cacheSaved) {
+        console.log(`[API /data/all] ✅ ${dataType} data stored in cache`);
+      } else {
+        console.warn(`[API /data/all] ⚠️ Failed to store ${dataType} data in cache, but continuing`);
+      }
     }
-    
-    console.log(`[API /data/all] ✅ ${dataType} fetched from Supabase (${supabaseDuration}ms)`);
-    
+
+    // Return the data directly from the backend response
     return {
       success: true,
-      data: cachedData,
+      data: result.data,
     };
   } catch (error) {
     const backendCallDuration = Date.now() - backendCallStart;
@@ -1575,38 +1573,7 @@ async function getSemesterFromDatabase(user_id: string): Promise<number | null> 
  * Update user's semester in database (fire and forget)
  */
 async function updateSemesterInDatabase(user_id: string, semester: number): Promise<void> {
-  console.log(`[API /data/all] 💾 Database update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Semester: ${semester}`);
-    
-    // Fire and forget - don't wait for DB update
-    (async () => {
-      try {
-      const dbStartTime = Date.now();
-        const { data, error } = await supabaseAdmin
-          .from("users")
-          .update({ semester })
-          .eq("id", user_id)
-          .select();
-      const dbDuration = Date.now() - dbStartTime;
-        
-        if (error) {
-        console.error(`[API /data/all] ❌ Database update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-        console.error(`[API /data/all]   - Details: ${JSON.stringify(error)}`);
-        } else {
-        console.log(`[API /data/all] ✅ Database update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated semester to: ${semester}`);
-        console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
-        }
-      } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-      if (dbError instanceof Error && dbError.stack) {
-        console.error(`[API /data/all]   - Stack: ${dbError.stack}`);
-      }
-      }
-    })();
+  console.log(`[API /data/all] ⚠️ Database update disabled - project should not write to Supabase tables`);
 }
 
 /**
@@ -1624,103 +1591,21 @@ function capitalizeName(name: string): string {
  * Update user's name in database (fire and forget)
  */
 async function updateNameInDatabase(user_id: string, name: string): Promise<void> {
-  const formattedName = capitalizeName(name);
-  console.log(`[API /data/all] 💾 Database name update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Name: ${name} -> ${formattedName}`);
-    
-    // Fire and forget - don't wait for DB update
-    (async () => {
-      try {
-      const dbStartTime = Date.now();
-        const { data, error } = await supabaseAdmin
-          .from("users")
-          .update({ name: formattedName })
-          .eq("id", user_id)
-          .select();
-      const dbDuration = Date.now() - dbStartTime;
-        
-        if (error) {
-        console.error(`[API /data/all] ❌ Database name update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-        console.error(`[API /data/all]   - Details: ${JSON.stringify(error)}`);
-        } else {
-        console.log(`[API /data/all] ✅ Database name update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated name to: ${formattedName}`);
-        console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
-        }
-      } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-      if (dbError instanceof Error && dbError.stack) {
-        console.error(`[API /data/all]   - Stack: ${dbError.stack}`);
-      }
-      }
-    })();
+  console.log(`[API /data/all] ⚠️ Database name update disabled - project should not write to Supabase tables`);
 }
 
 /**
  * Update user's registration number in database (fire and forget)
  */
 async function updateRegistrationNumberInDatabase(user_id: string, registration_number: string): Promise<void> {
-  console.log(`[API /data/all] 💾 Database registration_number update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Registration Number: ${registration_number}`);
-    
-  (async () => {
-    try {
-      const dbStartTime = Date.now();
-      const { data, error } = await supabaseAdmin
-        .from("users")
-        .update({ registration_number })
-        .eq("id", user_id)
-        .select();
-      const dbDuration = Date.now() - dbStartTime;
-      
-      if (error) {
-        console.error(`[API /data/all] ❌ Database registration_number update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-      } else {
-        console.log(`[API /data/all] ✅ Database registration_number update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated registration_number to: ${registration_number}`);
-      }
-    } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-    }
-  })();
+  console.log(`[API /data/all] ⚠️ Database registration_number update disabled - project should not write to Supabase tables`);
 }
 
 /**
  * Update user's department in database (fire and forget)
  */
 async function updateDepartmentInDatabase(user_id: string, department: string): Promise<void> {
-  console.log(`[API /data/all] 💾 Database department update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Department: ${department}`);
-    
-  (async () => {
-    try {
-      const dbStartTime = Date.now();
-      const { data, error } = await supabaseAdmin
-        .from("users")
-        .update({ department })
-        .eq("id", user_id)
-        .select();
-      const dbDuration = Date.now() - dbStartTime;
-      
-      if (error) {
-        console.error(`[API /data/all] ❌ Database department update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-      } else {
-        console.log(`[API /data/all] ✅ Database department update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated department to: ${department}`);
-      }
-    } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-    }
-  })();
+  console.log(`[API /data/all] ⚠️ Database department update disabled - project should not write to Supabase tables`);
 }
 
 /**

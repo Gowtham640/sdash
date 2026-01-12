@@ -554,8 +554,8 @@ export default function AttendancePage() {
         try {
           // The refresh API already returns processed data from Supabase
           const attendanceData = result.data as AttendanceData;
-          setRawAttendanceData(attendanceData);
-          setAttendanceData(attendanceData.all_subjects);
+          setOriginalAttendanceData(attendanceData);
+          setAttendanceData(attendanceData);
 
           // Also update localStorage cache for future use
           setClientCache('attendance', attendanceData);

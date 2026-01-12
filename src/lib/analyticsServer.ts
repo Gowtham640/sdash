@@ -77,33 +77,8 @@ export async function trackServerEvent(
   sessionId?: string | null
 ): Promise<void> {
   try {
-    // If user_id is provided, ensure user exists in users table before tracking
-    if (userId) {
-      const { data: existingUser, error: userCheckError } = await supabaseAdmin
-        .from('users')
-        .select('id')
-        .eq('id', userId)
-        .single();
-
-      if (userCheckError || !existingUser) {
-        // User doesn't exist - create minimal user record first
-        console.log(`[Analytics Server] User ${userId} not found, creating minimal record for analytics`);
-        const { error: createError } = await supabaseAdmin
-          .from('users')
-          .upsert({
-            id: userId,
-            email: 'unknown@example.com', // Placeholder - will be updated later
-            role: 'public',
-          }, {
-            onConflict: 'id'
-          });
-
-        if (createError) {
-          console.error(`[Analytics Server] Failed to create user record for analytics:`, createError);
-          return; // Skip tracking if we can't create user
-        }
-      }
-    }
+    // User creation disabled - project should not write to Supabase tables
+    // Analytics will only work for users that already exist in the database
 
     // Generate fingerprint for deduplication
     const fingerprint = getRequestFingerprint(eventName, userId, eventData);

@@ -25,7 +25,7 @@ export interface CalendarEvent {
   day_order: string;
   month?: string;
   month_name?: string;
-  year?: string;
+  year?: number;
 }
 
 export interface SlotInfo {
@@ -140,11 +140,12 @@ export const getDayOrderStats = (calendarData: CalendarEvent[]): DayOrderStats =
         
         // Only count events from current date onwards and before/on end date
         // Only count if it's a valid day order (not a holiday)
-        if (eventDate >= currentDate && eventDate <= endDate && event.day_order.startsWith('DO ')) {
-          const doNumber = parseInt(event.day_order.split(' ')[1]);
-          if (doNumber >= 1 && doNumber <= 5) {
+        if (eventDate >= currentDate && eventDate <= endDate) {
+          const doNumber = Number(event.day_order);
+          if (!isNaN(doNumber) && doNumber >= 1 && doNumber <= 5) {
+            // All valid day orders are now just numbers as strings
             stats[doNumber]++;
-            console.log(`[STATS] Found DO ${doNumber} on ${event.date}`);
+            console.log(`[STATS] Found DO ${doNumber} on ${event.date} (day_order: "${event.day_order}")`);
           }
         }
       } catch (error) {

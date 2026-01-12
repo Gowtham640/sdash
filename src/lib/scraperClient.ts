@@ -607,7 +607,7 @@ export async function fetchDataFromGoBackend(
   user_id: string,
   email: string,
   password: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
   const requestStartTime = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
@@ -684,26 +684,32 @@ export async function fetchDataFromGoBackend(
     }
 
     const parseStartTime = Date.now();
-    const rawResponseData: { success: boolean } = await response.json();
+    const rawResponseData = await response.json();
     const parseDuration = Date.now() - parseStartTime;
     const totalDuration = Date.now() - requestStartTime;
 
     console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
     console.log(`[Backend Client] 📦 RESPONSE BODY:`, JSON.stringify(rawResponseData, null, 2));
 
-    console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
-    console.log(`[Backend Client]   - Success: ${rawResponseData.success}`);
     console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // Map Go backend response to expected format
-    // Go backend only validates credentials, doesn't return user data
-    const responseData: GoBackendLoginResponse = {
-      authenticated: rawResponseData.success,
-      // User data will be fetched separately via GET /user endpoint
-    };
+    // Check if response has success field (error responses)
+    if (typeof rawResponseData === 'object' && rawResponseData !== null && 'success' in rawResponseData) {
+      const successResponse = rawResponseData as { success: boolean; error?: string };
+      if (!successResponse.success) {
+        return {
+          success: false,
+          error: successResponse.error || 'Backend returned error',
+        };
+      }
+    }
 
-    return responseData;
+    // Return the actual data from backend
+    return {
+      success: true,
+      data: rawResponseData,
+    };
   } catch (error) {
     clearTimeout(timeoutId);
     const totalDuration = Date.now() - requestStartTime;
@@ -926,11 +932,11 @@ async function callGoEndpoint<T = unknown>(
   // Add authentication headers in new format
   headers['X-User-Id'] = data.user_id || '';
   headers['X-Email'] = data.email;
-  headers['X-Password'] = data.password;
+  headers['X-Password'] = data.password || '';
 
   console.log(`[Backend Client] 🆔 HEADER X-User-Id: ${data.user_id || 'none'}`);
   console.log(`[Backend Client] 📧 HEADER X-Email: ${data.email}`);
-  console.log(`[Backend Client] 🔐 HEADER X-Password: ${data.password.substring(0, 3)}***`);
+  console.log(`[Backend Client] 🔐 HEADER X-Password: ${data.password ? data.password.substring(0, 3) + '***' : 'none'}`);
 
   // Keep cookie header as fallback (except for /login and /hello)
   if (path !== '/login' && path !== '/hello' && cookies) {
@@ -967,7 +973,7 @@ async function callGoEndpoint<T = unknown>(
     console.warn(`[Backend Client] ⚠️ Direct POST to /login - use loginToGoBackend() instead`);
     const requestBody = {
       account: data.email, // Map email to account
-      password: data.password,
+      password: data.password || '',
     };
     requestOptions.body = JSON.stringify(requestBody);
     console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));

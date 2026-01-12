@@ -131,8 +131,7 @@ export default function MarksPage() {
         try {
           // The refresh API already returns processed data from Supabase
           const marksData = result.data as MarksData;
-          setRawMarksData(marksData);
-          setMarksData(marksData.all_courses);
+          setMarksData(marksData);
 
           // Also update localStorage cache for future use
           setClientCache('marks', marksData);

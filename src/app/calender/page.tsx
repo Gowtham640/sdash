@@ -17,7 +17,7 @@ interface CalendarEvent {
   day_order: string;
   month?: string;
   month_name?: string;
-  year?: string;
+  year?: number;
 }
 
 export default function CalendarPage() {
@@ -245,30 +245,37 @@ export default function CalendarPage() {
       
       let calendarEvents: CalendarEvent[] | null = null;
       
-      if (Array.isArray(result.data.calendar)) {
-        // Direct array format
-        calendarEvents = result.data.calendar;
-        console.log('[Calendar] ✅ Calendar data is direct array format');
-        console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
-      } else if (result.data.calendar && typeof result.data.calendar === 'object') {
-        // Check if it's wrapped format: {success: true, data: [...]}
-        if ('success' in result.data.calendar && 'data' in result.data.calendar) {
-          const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
-          const successValue = calendarWrapper.success;
-          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-          if (isSuccess && Array.isArray(calendarWrapper.data)) {
-            calendarEvents = calendarWrapper.data;
-            console.log('[Calendar] ✅ Calendar data is wrapped format');
-            console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
-          }
-        }
-        // Check legacy nested format: {data: [...]}
-        else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
-          calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
-          console.log('[Calendar] ✅ Calendar data is legacy nested format');
+    if (Array.isArray(result.data.calendar)) {
+      // Map JSON format to CalendarEvent interface
+      calendarEvents = result.data.calendar.map((e: any) => ({
+        date: e.date,
+        day_name: e.day_name,
+        content: e.event ?? '',
+        day_order: e.day_order,
+        month: e.month,
+        year: e.year
+      }));
+      console.log('[Calendar] ✅ Calendar data processed');
+      console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
+    } else if (result.data.calendar && typeof result.data.calendar === 'object') {
+      // Check if it's wrapped format: {success: true, data: [...]}
+      if ('success' in result.data.calendar && 'data' in result.data.calendar) {
+        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
+        const successValue = calendarWrapper.success;
+        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+        if (isSuccess && Array.isArray(calendarWrapper.data)) {
+          calendarEvents = calendarWrapper.data;
+          console.log('[Calendar] ✅ Calendar data is wrapped format');
           console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
         }
       }
+      // Check legacy nested format: {data: [...]}
+      else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
+        calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
+        console.log('[Calendar] ✅ Calendar data is legacy nested format');
+        console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
+      }
+    }
       
       if (calendarEvents && calendarEvents.length > 0) {
         // Extract semester from multiple sources with fallbacks
@@ -389,13 +396,23 @@ export default function CalendarPage() {
     const endDate = parseDate(endDateStr);
     
     displayEvents.forEach(event => {
-      if (event.date && event.day_order && event.day_order.startsWith('DO ')) {
+      if (event.date && event.day_order) {
         const eventDate = parseDate(event.date);
-        
+
+        // Skip holidays and days off
+        const isHoliday = event.day_order === "-" ||
+                         event.day_order === "DO -" ||
+                         event.day_order === "Holiday" ||
+                         (event.content && event.content.toLowerCase().includes('holiday'));
+
+        if (isHoliday) {
+          return;
+        }
+
         // Only count events from current date onwards and before/on end date
         if (eventDate >= currentDate && eventDate <= endDate) {
-          const doNumber = parseInt(event.day_order.split(' ')[1]);
-          if (doNumber >= 1 && doNumber <= 5) {
+          const doNumber = Number(event.day_order);
+          if (!isNaN(doNumber) && doNumber >= 1 && doNumber <= 5) {
             stats[doNumber]++;
             console.log(`[STATS] Found DO ${doNumber} on ${event.date}`);
           }

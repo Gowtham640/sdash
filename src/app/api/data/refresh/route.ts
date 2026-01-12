@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
       const action = `get_${data_type}_data`;
       console.log(`[API /data/refresh] 🔄 Calling backend: ${action}`);
       
-      let result = await callBackendScraper(action, {
+      const result = await callBackendScraper(action, {
         email: user_email,
         ...(password ? { password } : {}),
         user_id,

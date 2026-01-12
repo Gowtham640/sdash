@@ -1,13 +1,14 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Link from 'next/link';
-import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats, type CalendarEvent } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import type html2canvas from 'html2canvas';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 
@@ -48,6 +49,16 @@ interface TimetableData {
       };
     };
   };
+}
+
+interface CalendarEvent {
+  date: string;
+  day_name: string;
+  content: string;
+  day_order: string;
+  month?: string;
+  month_name?: string;
+  year?: number;
 }
 
 export default function TimetablePage() {
@@ -302,10 +313,19 @@ export default function TimetablePage() {
         if (result.data && typeof result.data === 'object' && 'calendar' in result.data) {
           const calendarDataFromResult = (result.data as { calendar?: unknown }).calendar;
           let calendarArray: CalendarEvent[] | null = null;
-          
+
           if (Array.isArray(calendarDataFromResult)) {
-            // Direct array format
-            calendarArray = calendarDataFromResult;
+            // Map JSON format to CalendarEvent interface
+            calendarArray = calendarDataFromResult.map((e: any) => ({
+              date: e.date,
+              day_name: e.day_name,
+              content: e.event ?? '',
+              day_order: e.day_order,
+              month: e.month,
+              year: e.year
+            }));
+            console.log('[Timetable] ✅ Calendar data processed');
+            console.log('[Timetable]   - Total events:', calendarArray?.length ?? 0);
           } else if (calendarDataFromResult && typeof calendarDataFromResult === 'object') {
             const calendarObj = calendarDataFromResult as Record<string, unknown>;
             // Handle {success: true, data: [...]} format (old API format)
@@ -324,7 +344,7 @@ export default function TimetablePage() {
               }
             }
           }
-          
+
           if (calendarArray) {
             setCalendarData(calendarArray);
             const stats = getDayOrderStats(calendarArray);
@@ -469,9 +489,17 @@ export default function TimetablePage() {
             if (calendarResult.success && calendarResult.data?.calendar) {
               let calendarArray: CalendarEvent[] | null = null;
               const calendarData = calendarResult.data.calendar;
-              
+
               if (Array.isArray(calendarData)) {
-                calendarArray = calendarData;
+                // Map JSON format to CalendarEvent interface
+                calendarArray = calendarData.map((e: any) => ({
+                  date: e.date,
+                  day_name: e.day_name,
+                  content: e.event ?? '',
+                  day_order: e.day_order,
+                  month: e.month,
+                  year: e.year
+                }));
               } else if (calendarData && typeof calendarData === 'object') {
                 const calendarObj = calendarData as Record<string, unknown>;
                 // Handle {success: true, data: [...]} format
@@ -483,7 +511,7 @@ export default function TimetablePage() {
                   calendarArray = calendarObj.data as CalendarEvent[];
                 }
               }
-              
+
               if (calendarArray) {
                 setCalendarData(calendarArray);
                 const stats = getDayOrderStats(calendarArray);
@@ -523,6 +551,47 @@ export default function TimetablePage() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
+  };
+
+  const handleDownloadTimetable = async () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      // Dynamically import html2canvas
+      const html2canvas = (await import('html2canvas')).default;
+
+      // Find the timetable table element
+      const tableElement = document.querySelector('.timetable-table') as HTMLElement;
+      if (!tableElement) {
+        console.error('Timetable table not found');
+        return;
+      }
+
+      // Create canvas from the table
+      const canvas = await html2canvas(tableElement, {
+        backgroundColor: '#000000',
+        scale: 2, // Higher resolution
+        useCORS: true,
+        allowTaint: true,
+      });
+
+      // Convert to JPG blob
+      canvas.toBlob((blob: Blob | null) => {
+        if (blob) {
+          // Create download link
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'sdash-timetable.jpg';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+      }, 'image/jpeg', 0.95);
+    } catch (error) {
+      console.error('Error downloading timetable:', error);
+    }
   };
 
   // Transform new Go backend format to old format
@@ -759,24 +828,43 @@ export default function TimetablePage() {
         <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
-            <button
-              onClick={refreshTimetableData}
-              disabled={loading}
-              className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label="Refresh timetable data"
-              title="Refresh timetable data"
-            >
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                fill="none" 
-                viewBox="0 0 24 24" 
-                strokeWidth={2} 
-                stroke="currentColor" 
-                className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDownloadTimetable}
+                className="text-white hover:text-green-400 transition-colors"
+                aria-label="Download timetable as JPG"
+                title="Download timetable as JPG"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-              </svg>
-            </button>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+              </button>
+              <button
+                onClick={refreshTimetableData}
+                disabled={loading}
+                className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Refresh timetable data"
+                title="Refresh timetable data"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
         
@@ -838,58 +926,60 @@ export default function TimetablePage() {
 
       <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
         <div className="h-full overflow-auto">
-          <table className="w-full h-full border-collapse">
+          <table className="w-full h-full border-collapse timetable-table">
             <thead className="sticky top-0 bg-black/50 backdrop-blur-sm z-10">
               <tr>
                 <th className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[80px] sm:min-w-[90px] md:min-w-[95px] lg:min-w-[100px] text-[10px] sm:text-xs md:text-sm lg:text-base">
-                  Time
+                  Day Order
                 </th>
-                {days.map((day) => (
-                  <th key={day} className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] text-[10px] sm:text-xs md:text-sm lg:text-base">
-                    {day}
+                {timetableData.map((slot) => (
+                  <th key={slot.time} className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] text-[10px] sm:text-xs md:text-sm lg:text-base">
+                    {slot.time}
                   </th>
                 ))}
               </tr>
             </thead>
 
             <tbody>
-              {timetableData.map((slot) => (
-                <tr key={slot.time}>
+              {days.map((day, dayIndex) => (
+                <tr key={day}>
                   <td className="border border-white/30 bg-white/10 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base">
-                    {slot.time}
+                    {day}
                   </td>
 
-                  {dayKeys.map((dayKey) => {
+                  {timetableData.map((slot) => {
+                    const dayKey = dayKeys[dayIndex];
                     const cellData = slot[dayKey];
                     const isObject = typeof cellData === 'object' && cellData !== null;
                     const courseName = isObject ? (cellData as { course: string }).course : (cellData as string) || "";
-                    const courseType = isObject ? (cellData as { courseType?: string }).courseType : undefined;
-                    const online = isObject ? (cellData as { online?: boolean }).online : undefined;
-                    
-                    // Determine background color based on courseType
+
+                    // Get slot type from raw timetable data if available
+                    let slotType = '';
+                    if (rawTimetableData && rawTimetableData.timetable) {
+                      const dayOrderData = rawTimetableData.timetable[day];
+                      if (dayOrderData && dayOrderData.time_slots[slot.time]) {
+                        slotType = dayOrderData.time_slots[slot.time].slot_type || '';
+                      }
+                    }
+
+                    // Determine background color based on slotType
                     let bgColor = 'bg-white/10';
-                    if (courseType) {
-                      const typeLower = courseType.toLowerCase();
+                    if (slotType) {
+                      const typeLower = slotType.toLowerCase();
                       if (typeLower === 'theory') {
                         bgColor = 'bg-blue-500/30';
-                      } else if (typeLower === 'practical' || typeLower === 'lab') {
-                        bgColor = 'bg-green-500/30';
-                      } else if (online) {
-                        bgColor = 'bg-purple-500/30';
                       } else {
-                        bgColor = 'bg-yellow-500/30';
+                        bgColor = 'bg-green-500/30';
                       }
-                    } else if (online) {
-                      bgColor = 'bg-purple-500/30';
                     }
-                    
+
                     return (
-                      <td 
-                        key={dayKey} 
+                      <td
+                        key={`${day}-${slot.time}`}
                         className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor}`}
                       >
                         {courseName}
-                    </td>
+                      </td>
                     );
                   })}
                 </tr>
