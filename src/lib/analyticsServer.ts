@@ -77,18 +77,46 @@ export async function trackServerEvent(
   sessionId?: string | null
 ): Promise<void> {
   try {
+    // If user_id is provided, ensure user exists in users table before tracking
+    if (userId) {
+      const { data: existingUser, error: userCheckError } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('id', userId)
+        .single();
+
+      if (userCheckError || !existingUser) {
+        // User doesn't exist - create minimal user record first
+        console.log(`[Analytics Server] User ${userId} not found, creating minimal record for analytics`);
+        const { error: createError } = await supabaseAdmin
+          .from('users')
+          .upsert({
+            id: userId,
+            email: 'unknown@example.com', // Placeholder - will be updated later
+            role: 'public',
+          }, {
+            onConflict: 'id'
+          });
+
+        if (createError) {
+          console.error(`[Analytics Server] Failed to create user record for analytics:`, createError);
+          return; // Skip tracking if we can't create user
+        }
+      }
+    }
+
     // Generate fingerprint for deduplication
     const fingerprint = getRequestFingerprint(eventName, userId, eventData);
-    
+
     // Check if this is a duplicate
     if (isDuplicateRequest(fingerprint)) {
       console.log(`[Analytics Server] Skipping duplicate event: ${eventName}`);
       return;
     }
-    
+
     // Mark as tracked
     markRequestTracked(fingerprint);
-    
+
     // Insert directly into Supabase events table
     // RLS policy allows public insert, so this should work
     await supabaseAdmin
@@ -100,7 +128,7 @@ export async function trackServerEvent(
         event_data: eventData ?? null,
         created_at: new Date().toISOString(),
       });
-    
+
     // Silently fail - don't block execution
   } catch (error) {
     // Silently fail - analytics should never break functionality

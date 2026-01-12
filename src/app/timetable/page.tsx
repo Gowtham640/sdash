@@ -117,10 +117,36 @@ export default function TimetablePage() {
         throw new Error(result.error || 'Failed to refresh timetable data');
       }
 
-      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
-      // Fetch from unified endpoint to get data in the correct processed format from cache
-      console.log('[Timetable] ✅ Refresh completed, fetching updated data from cache...');
-        await fetchUnifiedData(false);
+      // Refresh API returns data directly from Supabase
+      // Update local state with the returned data
+      console.log('[Timetable] ✅ Refresh completed, updating local state...');
+
+      if (result.data) {
+        try {
+          // The refresh API already returns processed data from Supabase
+          const timetableData = result.data as TimetableData;
+          setRawTimetableData(timetableData);
+          const convertedData = convertTimetableDataToTimeSlots(timetableData);
+          setTimetableData(convertedData);
+
+          // Also update localStorage cache for future use
+          setClientCache('timetable', timetableData);
+
+          console.log('[Timetable] ✅ Updated local state with refreshed timetable data');
+        } catch (dataError) {
+          console.error('[Timetable] ❌ Error processing refresh data:', dataError);
+          setError('Failed to process refreshed timetable data');
+          setLoading(false);
+          setIsRefreshing(false);
+          return;
+        }
+      } else {
+        console.warn('[Timetable] ⚠️ No data returned from refresh API');
+        setError('No timetable data available');
+        setLoading(false);
+        setIsRefreshing(false);
+        return;
+      }
     } catch (err) {
       console.error('[Timetable] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');

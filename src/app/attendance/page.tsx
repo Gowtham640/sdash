@@ -546,10 +546,33 @@ export default function AttendancePage() {
         throw new Error(result.error || 'Failed to refresh attendance data');
       }
 
-      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
-      // Fetch from unified endpoint to get data in the correct processed format from cache
-      console.log('[Attendance] ✅ Refresh completed, fetching updated data from cache...');
-        await fetchUnifiedData(false);
+      // Refresh API returns data directly from Supabase
+      // Update local state with the returned data
+      console.log('[Attendance] ✅ Refresh completed, updating local state...');
+
+      if (result.data) {
+        try {
+          // The refresh API already returns processed data from Supabase
+          const attendanceData = result.data as AttendanceData;
+          setRawAttendanceData(attendanceData);
+          setAttendanceData(attendanceData.all_subjects);
+
+          // Also update localStorage cache for future use
+          setClientCache('attendance', attendanceData);
+
+          console.log('[Attendance] ✅ Updated local state with refreshed attendance data');
+        } catch (dataError) {
+          console.error('[Attendance] ❌ Error processing refresh data:', dataError);
+          setError('Failed to process refreshed attendance data');
+          setLoading(false);
+          return;
+        }
+      } else {
+        console.warn('[Attendance] ⚠️ No data returned from refresh API');
+        setError('No attendance data available');
+        setLoading(false);
+        return;
+      }
     } catch (err) {
       console.error('[Attendance] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');

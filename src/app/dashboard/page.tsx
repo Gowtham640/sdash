@@ -7,11 +7,11 @@ import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
-import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 
 // Import types
 interface CalendarEvent {

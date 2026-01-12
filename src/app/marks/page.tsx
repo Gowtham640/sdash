@@ -123,10 +123,33 @@ export default function MarksPage() {
         throw new Error(result.error || 'Failed to refresh marks data');
       }
 
-      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
-      // Fetch from unified endpoint to get data in the correct processed format from cache
-      console.log('[Marks] ✅ Refresh completed, fetching updated data from cache...');
-        await fetchUnifiedData(false);
+      // Refresh API returns data directly from Supabase
+      // Update local state with the returned data
+      console.log('[Marks] ✅ Refresh completed, updating local state...');
+
+      if (result.data) {
+        try {
+          // The refresh API already returns processed data from Supabase
+          const marksData = result.data as MarksData;
+          setRawMarksData(marksData);
+          setMarksData(marksData.all_courses);
+
+          // Also update localStorage cache for future use
+          setClientCache('marks', marksData);
+
+          console.log('[Marks] ✅ Updated local state with refreshed marks data');
+        } catch (dataError) {
+          console.error('[Marks] ❌ Error processing refresh data:', dataError);
+          setError('Failed to process refreshed marks data');
+          setLoading(false);
+          return;
+        }
+      } else {
+        console.warn('[Marks] ⚠️ No data returned from refresh API');
+        setError('No marks data available');
+        setLoading(false);
+        return;
+      }
     } catch (err) {
       console.error('[Marks] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh marks data');

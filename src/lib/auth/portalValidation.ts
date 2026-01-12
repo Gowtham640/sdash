@@ -2,7 +2,10 @@ import { PortalValidationResult, AuthErrorCode } from "./types";
 import { loginToGoBackend } from '@/lib/scraperClient';
 
 /**
- * Validates user credentials against the college portal using Go backend API
+ * DEPRECATED: This function is no longer used in the auth flow.
+ * Portal validation is now handled directly in handleUserSignIn via Go backend.
+ * 
+ * @deprecated Use loginToGoBackend directly instead
  * @param email - User email/portal login ID (used as account)
  * @param password - User password
  * @param cdigest - Optional captcha digest

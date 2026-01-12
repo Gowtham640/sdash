@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabaseClient";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { validatePortalCredentials } from "./portalValidation";
+import { loginToGoBackend } from "@/lib/scraperClient";
 import {
   SignInResponse,
   AuthErrorCode,
@@ -125,26 +125,24 @@ export async function handleUserSignIn(
       };
     }
 
-    // Step 4: User doesn't exist - validate via college portal
-    console.log(`[Auth] User not found, validating via portal: ${email}`);
-    const portalResult = await validatePortalCredentials(email, password);
+    // Step 4: User doesn't exist - validate via Go backend
+    console.log(`[Auth] User not found, validating via Go backend: ${email}`);
+    const backendResult = await loginToGoBackend(email, password);
 
-    if (!portalResult.valid) {
+    if (!backendResult.authenticated) {
+      const errorMessage = backendResult.message || backendResult.errors?.join(', ') || "Invalid credentials";
       console.error(
-        `[Auth] Portal validation failed: ${portalResult.error}`
+        `[Auth] Go backend validation failed: ${errorMessage}`
       );
       return {
         session: null,
-        error:
-          portalResult.error ||
-          AuthErrorMessages[AuthErrorCode.INVALID_CREDENTIALS],
-        errorCode:
-          portalResult.errorCode || AuthErrorCode.INVALID_CREDENTIALS,
+        error: errorMessage,
+        errorCode: AuthErrorCode.INVALID_CREDENTIALS,
       };
     }
 
-    // Step 5: Portal validation succeeded - create new user
-    console.log(`[Auth] Portal validation successful, creating new user: ${email}`);
+    // Step 5: Go backend validation succeeded - create auth user only
+    console.log(`[Auth] Go backend validation successful, creating auth user: ${email}`);
 
     // Create auth user via admin client
     const { data: authData, error: authError } =
@@ -175,31 +173,66 @@ export async function handleUserSignIn(
     const userId = authData.user.id;
     console.log(`[Auth] Auth user created with ID: ${userId}`);
 
-    // Create profile in users table
-    console.log(`[Auth] Creating user profile: ${userId}`);
-    const { error: profileError } = await supabaseAdmin
-      .from("users")
-      .insert({
-        id: userId,
-        email,
-        role: "public", // Default role as per schema
-        semester: 1, // Default semester (will be updated on first data fetch)
-      });
+    // Step 6: Fetch user data from Go backend using GET /user with CSRF token
+    console.log(`[Auth] Fetching user data from Go backend via GET /user`);
+    const { fetchUserDataFromGoBackend } = await import('@/lib/scraperClient');
 
-    if (profileError) {
-      console.error(
-        `[Auth] Failed to create user profile: ${profileError.message}`
-      );
-      // Attempt to cleanup - delete the auth user
+    // Extract session token from login response
+    const sessionToken = backendResult.token;
+    if (!sessionToken) {
+      console.error(`[Auth] No session token received from login response`);
+      // Cleanup - delete the auth user since we can't proceed
       await supabaseAdmin.auth.admin.deleteUser(userId);
       return {
         session: null,
-        error: AuthErrorMessages[AuthErrorCode.SUPABASE_INSERT_ERROR],
-        errorCode: AuthErrorCode.SUPABASE_INSERT_ERROR,
+        error: "Authentication failed - no session token",
+        errorCode: AuthErrorCode.INTERNAL_ERROR,
       };
     }
 
-    // Step 6: Create session via client
+    const userDataResult = await fetchUserDataFromGoBackend(sessionToken, userId, email);
+
+    if (!userDataResult.success) {
+      console.warn(`[Auth] Warning: Failed to fetch user data: ${userDataResult.error}`);
+      console.log(`[Auth] Continuing with auth user creation despite GET /user failure`);
+      // Note: Not deleting auth user - keeping it even if GET /user fails
+      // User data check will happen in Supabase query below
+    }
+
+    // Step 7: Check Supabase public.users table for user data
+    // Note: We do NOT push user data to Supabase - it should already be there
+    console.log(`[Auth] Checking Supabase public.users table for user data: ${userId}`);
+    const { data: existingUserData, error: userCheckError } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .single();
+
+    if (userCheckError && userCheckError.code !== 'PGRST116') { // PGRST116 = no rows found
+      console.error(`[Auth] Error checking user data in Supabase: ${userCheckError.message}`);
+      // Cleanup - delete the auth user since we couldn't verify user data
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+      return {
+        session: null,
+        error: AuthErrorMessages[AuthErrorCode.SUPABASE_QUERY_ERROR],
+        errorCode: AuthErrorCode.SUPABASE_QUERY_ERROR,
+      };
+    }
+
+    if (!existingUserData) {
+      console.error(`[Auth] User data not found in Supabase public.users table after GET /user success`);
+      // Cleanup - delete the auth user since user data is missing
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+      return {
+        session: null,
+        error: "User profile data not available",
+        errorCode: AuthErrorCode.INTERNAL_ERROR,
+      };
+    }
+
+    console.log(`[Auth] User data found in Supabase for: ${userId}`);
+
+    // Step 8: Create session via client
     console.log(`[Auth] Creating session for new user: ${email}`);
     const { data: sessionData, error: sessionError } =
       await supabase.auth.signInWithPassword({
@@ -209,9 +242,8 @@ export async function handleUserSignIn(
 
     if (sessionError || !sessionData.session) {
       console.error(`[Auth] Failed to create session: ${sessionError?.message}`);
-      // Cleanup: delete the created user
+      // Cleanup: delete the created auth user only (don't touch users table)
       await supabaseAdmin.auth.admin.deleteUser(userId);
-      await supabaseAdmin.from("users").delete().eq("id", userId);
       return {
         session: null,
         error: AuthErrorMessages[AuthErrorCode.SESSION_CREATION_FAILED],
@@ -219,13 +251,13 @@ export async function handleUserSignIn(
       };
     }
 
-    console.log(`[Auth] Successfully created new user and session: ${email}`);
+    console.log(`[Auth] Successfully authenticated new user and session: ${email}`);
     return {
       session: sessionData.session,
       user: {
         id: userId,
-        email,
-        role: "public",
+        email: existingUserData.email,
+        role: existingUserData.role,
       },
     };
   } catch (error) {
@@ -240,6 +272,5 @@ export async function handleUserSignIn(
   }
 }
 
-export { validatePortalCredentials } from "./portalValidation";
 export type { SignInResponse, PortalValidationResult } from "./types";
 export { AuthErrorCode, AuthErrorMessages } from "./types";

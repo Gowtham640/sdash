@@ -55,10 +55,23 @@ export interface ScraperResponse<T = unknown> {
 }
 
 /**
- * Go backend login response format
+ * Go backend login response format (NEW: includes user object)
  */
 export interface GoBackendLoginResponse {
   authenticated: boolean;
+  token?: string; // Session token from login response body
+  user?: {
+    name: string;
+    semester: number;
+    regnumber: string;
+    department: string;
+    mobile: string;
+    program: string;
+    batch: string;
+    year: number;
+    section: string;
+    specialization: string;
+  };
   session?: Record<string, unknown>;
   lookup?: Record<string, unknown>;
   cookies?: string;
@@ -68,7 +81,7 @@ export interface GoBackendLoginResponse {
 }
 
 /**
- * Go backend login request format
+ * Go backend login request format (NEW: includes email field)
  */
 export interface GoBackendLoginRequest {
   account: string;
@@ -115,9 +128,133 @@ export function clearBackendCookies(): void {
 }
 
 /**
+ * Fetch user data from Go backend using session token and user credentials
+ * GET /user endpoint with X-CSRF-Token, X-User-Id, X-Email headers
+ */
+export async function fetchUserDataFromGoBackend(
+  token: string,
+  userId: string,
+  email: string
+): Promise<{ success: boolean; data?: GoBackendUserData; error?: string }> {
+  const requestStartTime = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  const backendUrl = getBackendUrl();
+  console.log(`[Backend Client] 👤 Fetching user data from Go backend`);
+  console.log(`[Backend Client]   - Token: ${token.substring(0, 10)}...`);
+  console.log(`[Backend Client]   - User ID: ${userId}`);
+  console.log(`[Backend Client]   - Email: ${email}`);
+  console.log(`[Backend Client]   - Backend URL: ${backendUrl}`);
+
+  try {
+    const fetchStartTime = Date.now();
+
+    // Build headers with session token and user credentials
+    const headers: HeadersInit = {
+      'X-CSRF-Token': token,
+      'X-User-Id': userId,
+      'X-Email': email,
+    };
+
+    // Log request details
+    console.log(`[Backend Client] 🌐 FETCHUSERDATAFROMGOBACKEND - REQUEST DETAILS`);
+    console.log(`[Backend Client]   📍 Full URL: GET ${backendUrl}/user`);
+    console.log(`[Backend Client]   📊 Request ID: ${Date.now()}`);
+    console.log(`[Backend Client] 📨 HEADERS BEING SENT:`);
+    Object.entries(headers).forEach(([key, value]) => {
+      if (key.toLowerCase().includes('token')) {
+        console.log(`[Backend Client]   ${key}: ${String(value).substring(0, 20)}...`);
+      } else {
+        console.log(`[Backend Client]   ${key}: ${value}`);
+      }
+    });
+    console.log(`[Backend Client] 📦 REQUEST BODY: None (GET request)`);
+
+    const response = await fetch(`${backendUrl}/user`, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+    const fetchDuration = Date.now() - fetchStartTime;
+
+    clearTimeout(timeoutId);
+
+    console.log(`[Backend Client] 📡 HTTP RESPONSE RECEIVED: ${fetchDuration}ms`);
+    console.log(`[Backend Client]   📊 Status: ${response.status} ${response.statusText}`);
+    console.log(`[Backend Client]   ✅ OK: ${response.ok}`);
+
+    // Log response headers
+    console.log(`[Backend Client] 📋 RESPONSE HEADERS:`);
+    response.headers.forEach((value, key) => {
+      console.log(`[Backend Client]   ${key}: ${value}`);
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => response.statusText);
+      console.error(`[Backend Client] ❌ HTTP Error Response:`);
+      console.error(`[Backend Client]   - Status: ${response.status} ${response.statusText}`);
+      console.error(`[Backend Client]   - Response Body: ${errorText}`);
+
+      const totalDuration = Date.now() - requestStartTime;
+      console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+      return {
+        success: false,
+        error: `User data fetch error: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const parseStartTime = Date.now();
+    const responseData: { success: boolean; data?: GoBackendUserData; error?: string } = await response.json();
+    const parseDuration = Date.now() - parseStartTime;
+    const totalDuration = Date.now() - requestStartTime;
+
+    console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
+    console.log(`[Backend Client] 📦 RESPONSE BODY:`, JSON.stringify(responseData, null, 2));
+
+    console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
+    console.log(`[Backend Client]   - Success: ${responseData.success}`);
+    console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    return responseData;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    const totalDuration = Date.now() - requestStartTime;
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error(`[Backend Client] ❌ USER DATA FETCH TIMEOUT`);
+      console.error(`[Backend Client]   - Duration: ${totalDuration}ms (exceeded 60s limit)`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+      return {
+        success: false,
+        error: 'User data fetch timeout after 60 seconds',
+      };
+    }
+
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error(`[Backend Client] ❌ USER DATA FETCH ERROR`);
+    console.error(`[Backend Client]   - Error: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[Backend Client]   - Duration: ${totalDuration}ms`);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error fetching user data',
+    };
+  }
+}
+
+/**
  * Fetch user data from Go backend
  * Sends GET request to /user with X-CSRF-Token header
  * @returns User data or null on error
+ * @deprecated This uses cookie-based auth, new implementation uses header-based auth
  */
 export async function getUserDataFromGoBackend(): Promise<GoBackendUserData | null> {
   const requestStartTime = Date.now();
@@ -319,12 +456,13 @@ export async function logoutFromGoBackend(): Promise<{ success: boolean; error?:
 }
 
 /**
- * Login to Go backend and store cookies
+ * Login to Go backend and store cookies (NEW: includes email field)
  * @param account - User account/email
  * @param password - User password
+ * @param email - User email (same as account, required by new API format)
  * @param cdigest - Optional captcha digest
  * @param captcha - Optional captcha answer
- * @returns Login response with authentication status and cookies
+ * @returns Login response with authentication status and user data
  */
 export async function loginToGoBackend(
   account: string,
@@ -351,6 +489,14 @@ export async function loginToGoBackend(
       ...(captcha ? { captcha } : {}),
     };
 
+    // Log request details
+    console.log(`[Backend Client] 🌐 LOGINTOGOBACKEND - REQUEST DETAILS`);
+    console.log(`[Backend Client]   📍 Full URL: POST ${backendUrl}/login`);
+    console.log(`[Backend Client]   📊 Request ID: ${Date.now()}`);
+    console.log(`[Backend Client] 📨 HEADERS BEING SENT:`);
+    console.log(`[Backend Client]   Content-Type: application/json`);
+    console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));
+
     const fetchStartTime = Date.now();
     const response = await fetch(`${backendUrl}/login`, {
       method: 'POST',
@@ -362,9 +508,15 @@ export async function loginToGoBackend(
 
     clearTimeout(timeoutId);
 
-    console.log(`[Backend Client] 📡 Login response received: ${fetchDuration}ms`);
-    console.log(`[Backend Client]   - Status: ${response.status} ${response.statusText}`);
-    console.log(`[Backend Client]   - OK: ${response.ok}`);
+    console.log(`[Backend Client] 📡 HTTP RESPONSE RECEIVED: ${fetchDuration}ms`);
+    console.log(`[Backend Client]   📊 Status: ${response.status} ${response.statusText}`);
+    console.log(`[Backend Client]   ✅ OK: ${response.ok}`);
+
+    // Log response headers
+    console.log(`[Backend Client] 📋 RESPONSE HEADERS:`);
+    response.headers.forEach((value, key) => {
+      console.log(`[Backend Client]   ${key}: ${value}`);
+    });
 
     const parseStartTime = Date.now();
     const responseData: GoBackendLoginResponse = await response.json();
@@ -372,7 +524,8 @@ export async function loginToGoBackend(
     const totalDuration = Date.now() - requestStartTime;
 
     console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
-    console.log(`[Backend Client]   - Authenticated: ${responseData.authenticated}`);
+    console.log(`[Backend Client] 📦 RESPONSE BODY:`, JSON.stringify(responseData, null, 2));
+    console.log(`[Backend Client]   🔐 Authenticated: ${responseData.authenticated}`);
     console.log(`[Backend Client]   - Status: ${responseData.status || "none"}`);
     console.log(`[Backend Client]   - Message: ${responseData.message || "none"}`);
     console.log(`[Backend Client]   - Cookies received: ${responseData.cookies ? "✓" : "✗"}`);
@@ -382,7 +535,7 @@ export async function loginToGoBackend(
       console.log(`[Backend Client]   - Errors: ${JSON.stringify(responseData.errors)}`);
     }
 
-    // Store cookies if authentication was successful
+    // Store cookies if authentication was successful (legacy support)
     if (responseData.authenticated && responseData.cookies) {
       const stored = setBackendCookies(responseData.cookies);
       if (stored) {
@@ -390,6 +543,9 @@ export async function loginToGoBackend(
       } else {
         console.error(`[Backend Client] ❌ Failed to store cookies`);
       }
+    } else if (responseData.authenticated) {
+      // Authentication succeeded but no cookies returned - this is OK for direct auth endpoints
+      console.log(`[Backend Client] ✅ Authentication successful (no cookies needed for direct auth)`);
     } else if (!responseData.authenticated) {
       // Clear any existing cookies on failed login
       clearBackendCookies();
@@ -399,6 +555,7 @@ export async function loginToGoBackend(
     console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
+    // Response includes token from JSON body
     return responseData;
   } catch (error) {
     clearTimeout(timeoutId);
@@ -432,6 +589,151 @@ export async function loginToGoBackend(
       authenticated: false,
       status: 500,
       message: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+/**
+ * Fetch data from Go backend (NEW: for refreshing cached data)
+ * Sends POST request with user credentials to trigger data refresh
+ * @param dataType - Type of data to fetch ('attendance', 'marks', 'timetable')
+ * @param user_id - Supabase user ID
+ * @param email - User email
+ * @param password - User password
+ * @returns Simple success response (data will be fetched from Supabase)
+ */
+export async function fetchDataFromGoBackend(
+  dataType: 'attendance' | 'marks' | 'timetable',
+  user_id: string,
+  email: string,
+  password: string
+): Promise<{ success: boolean; error?: string }> {
+  const requestStartTime = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  const backendUrl = getBackendUrl();
+  console.log(`[Backend Client] 🔄 Fetching data from Go backend`);
+  console.log(`[Backend Client]   - Data Type: ${dataType}`);
+  console.log(`[Backend Client]   - User ID: ${user_id}`);
+  console.log(`[Backend Client]   - Email: ${email}`);
+  console.log(`[Backend Client]   - Backend URL: ${backendUrl}`);
+
+  try {
+    const endpoint = `/${dataType}`;
+    const fetchStartTime = Date.now();
+
+    // Build headers with authentication
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+    };
+
+    // Add authentication headers in new format
+    headers['X-User-Id'] = user_id;
+    headers['X-Email'] = email;
+    headers['X-Password'] = password;
+
+    // Log request details
+    console.log(`[Backend Client] 🌐 FETCHDATAFROMGOBACKEND - REQUEST DETAILS`);
+    console.log(`[Backend Client]   📍 Full URL: GET ${backendUrl}${endpoint}`);
+    console.log(`[Backend Client]   📊 Request ID: ${Date.now()}`);
+    console.log(`[Backend Client] 📨 HEADERS BEING SENT:`);
+    Object.entries(headers).forEach(([key, value]) => {
+      if (key.toLowerCase().includes('password')) {
+        console.log(`[Backend Client]   ${key}: ${String(value).substring(0, 3)}***`);
+      } else {
+        console.log(`[Backend Client]   ${key}: ${value}`);
+      }
+    });
+    console.log(`[Backend Client] 📦 REQUEST BODY: None (GET request)`);
+
+    const response = await fetch(`${backendUrl}${endpoint}`, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+    const fetchDuration = Date.now() - fetchStartTime;
+
+    clearTimeout(timeoutId);
+
+    console.log(`[Backend Client] 📡 HTTP RESPONSE RECEIVED: ${fetchDuration}ms`);
+    console.log(`[Backend Client]   📊 Status: ${response.status} ${response.statusText}`);
+    console.log(`[Backend Client]   ✅ OK: ${response.ok}`);
+
+    // Log response headers
+    console.log(`[Backend Client] 📋 RESPONSE HEADERS:`);
+    response.headers.forEach((value, key) => {
+      console.log(`[Backend Client]   ${key}: ${value}`);
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => response.statusText);
+      console.error(`[Backend Client] ❌ HTTP Error Response:`);
+      console.error(`[Backend Client]   - Status: ${response.status} ${response.statusText}`);
+      console.error(`[Backend Client]   - Response Body: ${errorText}`);
+
+      const totalDuration = Date.now() - requestStartTime;
+      console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+      return {
+        success: false,
+        error: `Data fetch error: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const parseStartTime = Date.now();
+    const rawResponseData: { success: boolean } = await response.json();
+    const parseDuration = Date.now() - parseStartTime;
+    const totalDuration = Date.now() - requestStartTime;
+
+    console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
+    console.log(`[Backend Client] 📦 RESPONSE BODY:`, JSON.stringify(rawResponseData, null, 2));
+
+    console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
+    console.log(`[Backend Client]   - Success: ${rawResponseData.success}`);
+    console.log(`[Backend Client] ✅ Total duration: ${totalDuration}ms`);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Map Go backend response to expected format
+    // Go backend only validates credentials, doesn't return user data
+    const responseData: GoBackendLoginResponse = {
+      authenticated: rawResponseData.success,
+      // User data will be fetched separately via GET /user endpoint
+    };
+
+    return responseData;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    const totalDuration = Date.now() - requestStartTime;
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error(`[Backend Client] ❌ DATA FETCH TIMEOUT`);
+      console.error(`[Backend Client]   - Duration: ${totalDuration}ms (exceeded 60s limit)`);
+      console.error(`[Backend Client]   - Data Type: ${dataType}`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+      return {
+        success: false,
+        error: 'Data fetch timeout after 60 seconds',
+      };
+    }
+
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error(`[Backend Client] ❌ DATA FETCH ERROR`);
+    console.error(`[Backend Client]   - Duration: ${totalDuration}ms`);
+    console.error(`[Backend Client]   - Error Type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+    console.error(`[Backend Client]   - Error Message: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof Error && error.stack) {
+      console.error(`[Backend Client]   - Stack: ${error.stack.split('\n').slice(0, 3).join('\n')}`);
+    }
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
@@ -471,13 +773,13 @@ export async function callBackendScraper<T = unknown>(
   requestQueueTracker.registerBackendRequest(data.email);
 
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  const backendUrl = getBackendUrl();
-  console.log(`[Backend Client] 🚀 Calling backend API`);
-  console.log(`[Backend Client]   - Action: ${action}`);
-  console.log(`[Backend Client]   - Email: ${data.email}`);
-  console.log(`[Backend Client]   - Backend URL: ${backendUrl}`);
-  console.log(`[Backend Client]   - Password: ${data.password ? "✓ Provided" : "✗ Not provided"}`);
-  console.log(`[Backend Client]   - Force refresh: ${data.force_refresh || false}`);
+  console.log(`[Backend Client] 🚀 CALLBACKENDSCRAPER - START`);
+  console.log(`[Backend Client]   📝 Action: ${action}`);
+  console.log(`[Backend Client]   👤 Email: ${data.email}`);
+  console.log(`[Backend Client]   🔑 Password: ${data.password ? "✓ Provided (" + data.password.length + " chars)" : "✗ Not provided"}`);
+  console.log(`[Backend Client]   🔄 Force refresh: ${data.force_refresh || false}`);
+  console.log(`[Backend Client]   🆔 User ID: ${data.user_id || 'none'}`);
+  console.log(`[Backend Client]   📊 Request ID: ${Date.now()}`);
 
   try {
     // Handle special cases for get_static_data and get_dynamic_data
@@ -597,22 +899,21 @@ async function callGoEndpoint<T = unknown>(
   controller?: AbortController
 ): Promise<ScraperResponse<T>> {
   const fetchStartTime = Date.now();
-  
+
   // Get BACKEND_URL at runtime - always use the function to ensure correct value
   const backendBaseUrl = getBackendUrl();
-  
+
   // Normalize path - ensure it starts with /
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  
+
   // Construct full URL - simple string concatenation (backendBaseUrl already validated)
   const fullUrl = `${backendBaseUrl}${normalizedPath}`;
-  
-  console.log(`[Backend Client] 🔗 Endpoint Call:`);
-  console.log(`[Backend Client]   - Method: ${method}`);
-  console.log(`[Backend Client]   - Path: ${path}`);
-  console.log(`[Backend Client]   - Normalized Path: ${normalizedPath}`);
-  console.log(`[Backend Client]   - Backend Base URL: ${backendBaseUrl}`);
-  console.log(`[Backend Client]   - Full URL: ${fullUrl}`);
+
+  console.log(`[Backend Client] 🌐 CALLGOENDPOINT - REQUEST DETAILS`);
+  console.log(`[Backend Client]   📍 Full URL: ${method} ${fullUrl}`);
+  console.log(`[Backend Client]   🛣️  Path: ${path} → ${normalizedPath}`);
+  console.log(`[Backend Client]   🌐 Backend Base: ${backendBaseUrl}`);
+  console.log(`[Backend Client]   📊 Request ID: ${Date.now()}`);
   
   // Get stored cookies for authentication
   const cookies = getBackendCookies();
@@ -622,13 +923,32 @@ async function callGoEndpoint<T = unknown>(
     'Content-Type': 'application/json',
   };
 
-  // Add X-CSRF-Token header with cookies (except for /login and /hello)
+  // Add authentication headers in new format
+  headers['X-User-Id'] = data.user_id || '';
+  headers['X-Email'] = data.email;
+  headers['X-Password'] = data.password;
+
+  console.log(`[Backend Client] 🆔 HEADER X-User-Id: ${data.user_id || 'none'}`);
+  console.log(`[Backend Client] 📧 HEADER X-Email: ${data.email}`);
+  console.log(`[Backend Client] 🔐 HEADER X-Password: ${data.password.substring(0, 3)}***`);
+
+  // Keep cookie header as fallback (except for /login and /hello)
   if (path !== '/login' && path !== '/hello' && cookies) {
     headers['X-CSRF-Token'] = cookies;
-    console.log(`[Backend Client] 🔐 Using stored cookies for authentication`);
-  } else if (path !== '/login' && path !== '/hello' && !cookies) {
-    console.warn(`[Backend Client] ⚠️ No cookies found - request may fail with 401`);
+    console.log(`[Backend Client] 🍪 HEADER X-CSRF-Token: ${cookies.substring(0, 20)}...`);
   }
+
+  // Log all headers being sent
+  console.log(`[Backend Client] 📨 HEADERS BEING SENT:`);
+  Object.entries(headers).forEach(([key, value]) => {
+    if (key.toLowerCase().includes('password')) {
+      console.log(`[Backend Client]   ${key}: ${String(value).substring(0, 3)}***`);
+    } else if (key.toLowerCase().includes('token') || key.toLowerCase().includes('csrf')) {
+      console.log(`[Backend Client]   ${key}: ${String(value).substring(0, 20)}...`);
+    } else {
+      console.log(`[Backend Client]   ${key}: ${value}`);
+    }
+  });
 
   // Build request options
   const requestOptions: RequestInit = {
@@ -637,15 +957,22 @@ async function callGoEndpoint<T = unknown>(
     signal: controller?.signal,
   };
 
+  // Log the complete endpoint URL
+  console.log(`[Backend Client] 🌐 FULL ENDPOINT URL: ${method} ${fullUrl}`);
+
   // For POST requests (login), include body
   // Note: Login should use loginToGoBackend() function instead
   if (method === 'POST' && path === '/login') {
     // This shouldn't be called directly - use loginToGoBackend() instead
     console.warn(`[Backend Client] ⚠️ Direct POST to /login - use loginToGoBackend() instead`);
-    requestOptions.body = JSON.stringify({
+    const requestBody = {
       account: data.email, // Map email to account
       password: data.password,
-    });
+    };
+    requestOptions.body = JSON.stringify(requestBody);
+    console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));
+  } else {
+    console.log(`[Backend Client] 📦 REQUEST BODY: None (GET request)`);
   }
 
   // GET requests don't need body or query params - authentication is via X-CSRF-Token header
@@ -666,9 +993,17 @@ async function callGoEndpoint<T = unknown>(
   
   const fetchDuration = Date.now() - fetchStartTime;
 
-  console.log(`[Backend Client] 📡 HTTP response received: ${fetchDuration}ms`);
-  console.log(`[Backend Client]   - Status: ${response.status} ${response.statusText}`);
-  console.log(`[Backend Client]   - OK: ${response.ok}`);
+  console.log(`[Backend Client] 📡 HTTP RESPONSE RECEIVED: ${fetchDuration}ms`);
+  console.log(`[Backend Client]   📊 Status: ${response.status} ${response.statusText}`);
+  console.log(`[Backend Client]   ✅ OK: ${response.ok}`);
+
+  // Log response headers
+  console.log(`[Backend Client] 📋 RESPONSE HEADERS:`);
+  const responseHeaders: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    responseHeaders[key] = value;
+    console.log(`[Backend Client]   ${key}: ${value}`);
+  });
 
   // Handle 401 Unauthorized - session expired, clear cookies
   if (response.status === 401) {
@@ -716,6 +1051,7 @@ async function callGoEndpoint<T = unknown>(
   const parseDuration = Date.now() - parseStartTime;
 
   console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
+  console.log(`[Backend Client] 📦 RESPONSE BODY:`, JSON.stringify(responseData, null, 2));
 
   // Handle different response formats
   // Go backend might return:
