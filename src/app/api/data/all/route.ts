@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callBackendScraper } from '@/lib/scraperClient';
+import { fetchDataFromGoBackend, callBackendScraper } from '@/lib/scraperClient';
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requestQueueTracker } from "@/lib/requestQueue";
-import { getSupabaseCache, setSupabaseCache, getSupabaseCacheWithInfo, deleteSupabaseCache } from "@/lib/supabaseCache";
+import { getSupabaseCache, getSupabaseCacheWithInfo, deleteSupabaseCache } from "@/lib/supabaseCache";
 import { removeClientCache } from "@/lib/clientCache";
 import { trackApiRequest, trackServerError } from "@/lib/analyticsServer";
 import { transformGoBackendAttendance, transformGoBackendMarks } from "@/lib/dataTransformers";
@@ -308,90 +308,67 @@ export async function POST(request: NextRequest) {
     let backendWasCalled = false; // Track if backend scraper was actually called (for api_request tracking)
     const backendCallReasons: string[] = []; // Track why backend was called (for logging)
 
-    // OPTIMIZATION: If all data is missing (new user), use unified /get endpoint (single request)
-    // If only some data is missing, fetch only what's needed (individual endpoints)
+    // NEW FLOW: Fetch individual data types sequentially (no unified endpoint)
+    // Go backend updates Supabase and returns {success: true}, then we fetch from Supabase
     if (allMissing) {
-      console.log(`[API /data/all] 🆕 New user detected (all data missing) - Using unified /get endpoint`);
-      // For new users, fetch ALL data in one call using the unified endpoint
-      try {
-        backendWasCalled = true;
-        backendCallReasons.push('new user - fetching all data via unified endpoint');
-        console.log(`[API /data/all] 🔄 Backend scraper call: Fetching ALL data via unified /get endpoint`);
-        const unifiedStartTime = Date.now();
-
-        // Use the attendance/marks extraction function which calls get_all_data (/get endpoint)
-        const unifiedData = await callPythonAttendanceMarksOnly(user_email, user_id, password);
-        const unifiedDuration = Date.now() - unifiedStartTime;
-        console.log(`[API /data/all] ✅ Unified data received (${unifiedDuration}ms)`);
-
-        const unifiedDataData = unifiedData.data as { attendance?: unknown; marks?: unknown; timetable?: unknown; calendar?: unknown } | undefined;
-        if (unifiedData.success && unifiedDataData) {
-          // Extract attendance and marks from the unified response
-          if (unifiedDataData.attendance && needAttendance) {
-            // Create dynamicData structure
-            if (!dynamicData) {
-              dynamicData = { success: true, data: {} };
-            }
-            (dynamicData.data as { attendance?: unknown }).attendance = unifiedDataData.attendance;
-
-            try {
-              // Transform Go backend format to frontend format before saving
-              const transformedAttendance = transformGoBackendAttendance(unifiedDataData.attendance);
-              await setSupabaseCache(user_id, 'attendance', transformedAttendance);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
-          }
-
-          if (unifiedDataData.marks && needMarks) {
-            // Create dynamicData structure if not exists
-            if (!dynamicData) {
-              dynamicData = { success: true, data: {} };
-            }
-            (dynamicData.data as { marks?: unknown }).marks = unifiedDataData.marks;
-
-            try {
-              // Transform Go backend format to frontend format before saving
-              const transformedMarks = transformGoBackendMarks(unifiedDataData.marks);
-              await setSupabaseCache(user_id, 'marks', transformedMarks);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
-          }
-
-          // Extract timetable from the unified response
-          if (unifiedDataData.timetable && needTimetable) {
-            // Set timetable in staticData
-            if (!staticData) {
-              staticData = { success: true, data: {} };
-            }
-            (staticData.data as { timetable?: unknown }).timetable = unifiedDataData.timetable;
-
-            try {
-              await setSupabaseCache(user_id, 'timetable', unifiedDataData.timetable);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
-          }
-
-          // Note: Calendar comes from public.calendar table, not from unified backend response
-        }
-      } catch (error) {
-        console.error(`[API /data/all] ❌ Unified data request failed:`);
-        console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-        console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof Error && error.stack) {
-          console.error(`[API /data/all]   - Stack: ${error.stack}`);
-        }
-        dynamicData = null;
-        staticData = null;
+      console.log(`[API /data/all] 🆕 New user detected (all data missing) - Fetching individual data types`);
+      backendWasCalled = true;
+      backendCallReasons.push('new user - fetching all data types individually');
+      
+      // Initialize data structures
+      staticData = { success: true, data: {}, metadata: { source: 'go_backend_refresh' } };
+      dynamicData = { success: true, data: {}, metadata: { source: 'go_backend_refresh' } };
+      
+      // Fetch all three data types sequentially
+      const fetchPromises = [];
+      
+      if (needTimetable) {
+        fetchPromises.push(
+          callGoBackendForDataRefresh(user_email, user_id, password, 'timetable')
+            .then(result => {
+              if (result.success && result.data) {
+                (staticData!.data as { timetable?: unknown }).timetable = result.data;
+                console.log(`[API /data/all] ✅ Timetable fetched for new user`);
+              } else {
+                console.error(`[API /data/all] ❌ Timetable fetch failed: ${result.error}`);
+              }
+            })
+            .catch(err => console.error(`[API /data/all] ❌ Timetable fetch error:`, err))
+        );
       }
+      
+      if (needAttendance) {
+        fetchPromises.push(
+          callGoBackendForDataRefresh(user_email, user_id, password, 'attendance')
+            .then(result => {
+              if (result.success && result.data) {
+                (dynamicData!.data as { attendance?: unknown }).attendance = result.data;
+                console.log(`[API /data/all] ✅ Attendance fetched for new user`);
+              } else {
+                console.error(`[API /data/all] ❌ Attendance fetch failed: ${result.error}`);
+              }
+            })
+            .catch(err => console.error(`[API /data/all] ❌ Attendance fetch error:`, err))
+        );
+      }
+      
+      if (needMarks) {
+        fetchPromises.push(
+          callGoBackendForDataRefresh(user_email, user_id, password, 'marks')
+            .then(result => {
+              if (result.success && result.data) {
+                (dynamicData!.data as { marks?: unknown }).marks = result.data;
+                console.log(`[API /data/all] ✅ Marks fetched for new user`);
+              } else {
+                console.error(`[API /data/all] ❌ Marks fetch failed: ${result.error}`);
+              }
+            })
+            .catch(err => console.error(`[API /data/all] ❌ Marks fetch error:`, err))
+        );
+      }
+      
+      // Wait for all fetches to complete
+      await Promise.all(fetchPromises);
     } else {
       // OPTIMIZATION: Only some data is missing - fetch only what's needed individually
       console.log(`[API /data/all] 🎯 Partial data missing (${missingCount} types) - Using individual fetch strategy`);
@@ -425,16 +402,9 @@ export async function POST(request: NextRequest) {
           backendWasCalled = true;
           backendCallReasons.push(`timetable ${forceRefresh ? 'force refresh' : 'cache miss'}`);
           console.log(`[API /data/all] 🔄 Backend scraper call: Fetching timetable`);
-          const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
+          const timetableResult = await callGoBackendForDataRefresh(user_email, user_id, password, 'timetable');
           if (timetableResult.success && timetableResult.data) {
             (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
-            try {
-              await setSupabaseCache(user_id, 'timetable', timetableResult.data);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
           }
         } catch (error) {
           console.error(`[API /data/all] ❌ Timetable fetch failed:`);
@@ -453,16 +423,9 @@ export async function POST(request: NextRequest) {
           backendWasCalled = true;
           backendCallReasons.push(`timetable ${forceRefresh ? 'force refresh' : 'cache miss'}`);
           console.log(`[API /data/all] 🔄 Backend scraper call: Fetching timetable`);
-          const timetableResult = await callPythonIndividualData(user_email, user_id, password, 'timetable');
+          const timetableResult = await callGoBackendForDataRefresh(user_email, user_id, password, 'timetable');
           if (timetableResult.success && timetableResult.data) {
             (staticData.data as { timetable?: unknown }).timetable = timetableResult.data;
-            try {
-              await setSupabaseCache(user_id, 'timetable', timetableResult.data);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save timetable to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
           }
         } catch (error) {
           console.error(`[API /data/all] ❌ Timetable fetch failed:`);
@@ -481,18 +444,11 @@ export async function POST(request: NextRequest) {
           backendWasCalled = true;
           backendCallReasons.push(`attendance ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
           console.log(`[API /data/all] 🔄 Backend scraper call: Fetching attendance`);
-          const attendanceResult = await callPythonIndividualData(user_email, user_id, password, 'attendance');
+          const attendanceResult = await callGoBackendForDataRefresh(user_email, user_id, password, 'attendance');
           if (attendanceResult.success && attendanceResult.data) {
             // Transform Go backend format to frontend format
             const transformedAttendance = transformGoBackendAttendance(attendanceResult.data);
             (dynamicData.data as { attendance?: unknown }).attendance = transformedAttendance;
-            try {
-              await setSupabaseCache(user_id, 'attendance', transformedAttendance);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
           }
         } catch (error) {
           console.error(`[API /data/all] ❌ Attendance fetch failed:`);
@@ -511,18 +467,11 @@ export async function POST(request: NextRequest) {
           backendWasCalled = true;
           backendCallReasons.push(`marks ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
           console.log(`[API /data/all] 🔄 Backend scraper call: Fetching marks`);
-          const marksResult = await callPythonIndividualData(user_email, user_id, password, 'marks');
+          const marksResult = await callGoBackendForDataRefresh(user_email, user_id, password, 'marks');
           if (marksResult.success && marksResult.data) {
             // Transform Go backend format to frontend format
             const transformedMarks = transformGoBackendMarks(marksResult.data);
             (dynamicData.data as { marks?: unknown }).marks = transformedMarks;
-            try {
-              await setSupabaseCache(user_id, 'marks', transformedMarks);
-            } catch (cacheError) {
-              console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
-              console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-              console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-            }
           }
         } catch (error) {
           console.error(`[API /data/all] ❌ Marks fetch failed:`);
@@ -534,46 +483,32 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // If both dynamic types needed, use grouped fetch
+      // If both dynamic types needed, fetch them individually (NEW FLOW)
       if (needAttendance && needMarks) {
-        console.log(`[API /data/all] ⏳ Fetching dynamic data (attendance + marks)...`);
-        try {
-          backendWasCalled = true;
-          backendCallReasons.push(`dynamic data (attendance+marks) ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
-          console.log(`[API /data/all] 🔄 Backend scraper call: Fetching dynamic data (attendance + marks)`);
-          const dynamicResult = await callPythonDynamicData(user_email, user_id, password);
-          if (dynamicResult.success) {
-            const dynamicDataData = dynamicResult.data as { attendance?: unknown; marks?: unknown } | undefined;
-            if (dynamicDataData) {
-              (dynamicData.data as { attendance?: unknown; marks?: unknown }).attendance = dynamicDataData.attendance;
-              (dynamicData.data as { attendance?: unknown; marks?: unknown }).marks = dynamicDataData.marks;
-              if (dynamicDataData.attendance) {
-                try {
-                  await setSupabaseCache(user_id, 'attendance', dynamicDataData.attendance);
-                } catch (cacheError) {
-                  console.error(`[API /data/all] ❌ Failed to save attendance to cache:`);
-                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-                }
-              }
-              if (dynamicDataData.marks) {
-                try {
-                  await setSupabaseCache(user_id, 'marks', dynamicDataData.marks);
-                } catch (cacheError) {
-                  console.error(`[API /data/all] ❌ Failed to save marks to cache:`);
-                  console.error(`[API /data/all]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-                  console.error(`[API /data/all]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-                }
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`[API /data/all] ❌ Dynamic data fetch failed:`);
-          console.error(`[API /data/all]   - Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
-          console.error(`[API /data/all]   - Error message: ${error instanceof Error ? error.message : String(error)}`);
-          if (error instanceof Error && error.stack) {
-            console.error(`[API /data/all]   - Stack: ${error.stack}`);
-          }
+        console.log(`[API /data/all] ⏳ Fetching dynamic data (attendance + marks) individually...`);
+        backendWasCalled = true;
+        backendCallReasons.push(`dynamic data (attendance+marks) ${forceRefresh ? 'force refresh' : 'cache miss/expired'}`);
+        
+        // Fetch both in parallel
+        const fetchPromises = [
+          callGoBackendForDataRefresh(user_email, user_id, password, 'attendance'),
+          callGoBackendForDataRefresh(user_email, user_id, password, 'marks')
+        ];
+        
+        const [attendanceResult, marksResult] = await Promise.all(fetchPromises);
+        
+        if (attendanceResult.success && attendanceResult.data) {
+          (dynamicData.data as { attendance?: unknown }).attendance = attendanceResult.data;
+          console.log(`[API /data/all] ✅ Attendance fetched`);
+        } else {
+          console.error(`[API /data/all] ❌ Attendance fetch failed: ${attendanceResult.error}`);
+        }
+        
+        if (marksResult.success && marksResult.data) {
+          (dynamicData.data as { marks?: unknown }).marks = marksResult.data;
+          console.log(`[API /data/all] ✅ Marks fetched`);
+        } else {
+          console.error(`[API /data/all] ❌ Marks fetch failed: ${marksResult.error}`);
         }
       }
     }
@@ -845,7 +780,7 @@ export async function POST(request: NextRequest) {
               result.data = {};
             }
             // Transform calendar data from nested format to flat array format expected by frontend
-            let calendarDataForResponse = calendarDbData.data;
+            let calendarDataForResponse: any[] = [];
 
             console.log(`[API /data/all] 🔍 DEBUG: Raw calendar data structure:`);
             console.log(`[API /data/all]   - Type: ${typeof calendarDbData.data}`);
@@ -868,47 +803,98 @@ export async function POST(request: NextRequest) {
               const calendarObj = calendarDbData.data as { calendar?: unknown };
 
               if (calendarObj.calendar && Array.isArray(calendarObj.calendar)) {
-                console.log(`[API /data/all] 🔄 Transforming nested calendar structure to flat array`);
+                console.log(`[API /data/all] 🔄 Processing calendar array`);
 
-                // Transform nested structure to flat array
-                const flatCalendarEvents = calendarObj.calendar.flatMap((monthObj: any) => {
-                  console.log(`[API /data/all]   - Processing month:`, monthObj?.month || 'undefined');
-
-                  if (!monthObj || !monthObj.month || !monthObj.days || !Array.isArray(monthObj.days)) {
-                    console.log(`[API /data/all]   - Skipping invalid month object:`, monthObj);
-                    return [];
-                  }
-
-                  console.log(`[API /data/all]   - Month has ${monthObj.days.length} days`);
-
-                  return monthObj.days.map((day: any) => {
-                    if (!day || typeof day !== 'object') {
-                      console.log(`[API /data/all]   - Skipping invalid day object:`, day);
+                // Check if calendar array contains individual day events or nested month objects
+                const firstItem = calendarObj.calendar[0];
+                if (firstItem && typeof firstItem === 'object' && firstItem.date && firstItem.month) {
+                  // This is already flat day events format, normalize field names
+                  console.log(`[API /data/all] 📅 Calendar data is already flat day events format`);
+                  const normalizedEvents = calendarObj.calendar.map((dayObj: any) => {
+                    if (!dayObj || typeof dayObj !== 'object') {
+                      console.log(`[API /data/all]   - Skipping invalid day object:`, dayObj);
                       return null;
                     }
 
-                    const event = {
-                      date: `${day.date || '01'}/${monthObj.month}`,
-                      day_name: day.day || 'Mon',
-                      content: day.event || null, // Use 'event' field from stored data
-                      day_order: day.dayOrder || '-',
-                      month: monthObj.month,
-                      month_name: monthObj.month.split(' ')[0] || '',
-                      year: monthObj.month.split(' ')[1] || '',
+                    return {
+                      date: dayObj.date,
+                      day_name: dayObj.day_name || 'Mon',
+                      event: dayObj.event || null,
+                      day_order: dayObj.day_order || '-',
+                      month: dayObj.month,
+                      month_name: dayObj.month,
+                      year: dayObj.year || '',
                     };
-
-                    console.log(`[API /data/all]   - Created event: ${event.date} - ${event.content || 'no content'}`);
-                    return event;
                   }).filter((event: any) => event !== null);
-                });
 
-                calendarDataForResponse = flatCalendarEvents;
-                console.log(`[API /data/all] ✅ Transformed calendar: ${flatCalendarEvents.length} events`);
+                  calendarDataForResponse = normalizedEvents;
+                  console.log(`[API /data/all] ✅ Processed calendar: ${normalizedEvents.length} events`);
+                } else {
+                  // This is the old nested month structure, transform it
+                  console.log(`[API /data/all] 🔄 Transforming nested calendar structure to flat array`);
+
+                  // Transform nested structure to flat array
+                  const flatCalendarEvents = calendarObj.calendar.flatMap((monthObj: any) => {
+                    console.log(`[API /data/all]   - Processing month:`, monthObj?.month || 'undefined');
+
+                    if (!monthObj || !monthObj.month || !monthObj.days || !Array.isArray(monthObj.days)) {
+                      console.log(`[API /data/all]   - Skipping invalid month object:`, monthObj);
+                      return [];
+                    }
+
+                    console.log(`[API /data/all]   - Month has ${monthObj.days.length} days`);
+
+                    return monthObj.days.map((day: any) => {
+                      if (!day || typeof day !== 'object') {
+                        console.log(`[API /data/all]   - Skipping invalid day object:`, day);
+                        return null;
+                      }
+
+                      const event = {
+                        date: `${day.date || '01'}/${monthObj.month}`,
+                        day_name: day.day || 'Mon',
+                        event: day.event || null, // Use 'event' field from stored data
+                        day_order: day.dayOrder || '-',
+                        month: monthObj.month,
+                        month_name: monthObj.month.split(' ')[0] || '',
+                        year: monthObj.month.split(' ')[1] || '',
+                      };
+
+                      console.log(`[API /data/all]   - Created event: ${event.date} - ${event.event || 'no content'}`);
+                      return event;
+                    }).filter((event: any) => event !== null);
+                  });
+
+                  calendarDataForResponse = flatCalendarEvents;
+                  console.log(`[API /data/all] ✅ Transformed calendar: ${flatCalendarEvents.length} events`);
+                }
               } else {
                 console.log(`[API /data/all] ⚠️ Calendar object exists but no valid calendar array found`);
               }
+            } else if (Array.isArray(calendarDbData.data)) {
+              // Calendar data is already a flat array, normalize field names
+              console.log(`[API /data/all] 📅 Calendar data is flat array, normalizing field names`);
+              const normalizedEvents = calendarDbData.data.map((dayObj: any) => {
+                if (!dayObj || typeof dayObj !== 'object') {
+                  console.log(`[API /data/all]   - Skipping invalid day object:`, dayObj);
+                  return null;
+                }
+
+                return {
+                  date: dayObj.date,
+                  day_name: dayObj.day_name || 'Mon',
+                  event: dayObj.event || null,
+                  day_order: dayObj.day_order || '-',
+                  month: dayObj.month,
+                  month_name: dayObj.month,
+                  year: dayObj.year || '',
+                };
+              }).filter((event: any) => event !== null);
+
+              calendarDataForResponse = normalizedEvents;
+              console.log(`[API /data/all] ✅ Normalized calendar: ${normalizedEvents.length} events`);
             } else {
-              console.log(`[API /data/all] ℹ️ Calendar data is not nested object structure, using as-is`);
+              console.log(`[API /data/all] ⚠️ Calendar data structure not recognized`);
             }
 
             (result.data as { calendar?: unknown }).calendar = calendarDataForResponse;
@@ -1179,57 +1165,69 @@ async function callPythonAttendanceMarksOnly(email: string, user_id: string, pas
 }
 
 /**
- * Call backend scraper to get individual data type
+ * Call Go backend to refresh individual data type (NEW FLOW)
+ * Sends POST request to trigger refresh, then fetches from Supabase
  */
-async function callPythonIndividualData(
+async function callGoBackendForDataRefresh(
   email: string,
   user_id: string,
   password: string | undefined,
-  dataType: 'attendance' | 'marks' | 'calendar' | 'timetable'
+  dataType: 'attendance' | 'marks' | 'timetable'
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
-  console.log(`[API /data/all] 🔄 Calling backend: get_${dataType}_data`);
+  console.log(`[API /data/all] 🔄 NEW FLOW: Triggering ${dataType} refresh via Go backend`);
   console.log(`[API /data/all]   - Email: ${email}`);
+  console.log(`[API /data/all]   - User ID: ${user_id}`);
   console.log(`[API /data/all]   - Data type: ${dataType}`);
   console.log(`[API /data/all]   - Password: ${password ? "✓ Provided" : "✗ Not provided"}`);
+  
+  if (!password) {
+    console.error(`[API /data/all] ❌ Password is required for data refresh`);
+    return {
+      success: false,
+      error: 'Password is required for data refresh',
+    };
+  }
   
   const backendCallStart = Date.now();
   
   try {
-    const action = `get_${dataType}_data`;
-    const result = await callBackendScraper(action, {
-      email,
-      ...(password ? { password } : {}),
-      user_id,
-    });
+    // Step 1: Call Go backend to trigger refresh
+    const result = await fetchDataFromGoBackend(dataType, user_id, email, password);
     
     const backendCallDuration = Date.now() - backendCallStart;
-    const resultTyped = result as { success?: boolean; error?: string; data?: unknown };
     
-    console.log(`[API /data/all] 📡 ${dataType} call completed: ${backendCallDuration}ms`);
-    console.log(`[API /data/all]   - Success: ${resultTyped.success || false}`);
-    console.log(`[API /data/all]   - Error: ${resultTyped.error || "none"}`);
-    
-    if (resultTyped.success) {
-      // Extract data from response (structure may vary by endpoint)
-      // Go backend returns: {status: 200, error: null, attendance: [...], regNumber: ...}
-      // We want to return the entire response object as data
-      const data = resultTyped.data || result;
-      
-      // For attendance endpoint, the response is already in the correct format
-      // {regNumber, attendance, status, error} - save this entire object
+    console.log(`[API /data/all] 📡 ${dataType} refresh call completed: ${backendCallDuration}ms`);
+    console.log(`[API /data/all]   - Success: ${result.success}`);
+    console.log(`[API /data/all]   - Error: ${result.error || "none"}`);
+    console.log(`[API /data/all]   - Data received: ${result.data ? "✓" : "✗"}`);
+
+    if (!result.success) {
       return {
-        success: true,
-        data: data,
+        success: false,
+        error: result.error || 'Go backend refresh failed',
       };
     }
-    
+
+    // Step 2: Store the data from Go backend to Supabase cache
+    if (result.data) {
+      console.log(`[API /data/all] 💾 Storing ${dataType} data to Supabase cache...`);
+      const { setSupabaseCache } = await import('@/lib/supabaseCache');
+      const cacheSaved = await setSupabaseCache(user_id, dataType, result.data);
+      if (cacheSaved) {
+        console.log(`[API /data/all] ✅ ${dataType} data stored in cache`);
+      } else {
+        console.warn(`[API /data/all] ⚠️ Failed to store ${dataType} data in cache, but continuing`);
+      }
+    }
+
+    // Return the data directly from the backend response
     return {
-      success: false,
-      error: resultTyped.error || 'Unknown error',
+      success: true,
+      data: result.data,
     };
   } catch (error) {
     const backendCallDuration = Date.now() - backendCallStart;
-    console.error(`[API /data/all] ❌ ${dataType} fetch error (${backendCallDuration}ms):`, error);
+    console.error(`[API /data/all] ❌ ${dataType} refresh error (${backendCallDuration}ms):`, error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -1626,38 +1624,7 @@ async function getSemesterFromDatabase(user_id: string): Promise<number | null> 
  * Update user's semester in database (fire and forget)
  */
 async function updateSemesterInDatabase(user_id: string, semester: number): Promise<void> {
-  console.log(`[API /data/all] 💾 Database update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Semester: ${semester}`);
-    
-    // Fire and forget - don't wait for DB update
-    (async () => {
-      try {
-      const dbStartTime = Date.now();
-        const { data, error } = await supabaseAdmin
-          .from("users")
-          .update({ semester })
-          .eq("id", user_id)
-          .select();
-      const dbDuration = Date.now() - dbStartTime;
-        
-        if (error) {
-        console.error(`[API /data/all] ❌ Database update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-        console.error(`[API /data/all]   - Details: ${JSON.stringify(error)}`);
-        } else {
-        console.log(`[API /data/all] ✅ Database update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated semester to: ${semester}`);
-        console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
-        }
-      } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-      if (dbError instanceof Error && dbError.stack) {
-        console.error(`[API /data/all]   - Stack: ${dbError.stack}`);
-      }
-      }
-    })();
+  console.log(`[API /data/all] ⚠️ Database update disabled - project should not write to Supabase tables`);
 }
 
 /**
@@ -1675,103 +1642,21 @@ function capitalizeName(name: string): string {
  * Update user's name in database (fire and forget)
  */
 async function updateNameInDatabase(user_id: string, name: string): Promise<void> {
-  const formattedName = capitalizeName(name);
-  console.log(`[API /data/all] 💾 Database name update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Name: ${name} -> ${formattedName}`);
-    
-    // Fire and forget - don't wait for DB update
-    (async () => {
-      try {
-      const dbStartTime = Date.now();
-        const { data, error } = await supabaseAdmin
-          .from("users")
-          .update({ name: formattedName })
-          .eq("id", user_id)
-          .select();
-      const dbDuration = Date.now() - dbStartTime;
-        
-        if (error) {
-        console.error(`[API /data/all] ❌ Database name update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-        console.error(`[API /data/all]   - Details: ${JSON.stringify(error)}`);
-        } else {
-        console.log(`[API /data/all] ✅ Database name update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated name to: ${formattedName}`);
-        console.log(`[API /data/all]   - Updated row: ${JSON.stringify(data)}`);
-        }
-      } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-      if (dbError instanceof Error && dbError.stack) {
-        console.error(`[API /data/all]   - Stack: ${dbError.stack}`);
-      }
-      }
-    })();
+  console.log(`[API /data/all] ⚠️ Database name update disabled - project should not write to Supabase tables`);
 }
 
 /**
  * Update user's registration number in database (fire and forget)
  */
 async function updateRegistrationNumberInDatabase(user_id: string, registration_number: string): Promise<void> {
-  console.log(`[API /data/all] 💾 Database registration_number update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Registration Number: ${registration_number}`);
-    
-  (async () => {
-    try {
-      const dbStartTime = Date.now();
-      const { data, error } = await supabaseAdmin
-        .from("users")
-        .update({ registration_number })
-        .eq("id", user_id)
-        .select();
-      const dbDuration = Date.now() - dbStartTime;
-      
-      if (error) {
-        console.error(`[API /data/all] ❌ Database registration_number update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-      } else {
-        console.log(`[API /data/all] ✅ Database registration_number update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated registration_number to: ${registration_number}`);
-      }
-    } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-    }
-  })();
+  console.log(`[API /data/all] ⚠️ Database registration_number update disabled - project should not write to Supabase tables`);
 }
 
 /**
  * Update user's department in database (fire and forget)
  */
 async function updateDepartmentInDatabase(user_id: string, department: string): Promise<void> {
-  console.log(`[API /data/all] 💾 Database department update started (fire-and-forget)`);
-  console.log(`[API /data/all]   - User ID: ${user_id}`);
-  console.log(`[API /data/all]   - Department: ${department}`);
-    
-  (async () => {
-    try {
-      const dbStartTime = Date.now();
-      const { data, error } = await supabaseAdmin
-        .from("users")
-        .update({ department })
-        .eq("id", user_id)
-        .select();
-      const dbDuration = Date.now() - dbStartTime;
-      
-      if (error) {
-        console.error(`[API /data/all] ❌ Database department update failed (${dbDuration}ms)`);
-        console.error(`[API /data/all]   - Error: ${error.message}`);
-      } else {
-        console.log(`[API /data/all] ✅ Database department update successful (${dbDuration}ms)`);
-        console.log(`[API /data/all]   - Updated department to: ${department}`);
-      }
-    } catch (dbError) {
-      console.error(`[API /data/all] ❌ Database exception:`);
-      console.error(`[API /data/all]   - Error: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-    }
-  })();
+  console.log(`[API /data/all] ⚠️ Database department update disabled - project should not write to Supabase tables`);
 }
 
 /**
@@ -1789,20 +1674,10 @@ async function triggerBackgroundPrefetch(
   
   try {
     // Fetch only the specific data type (optimized - single request)
-    const result = await callPythonIndividualData(user_email, user_id, password, dataType);
+    const result = await callGoBackendForDataRefresh(user_email, user_id, password, dataType);
     
     if (result.success && result.data) {
-      try {
-        await setSupabaseCache(user_id, dataType, result.data);
-        console.log(`[BackgroundPrefetch] ✅ Background prefetch completed for ${dataType}`);
-      } catch (cacheError) {
-        console.error(`[BackgroundPrefetch] ❌ Failed to save ${dataType} to cache:`);
-        console.error(`[BackgroundPrefetch]   - Error type: ${cacheError instanceof Error ? cacheError.constructor.name : typeof cacheError}`);
-        console.error(`[BackgroundPrefetch]   - Error message: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
-        if (cacheError instanceof Error && cacheError.stack) {
-          console.error(`[BackgroundPrefetch]   - Stack: ${cacheError.stack}`);
-        }
-      }
+      console.log(`[BackgroundPrefetch] ✅ Background prefetch completed for ${dataType}`);
     } else {
       console.warn(`[BackgroundPrefetch] ⚠️ No fresh data received for ${dataType}:`);
       console.warn(`[BackgroundPrefetch]   - Success: ${result.success}`);

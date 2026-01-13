@@ -77,18 +77,21 @@ export async function trackServerEvent(
   sessionId?: string | null
 ): Promise<void> {
   try {
+    // User creation disabled - project should not write to Supabase tables
+    // Analytics will only work for users that already exist in the database
+
     // Generate fingerprint for deduplication
     const fingerprint = getRequestFingerprint(eventName, userId, eventData);
-    
+
     // Check if this is a duplicate
     if (isDuplicateRequest(fingerprint)) {
       console.log(`[Analytics Server] Skipping duplicate event: ${eventName}`);
       return;
     }
-    
+
     // Mark as tracked
     markRequestTracked(fingerprint);
-    
+
     // Insert directly into Supabase events table
     // RLS policy allows public insert, so this should work
     await supabaseAdmin
@@ -100,7 +103,7 @@ export async function trackServerEvent(
         event_data: eventData ?? null,
         created_at: new Date().toISOString(),
       });
-    
+
     // Silently fail - don't block execution
   } catch (error) {
     // Silently fail - analytics should never break functionality

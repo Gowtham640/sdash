@@ -1,13 +1,14 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import Link from 'next/link';
-import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats, type CalendarEvent } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import type html2canvas from 'html2canvas';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 
@@ -48,6 +49,16 @@ interface TimetableData {
       };
     };
   };
+}
+
+interface CalendarEvent {
+  date: string;
+  day_name: string;
+  content: string;
+  day_order: string;
+  month?: string;
+  month_name?: string;
+  year?: number;
 }
 
 export default function TimetablePage() {
@@ -117,10 +128,36 @@ export default function TimetablePage() {
         throw new Error(result.error || 'Failed to refresh timetable data');
       }
 
-      // Refresh endpoint saves data to Supabase cache and returns raw Go backend format
-      // Fetch from unified endpoint to get data in the correct processed format from cache
-      console.log('[Timetable] ✅ Refresh completed, fetching updated data from cache...');
-        await fetchUnifiedData(false);
+      // Refresh API returns data directly from Supabase
+      // Update local state with the returned data
+      console.log('[Timetable] ✅ Refresh completed, updating local state...');
+
+      if (result.data) {
+        try {
+          // The refresh API already returns processed data from Supabase
+          const timetableData = result.data as TimetableData;
+          setRawTimetableData(timetableData);
+          const convertedData = convertTimetableDataToTimeSlots(timetableData);
+          setTimetableData(convertedData);
+
+          // Also update localStorage cache for future use
+          setClientCache('timetable', timetableData);
+
+          console.log('[Timetable] ✅ Updated local state with refreshed timetable data');
+        } catch (dataError) {
+          console.error('[Timetable] ❌ Error processing refresh data:', dataError);
+          setError('Failed to process refreshed timetable data');
+          setLoading(false);
+          setIsRefreshing(false);
+          return;
+        }
+      } else {
+        console.warn('[Timetable] ⚠️ No data returned from refresh API');
+        setError('No timetable data available');
+        setLoading(false);
+        setIsRefreshing(false);
+        return;
+      }
     } catch (err) {
       console.error('[Timetable] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');
@@ -180,6 +217,43 @@ export default function TimetablePage() {
             setRawTimetableData(timetableDataToUse);
             const convertedData = convertTimetableDataToTimeSlots(timetableDataToUse);
             setTimetableData(convertedData);
+
+            // Calculate quick stats from cached timetable data
+            const occurrences = getSlotOccurrences(timetableDataToUse);
+            setSlotOccurrences(occurrences);
+
+            // Cache the calculated occurrences in localStorage
+            try {
+              localStorage.setItem('sdash_slotOccurrences', JSON.stringify(occurrences));
+            } catch (e) {
+              console.warn('[Timetable] Failed to cache slot occurrences:', e);
+            }
+
+            // Try to load cached day order stats from localStorage
+            try {
+              const cachedDayOrderStatsStr = localStorage.getItem('sdash_dayOrderStats');
+              if (cachedDayOrderStatsStr) {
+                const cachedDayOrderStats = JSON.parse(cachedDayOrderStatsStr);
+                setDayOrderStats(cachedDayOrderStats);
+                console.log('[Timetable] ✅ Loaded cached day order stats');
+              }
+            } catch (e) {
+              console.warn('[Timetable] Failed to load cached day order stats:', e);
+            }
+
+            // Try to load cached slot occurrences from localStorage
+            try {
+              const cachedSlotOccurrencesStr = localStorage.getItem('sdash_slotOccurrences');
+              if (cachedSlotOccurrencesStr) {
+                const cachedSlotOccurrences = JSON.parse(cachedSlotOccurrencesStr);
+                setSlotOccurrences(cachedSlotOccurrences);
+                console.log('[Timetable] ✅ Loaded cached slot occurrences');
+              }
+            } catch (e) {
+              console.warn('[Timetable] Failed to load cached slot occurrences:', e);
+            }
+
+            console.log('[Timetable] ✅ Quick stats calculated from cached timetable data');
           } else {
             console.warn('[Timetable] ⚠️ Cached timetable has unexpected structure, will fetch fresh data');
           }
@@ -276,10 +350,19 @@ export default function TimetablePage() {
         if (result.data && typeof result.data === 'object' && 'calendar' in result.data) {
           const calendarDataFromResult = (result.data as { calendar?: unknown }).calendar;
           let calendarArray: CalendarEvent[] | null = null;
-          
+
           if (Array.isArray(calendarDataFromResult)) {
-            // Direct array format
-            calendarArray = calendarDataFromResult;
+            // Map JSON format to CalendarEvent interface
+            calendarArray = calendarDataFromResult.map((e: any) => ({
+              date: e.date,
+              day_name: e.day_name,
+              content: e.event ?? '',
+              day_order: e.day_order,
+              month: e.month,
+              year: e.year
+            }));
+            console.log('[Timetable] ✅ Calendar data processed');
+            console.log('[Timetable]   - Total events:', calendarArray?.length ?? 0);
           } else if (calendarDataFromResult && typeof calendarDataFromResult === 'object') {
             const calendarObj = calendarDataFromResult as Record<string, unknown>;
             // Handle {success: true, data: [...]} format (old API format)
@@ -298,11 +381,17 @@ export default function TimetablePage() {
               }
             }
           }
-          
+
           if (calendarArray) {
             setCalendarData(calendarArray);
             const stats = getDayOrderStats(calendarArray);
             setDayOrderStats(stats);
+            // Cache day order stats in localStorage
+            try {
+              localStorage.setItem('sdash_dayOrderStats', JSON.stringify(stats));
+            } catch (e) {
+              console.warn('[Timetable] Failed to cache day order stats:', e);
+            }
             console.log('[Timetable] ✅ Day order stats calculated:', stats);
           } else {
             console.warn('[Timetable] ⚠️ Calendar data format not recognized');
@@ -384,8 +473,14 @@ export default function TimetablePage() {
 
           const occurrences = getSlotOccurrences(timetableDataObj);
           console.log('[Timetable] Slot occurrences:', occurrences);
-          
+
           setSlotOccurrences(occurrences);
+          // Cache slot occurrences in localStorage
+          try {
+            localStorage.setItem('sdash_slotOccurrences', JSON.stringify(occurrences));
+          } catch (e) {
+            console.warn('[Timetable] Failed to cache slot occurrences:', e);
+          }
           console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
         } else {
           // Keep page visible even when timetable data is unavailable
@@ -443,9 +538,17 @@ export default function TimetablePage() {
             if (calendarResult.success && calendarResult.data?.calendar) {
               let calendarArray: CalendarEvent[] | null = null;
               const calendarData = calendarResult.data.calendar;
-              
+
               if (Array.isArray(calendarData)) {
-                calendarArray = calendarData;
+                // Map JSON format to CalendarEvent interface
+                calendarArray = calendarData.map((e: any) => ({
+                  date: e.date,
+                  day_name: e.day_name,
+                  content: e.event ?? '',
+                  day_order: e.day_order,
+                  month: e.month,
+                  year: e.year
+                }));
               } else if (calendarData && typeof calendarData === 'object') {
                 const calendarObj = calendarData as Record<string, unknown>;
                 // Handle {success: true, data: [...]} format
@@ -457,7 +560,7 @@ export default function TimetablePage() {
                   calendarArray = calendarObj.data as CalendarEvent[];
                 }
               }
-              
+
               if (calendarArray) {
                 setCalendarData(calendarArray);
                 const stats = getDayOrderStats(calendarArray);
@@ -497,6 +600,47 @@ export default function TimetablePage() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
+  };
+
+  const handleDownloadTimetable = async () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      // Dynamically import html2canvas
+      const html2canvas = (await import('html2canvas')).default;
+
+      // Find the timetable grid element
+      const tableElement = document.querySelector('.timetable-grid') as HTMLElement;
+      if (!tableElement) {
+        console.error('Timetable table not found');
+        return;
+      }
+
+      // Create canvas from the table
+      const canvas = await html2canvas(tableElement, {
+        backgroundColor: '#000000',
+        scale: 2, // Higher resolution
+        useCORS: true,
+        allowTaint: true,
+      });
+
+      // Convert to JPG blob
+      canvas.toBlob((blob: Blob | null) => {
+        if (blob) {
+          // Create download link
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'sdash-timetable.jpg';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+      }, 'image/jpeg', 0.95);
+    } catch (error) {
+      console.error('Error downloading timetable:', error);
+    }
   };
 
   // Transform new Go backend format to old format
@@ -542,13 +686,13 @@ export default function TimetablePage() {
       
       daySchedule.table.forEach((entry, index) => {
         if (entry && typeof entry === 'object' && entry !== null) {
-          const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; online?: boolean };
+          const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; slotType?: string; online?: boolean };
           if (course.code && course.name && course.slot) {
             const timeSlot = timeSlots[index] || `Slot ${index + 1}`;
             const slotCode = course.slot;
             const courseTitle = course.name;
             const courseType = course.courseType || 'Theory';
-            const slotType = courseType === 'Practical' ? 'Lab' : 'Theory';
+            const slotType = course.slotType || (courseType === 'Practical' ? 'Lab' : 'Theory');
             
             timeSlotsMap[timeSlot] = {
               slot_code: slotCode,
@@ -733,24 +877,43 @@ export default function TimetablePage() {
         <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
-            <button
-              onClick={refreshTimetableData}
-              disabled={loading}
-              className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label="Refresh timetable data"
-              title="Refresh timetable data"
-            >
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                fill="none" 
-                viewBox="0 0 24 24" 
-                strokeWidth={2} 
-                stroke="currentColor" 
-                className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDownloadTimetable}
+                className="text-white hover:text-green-400 transition-colors"
+                aria-label="Download timetable as JPG"
+                title="Download timetable as JPG"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-              </svg>
-            </button>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+              </button>
+              <button
+                onClick={refreshTimetableData}
+                disabled={loading}
+                className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Refresh timetable data"
+                title="Refresh timetable data"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
         
@@ -796,80 +959,114 @@ export default function TimetablePage() {
             aria-label="Refresh timetable data"
             title="Refresh timetable data"
           >
-            <svg 
-              xmlns="http://www.w3.org/2000/svg" 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              strokeWidth={2} 
-              stroke="currentColor" 
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
               className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
             </svg>
           </button>
         </div>
+
       </div>
+      <div className="absolute top-20 right-4 z-20">
+          <button
+            onClick={handleDownloadTimetable}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-sora font-bold py-2 px-4 rounded-lg transition-colors flex items-center gap-2 text-sm"
+            aria-label="Download timetable"
+            title="Download timetable as image"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+              className="w-4 h-4"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Download
+          </button>
+        </div>
+      <div className="w-full max-w-full bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden relative">
+        
+        <div className="w-full overflow-x-auto">
+          <div
+            className="timetable-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `120px repeat(${timetableData.length}, 1fr)`,
+              gridTemplateRows: `auto repeat(${days.length}, 1fr)`,
+              minWidth: `${120 + (timetableData.length * 140)}px`,
+              gap: '1px',
+              backgroundColor: 'rgba(255, 255, 255, 0.2)'
+            }}
+          >
+            {/* Header Row - Day Order + Time Slots */}
+            <div className="bg-white/20 border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base sticky top-0 z-10">
+              Day Order
+            </div>
+            {timetableData.map((slot) => (
+              <div
+                key={slot.time}
+                className="bg-white/20 border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base sticky top-0 z-10"
+              >
+                {slot.time}
+              </div>
+            ))}
 
-      <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
-        <div className="h-full overflow-auto">
-          <table className="w-full h-full border-collapse">
-            <thead className="sticky top-0 bg-black/50 backdrop-blur-sm z-10">
-              <tr>
-                <th className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[80px] sm:min-w-[90px] md:min-w-[95px] lg:min-w-[100px] text-[10px] sm:text-xs md:text-sm lg:text-base">
-                  Time
-                </th>
-                {days.map((day) => (
-                  <th key={day} className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] text-[10px] sm:text-xs md:text-sm lg:text-base">
-                    {day}
-                  </th>
-                ))}
-              </tr>
-            </thead>
+            {/* Data Rows */}
+            {days.map((day, dayIndex) => (
+              <React.Fragment key={day}>
+                {/* Day Order Column */}
+                <div className="bg-white/10 border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base">
+                  {day}
+                </div>
 
-            <tbody>
-              {timetableData.map((slot) => (
-                <tr key={slot.time}>
-                  <td className="border border-white/30 bg-white/10 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base">
-                    {slot.time}
-                  </td>
+                {/* Time Slot Cells */}
+                {timetableData.map((slot) => {
+                  const dayKey = dayKeys[dayIndex];
+                  const cellData = slot[dayKey];
+                  const isObject = typeof cellData === 'object' && cellData !== null;
+                  const courseName = isObject ? (cellData as { course: string }).course : (cellData as string) || "";
 
-                  {dayKeys.map((dayKey) => {
-                    const cellData = slot[dayKey];
-                    const isObject = typeof cellData === 'object' && cellData !== null;
-                    const courseName = isObject ? (cellData as { course: string }).course : (cellData as string) || "";
-                    const courseType = isObject ? (cellData as { courseType?: string }).courseType : undefined;
-                    const online = isObject ? (cellData as { online?: boolean }).online : undefined;
-                    
-                    // Determine background color based on courseType
-                    let bgColor = 'bg-white/10';
-                    if (courseType) {
-                      const typeLower = courseType.toLowerCase();
-                      if (typeLower === 'theory') {
-                        bgColor = 'bg-blue-500/30';
-                      } else if (typeLower === 'practical' || typeLower === 'lab') {
-                        bgColor = 'bg-green-500/30';
-                      } else if (online) {
-                        bgColor = 'bg-purple-500/30';
-                      } else {
-                        bgColor = 'bg-yellow-500/30';
-                      }
-                    } else if (online) {
-                      bgColor = 'bg-purple-500/30';
+                  // Get slot type from raw timetable data if available
+                  let slotType = '';
+                  if (rawTimetableData && rawTimetableData.timetable) {
+                    const dayOrderData = rawTimetableData.timetable[day];
+                    if (dayOrderData && dayOrderData.time_slots[slot.time]) {
+                      slotType = dayOrderData.time_slots[slot.time].slot_type || '';
                     }
-                    
-                    return (
-                      <td 
-                        key={dayKey} 
-                        className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor}`}
-                      >
-                        {courseName}
-                    </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  }
+
+                  // Determine background color based on slotType
+                  let bgColor = 'bg-white/10';
+                  if (slotType) {
+                    const typeLower = slotType.toLowerCase();
+                    if (typeLower === 'lab') {
+                      bgColor = 'bg-green-500/30';
+                    } else {
+                      bgColor = 'bg-blue-500/30';
+                    }
+                  }
+
+                  return (
+                    <div
+                      key={`${day}-${slot.time}`}
+                      className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor} min-h-[60px] flex items-center justify-center`}
+                    >
+                      {courseName}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -195,114 +195,34 @@ export async function getSupabaseCacheEvenIfExpired(
 }
 
 /**
- * Save or update cached data in Supabase
+ * Cache saving disabled - project should not write to Supabase tables
  */
 export async function setSupabaseCache(
   user_id: string,
   dataType: CacheDataType,
   data: unknown
 ): Promise<boolean> {
-  try {
-    const ttl = CACHE_TTL[dataType];
-    const expiresAt = ttl ? new Date(Date.now() + ttl) : null;
-
-    console.log(`[SupabaseCache] 💾 Saving cache for ${dataType} (user: ${user_id})`);
-    if (expiresAt) {
-      console.log(`[SupabaseCache]   - Expires at: ${expiresAt.toISOString()}`);
-    } else {
-      console.log(`[SupabaseCache]   - Never expires (forever cache)`);
-    }
-
-    // Use upsert (insert or update) based on unique constraint (user_id, data_type)
-    const { error } = await supabaseAdmin
-      .from('user_cache')
-      .upsert({
-        user_id,
-        data_type: dataType,
-        data,
-        expires_at: expiresAt ? expiresAt.toISOString() : null,
-        updated_at: new Date().toISOString(),
-      }, {
-        onConflict: 'user_id,data_type',
-      });
-
-    if (error) {
-      console.error(`[SupabaseCache] ❌ Error saving cache for ${dataType}:`, error);
-      return false;
-    }
-
-    console.log(`[SupabaseCache] ✅ Cache saved for ${dataType}`);
-    return true;
-  } catch (error) {
-    console.error(`[SupabaseCache] Exception saving cache for ${dataType}:`, error);
-    return false;
-  }
+  console.log(`[SupabaseCache] ⚠️ Cache saving disabled - project should not write to Supabase tables`);
+  return false;
 }
 
 /**
- * "Delete" cached data from Supabase (actually just marks as expired by updating expires_at to past)
- * Note: We never actually delete cache entries, only update them
+ * Cache deletion disabled - project should not write to Supabase tables
  */
 export async function deleteSupabaseCache(
   user_id: string,
   dataType: CacheDataType
 ): Promise<boolean> {
-  try {
-    console.log(`[SupabaseCache] 🔄 Marking cache as expired for ${dataType} (user: ${user_id})`);
-    
-    // Instead of deleting, update expires_at to past to mark as expired
-    // This way the cache entry remains but will be treated as expired
-    const { error } = await supabaseAdmin
-      .from('user_cache')
-      .update({
-        expires_at: new Date(Date.now() - 1000).toISOString(), // Set to 1 second ago
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', user_id)
-      .eq('data_type', dataType);
-
-    if (error) {
-      console.error(`[SupabaseCache] ❌ Error marking cache as expired for ${dataType}:`, error);
-      return false;
-    }
-
-    console.log(`[SupabaseCache] ✅ Cache marked as expired for ${dataType}`);
-    return true;
-  } catch (error) {
-    console.error(`[SupabaseCache] Exception marking cache as expired for ${dataType}:`, error);
-    return false;
-  }
+  console.log(`[SupabaseCache] ⚠️ Cache deletion disabled - project should not write to Supabase tables`);
+  return false;
 }
 
 /**
- * Clear all caches for a user (actually just marks all as expired by updating expires_at to past)
- * Note: We never actually delete cache entries, only update them
+ * Clear all caches disabled - project should not write to Supabase tables
  */
 export async function clearAllSupabaseCache(user_id: string): Promise<boolean> {
-  try {
-    console.log(`[SupabaseCache] 🔄 Marking all caches as expired for user: ${user_id}`);
-    
-    // Instead of deleting, update expires_at to past to mark as expired
-    // This way the cache entries remain but will be treated as expired
-    const { error } = await supabaseAdmin
-      .from('user_cache')
-      .update({
-        expires_at: new Date(Date.now() - 1000).toISOString(), // Set to 1 second ago
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', user_id);
-
-    if (error) {
-      console.error(`[SupabaseCache] ❌ Error marking all caches as expired:`, error);
-      return false;
-    }
-
-    console.log(`[SupabaseCache] ✅ All caches marked as expired`);
-    return true;
-  } catch (error) {
-    console.error(`[SupabaseCache] Exception marking all caches as expired:`, error);
-    return false;
-  }
+  console.log(`[SupabaseCache] ⚠️ Clear all caches disabled - project should not write to Supabase tables`);
+  return false;
 }
 
 /**

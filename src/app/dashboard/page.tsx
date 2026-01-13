@@ -7,11 +7,11 @@ import StaggeredMenu from '../../components/StaggeredMenu';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
-import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
+import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 
 // Import types
 interface CalendarEvent {
@@ -19,6 +19,9 @@ interface CalendarEvent {
   day_name: string;
   content: string;
   day_order: string;
+  month?: string;
+  month_name?: string;
+  year?: number;
 }
 
 interface AttendanceSubject {
@@ -170,20 +173,56 @@ export default function Dashboard() {
     if (dayOrder && dayOrder.startsWith('DO ')) {
       return parseInt(dayOrder.split(' ')[1]);
     }
+    // Handle non-working days (day_order: "-")
+    if (dayOrder === '-') {
+      return null;
+    }
     return null;
   };
 
   // Get today's timetable based on day order
   const getTodaysTimetable = () => {
-    const doNumber = getCurrentDayOrderNumber();
-    if (!doNumber || !timetableData?.timetable) {
+    console.log('[Dashboard] 🔍 getTodaysTimetable called');
+
+    // Ensure calendar data is loaded before computing timetable
+    if (!calendarData || !Array.isArray(calendarData) || calendarData.length === 0) {
+      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - calendar data not loaded yet');
       return [];
     }
 
-    const doKey = `DO ${doNumber}`;
-    const dayTimetable = timetableData?.timetable?.[doKey];
-    
+    // Find today's event
+    const currentDate = getCurrentDateString();
+    const today = calendarData.find(event => event && event.date === currentDate);
+
+    // Normalize the day order ONCE
+    const doNumber = Number(today?.day_order);
+
+    // Add guard for invalid day order
+    if (Number.isNaN(doNumber)) {
+      console.error("Invalid day order:", today?.day_order);
+      return [];
+    }
+
+    console.log('[Dashboard] 📊 Timetable data exists:', !!timetableData);
+    console.log('[Dashboard] 📊 Timetable data has timetable property:', !!timetableData?.timetable);
+    console.log('[Dashboard] 📊 Available DO keys:', timetableData?.timetable ? Object.keys(timetableData.timetable) : 'no timetable data');
+
+    if (!timetableData?.timetable) {
+      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - missing timetable data');
+      return [];
+    }
+
+    // Use the correct timetable key
+    const timetableForToday = timetableData.timetable[`DO ${doNumber}`];
+
+    // Add ONE definitive log
+    console.log("FINAL LOOKUP KEY:", `DO ${doNumber}`);
+    console.log("FOUND TIMETABLE:", timetableForToday);
+
+    const dayTimetable = timetableForToday;
+
     if (!dayTimetable?.time_slots) {
+      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - no time_slots for DO', doNumber);
       return [];
     }
 
@@ -342,6 +381,11 @@ export default function Dashboard() {
       // Remove any old calendar cache that might exist
       removeClientCache('calendar');
       console.log('[Dashboard] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
+
+      // Ensure timetable data is available for today's timetable display
+      // If timetable is not cached, we need to fetch it along with calendar
+      const hasTimetableCache = !!getClientCache('timetable');
+      console.log(`[Dashboard] 📋 Timetable cache status: ${hasTimetableCache ? 'available' : 'missing'}`);
       
       // Also check and clean unified cache if it contains calendar data
       const unifiedCache = getClientCache('unified');
@@ -484,18 +528,39 @@ export default function Dashboard() {
         }
         if (cachedTimetable) {
           console.log('[Dashboard] ✅ Using client-side cache for timetable');
+          console.log('[Dashboard] 📊 Cached timetable structure:', {
+            type: typeof cachedTimetable,
+            isNull: cachedTimetable === null,
+            keys: cachedTimetable && typeof cachedTimetable === 'object' ? Object.keys(cachedTimetable) : 'not an object',
+            hasDataProperty: cachedTimetable && typeof cachedTimetable === 'object' && 'data' in cachedTimetable,
+            dataKeys: cachedTimetable && typeof cachedTimetable === 'object' && 'data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' ? Object.keys((cachedTimetable as any).data) : 'no data property',
+            hasTimetable: cachedTimetable && typeof cachedTimetable === 'object' && ('timetable' in cachedTimetable || ('data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' && 'timetable' in (cachedTimetable as any).data)),
+            hasTimeSlots: cachedTimetable && typeof cachedTimetable === 'object' && ('time_slots' in cachedTimetable || ('data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' && 'time_slots' in (cachedTimetable as any).data))
+          });
           let timetableDataToUse: typeof timetableData | null = null;
-          
+
           if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
             if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
               const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
               if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
                 timetableDataToUse = cachedData;
                 console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
+                console.log('[Dashboard] 📊 Extracted data structure:', {
+                  hasTimetable: 'timetable' in cachedData,
+                  hasSlotMapping: 'slot_mapping' in cachedData,
+                  timetableKeys: cachedData.timetable ? Object.keys(cachedData.timetable) : 'no timetable',
+                  slotMappingKeys: cachedData.slot_mapping ? Object.keys(cachedData.slot_mapping) : 'no slot_mapping'
+                });
               }
             } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
               timetableDataToUse = cachedTimetable as typeof timetableData;
               console.log('[Dashboard] ✅ Using timetable in direct format');
+              console.log('[Dashboard] 📊 Direct format structure:', {
+                hasTimetable: 'timetable' in cachedTimetable,
+                hasSlotMapping: 'slot_mapping' in cachedTimetable,
+                timetableKeys: (cachedTimetable as any).timetable ? Object.keys((cachedTimetable as any).timetable) : 'no timetable',
+                slotMappingKeys: (cachedTimetable as any).slot_mapping ? Object.keys((cachedTimetable as any).slot_mapping) : 'no slot_mapping'
+              });
             }
           }
           
@@ -514,6 +579,7 @@ export default function Dashboard() {
             }
           } else {
             console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
+            console.warn('[Dashboard] 📊 Failed to extract timetable from cache - will use fresh data from API');
           }
         }
         
@@ -699,14 +765,17 @@ export default function Dashboard() {
           }
         }
       } else if (missingCount === 0) {
-        // All cached, but still need calendar - fetch only calendar
-        console.log('[Dashboard] ✅ All data cached, fetching only calendar...');
-        const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
+        // Check if we need timetable data for today's timetable display
+        const needsTimetable = !hasTimetableCache;
+        const dataToFetch = needsTimetable ? ['calendar', 'timetable'] : ['calendar'];
+
+        console.log(`[Dashboard] ✅ All other data cached, fetching: ${dataToFetch.join(', ')}...`);
+        const requestKey = `fetch_${dataToFetch.join('_')}_${access_token.substring(0, 10)}`;
         const calendarResult = await deduplicateRequest(requestKey, async () => {
           const response = await fetch('/api/data/all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
+            body: JSON.stringify(getRequestBodyWithPassword(access_token, false, dataToFetch))
           });
           const result = await response.json();
           if (result.success && result.data?.calendar) {
@@ -768,10 +837,34 @@ export default function Dashboard() {
     let calendarEvents: CalendarEvent[] | null = null;
     
     if (Array.isArray(result.data.calendar)) {
-      // Direct array format
-      calendarEvents = result.data.calendar;
-      console.log('[Dashboard] ✅ Calendar data is direct array format');
-      console.log('[Dashboard]   - Total events:', calendarEvents.length);
+      // Check if it's the new nested format: [{month: "Jan '26", dates: [{day, date, event, day_order}, ...]}, ...]
+      const firstItem = result.data.calendar[0];
+      if (firstItem && typeof firstItem === 'object' && 'month' in firstItem && 'dates' in firstItem) {
+        // New nested format: [{month: "Jan '26", dates: [{day, date, event, day_order}, ...]}, ...]
+        console.log('[Dashboard] 🔄 Detected new nested calendar format - flattening...');
+        calendarEvents = [];
+        result.data.calendar.forEach((monthData: any) => {
+          if (monthData.month && Array.isArray(monthData.dates)) {
+            monthData.dates.forEach((dateData: any) => {
+              calendarEvents!.push({
+                date: dateData.date?.toString() || '',
+                day_name: dateData.day || '',
+                content: dateData.event || '',
+                day_order: dateData.day_order || '',
+                month: monthData.month,
+                month_name: monthData.month?.split(' ')[0] || '',
+                year: monthData.month?.split(' ')[1] || ''
+              });
+            });
+          }
+        });
+        console.log(`[Dashboard] ✅ Flattened ${calendarEvents.length} calendar events from nested format`);
+      } else {
+        // Direct array format (legacy)
+        calendarEvents = result.data.calendar;
+        console.log('[Dashboard] ✅ Calendar data is direct array format');
+        console.log('[Dashboard]   - Total events:', calendarEvents.length);
+      }
     } else if (result.data.calendar && typeof result.data.calendar === 'object') {
       // Check if it's wrapped format: {success: true, data: [...]}
       if ('success' in result.data.calendar && 'data' in result.data.calendar) {
@@ -963,42 +1056,100 @@ export default function Dashboard() {
       console.log('[Dashboard] ℹ️ Marks not in API response, keeping existing state (likely from cache)');
     }
 
-    // Process timetable data - handle both direct format and wrapped format
+    // Process timetable data
     let timetableDataObj: typeof timetableData | null = null;
-    
+
     if (result.data.timetable && typeof result.data.timetable === 'object') {
-      // Check if it's direct format (has timetable, time_slots, metadata at root)
-      if ('timetable' in result.data.timetable || 'time_slots' in result.data.timetable) {
-        // Direct format
-        timetableDataObj = result.data.timetable as typeof timetableData;
-        console.log('[Dashboard] Timetable data is direct format');
-      } 
-      // Check if it's wrapped format: {success: true, data: {...}}
-      else if ('success' in result.data.timetable && 'data' in result.data.timetable) {
-        const timetableWrapper = result.data.timetable as { success?: boolean | { data?: unknown }; data?: unknown };
-        const successValue = timetableWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && timetableWrapper.data && typeof timetableWrapper.data === 'object' && timetableWrapper.data !== null) {
-          const wrappedData = timetableWrapper.data as Record<string, unknown>;
-          if (wrappedData && ('timetable' in wrappedData || 'time_slots' in wrappedData)) {
-            timetableDataObj = wrappedData as typeof timetableData;
-            console.log('[Dashboard] Timetable data is wrapped format');
-          }
+      const timetableObj = result.data.timetable as Record<string, unknown>;
+
+      // Check if it's backend schedule format and transform it
+      if (timetableObj.schedule && Array.isArray(timetableObj.schedule)) {
+        console.log('[Dashboard] 🔄 Transforming backend schedule format...');
+
+        const timeSlots = [
+          "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
+          "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
+        ];
+
+        const schedule = timetableObj.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
+        if (!schedule || !Array.isArray(schedule)) {
+          console.warn('[Dashboard] Invalid schedule format');
+          timetableDataObj = {
+            slot_mapping: {},
+            timetable: {}
+          };
+        } else {
+          const timetable: Record<string, { do_name?: string; time_slots?: Record<string, unknown> }> = {};
+          const slotMapping: Record<string, string> = {};
+
+          // Map day numbers (1-5) to DO names
+          const dayToDO: Record<number, string> = {
+            1: 'DO 1',
+            2: 'DO 2',
+            3: 'DO 3',
+            4: 'DO 4',
+            5: 'DO 5'
+          };
+
+          schedule.forEach((daySchedule) => {
+            const doName = dayToDO[daySchedule.day];
+            if (!doName) return;
+
+            const timeSlotsMap: Record<string, unknown> = {};
+
+            daySchedule.table.forEach((entry, index) => {
+              if (entry && typeof entry === 'object' && entry !== null) {
+                const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; slotType?: string; online?: boolean };
+                if (course.code && course.name && course.slot) {
+                  const timeSlot = timeSlots[index] || `Slot ${index + 1}`;
+                  const slotCode = course.slot;
+                  const courseTitle = course.name;
+                  const courseType = course.courseType || 'Theory';
+                  const slotType = course.slotType || (courseType === 'Practical' ? 'Lab' : 'Theory');
+
+                  timeSlotsMap[timeSlot] = {
+                    slot_code: slotCode,
+                    course_title: courseTitle,
+                    slot_type: slotType,
+                    is_alternate: false
+                  };
+
+                  // Build slot mapping
+                  if (!slotMapping[slotCode]) {
+                    slotMapping[slotCode] = courseTitle;
+                  }
+                }
+              }
+            });
+
+            if (Object.keys(timeSlotsMap).length > 0) {
+              timetable[doName] = {
+                do_name: doName,
+                time_slots: timeSlotsMap
+              };
+            }
+          });
+
+          timetableDataObj = {
+            slot_mapping: slotMapping,
+            timetable: timetable
+          };
         }
-      }
-      // Check legacy nested format: {data: {...}}
-      else if ('data' in result.data.timetable) {
-        const legacyData = (result.data.timetable as { data?: unknown }).data;
-        if (legacyData && typeof legacyData === 'object' && legacyData !== null && ('timetable' in legacyData || 'time_slots' in legacyData)) {
-          timetableDataObj = legacyData as typeof timetableData;
-          console.log('[Dashboard] Timetable data is legacy nested format');
-        }
+        console.log('[Dashboard] ✅ Transformed backend schedule format');
+        console.log('[Dashboard] 📊 Fresh timetable structure after transformation:', {
+          hasTimetable: !!timetableDataObj?.timetable,
+          hasSlotMapping: !!timetableDataObj?.slot_mapping,
+          timetableKeys: timetableDataObj?.timetable ? Object.keys(timetableDataObj.timetable) : 'no timetable',
+          slotMappingKeys: timetableDataObj?.slot_mapping ? Object.keys(timetableDataObj.slot_mapping) : 'no slot_mapping',
+          sampleSlotMapping: timetableDataObj?.slot_mapping ? Object.entries(timetableDataObj.slot_mapping).slice(0, 3) : 'no slot_mapping'
+        });
       }
     }
-    
+
     if (timetableDataObj) {
+      console.log('[Dashboard] 📊 Setting timetable data in state');
       setTimetableData(timetableDataObj);
-      
+
       try {
         // Convert to TimetableData format for getSlotOccurrences
         const timetableForUtils = {
@@ -1023,8 +1174,22 @@ export default function Dashboard() {
       console.log('[Dashboard] ℹ️ Timetable not in API response, keeping existing state (likely from cache)');
     }
 
-    // Process day order stats using modified calendar data
-    const calendarForStats = result.data.calendar?.data || result.data.calendar?.success?.data;
+    // Process day order stats using calendar data (whether direct array or wrapped)
+    let calendarForStats: any[] | null = null;
+
+    if (result.data.calendar) {
+      if (Array.isArray(result.data.calendar)) {
+        // Direct array format
+        calendarForStats = result.data.calendar;
+      } else if (result.data.calendar.data && Array.isArray(result.data.calendar.data)) {
+        // Wrapped format: {data: [...]}
+        calendarForStats = result.data.calendar.data;
+      } else if (result.data.calendar.success?.data && Array.isArray(result.data.calendar.success.data)) {
+        // Wrapped format: {success: {data: [...]}}
+        calendarForStats = result.data.calendar.success.data;
+      }
+    }
+
     if (calendarForStats && Array.isArray(calendarForStats)) {
       try {
         // Extract semester using same logic as above
@@ -1045,8 +1210,19 @@ export default function Dashboard() {
           }
         }
         
-        // Use calendar data as-is without holiday modifications
-        const stats = getDayOrderStats(calendarForStats as CalendarEvent[]);
+        // Process calendar data to match CalendarEvent interface (map 'event' to 'content')
+        const processedCalendarForStats = (calendarForStats as any[]).map((e: any) => ({
+          date: e.date,
+          day_name: e.day_name,
+          content: e.event ?? '',
+          day_order: e.day_order,
+          month: e.month,
+          month_name: e.month,
+          year: e.year
+        }));
+
+        // Calculate day order stats from processed calendar data
+        const stats = getDayOrderStats(processedCalendarForStats);
         setDayOrderStats(stats);
         console.log('[Dashboard] ✅ Day order stats loaded:', stats);
       } catch (err) {
@@ -1229,6 +1405,13 @@ export default function Dashboard() {
   const threeDayDates = getThreeDayDates();
   const todaysTimetable = getTodaysTimetable();
   const currentDayOrder = getCurrentDayOrder();
+
+  console.log('[Dashboard] 🎯 Rendering dashboard with timetable info:', {
+    currentDayOrder,
+    todaysTimetableLength: todaysTimetable.length,
+    timetableDataExists: !!timetableData,
+    timetableDataKeys: timetableData ? Object.keys(timetableData) : 'no timetable data'
+  });
 
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
