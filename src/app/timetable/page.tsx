@@ -217,6 +217,43 @@ export default function TimetablePage() {
             setRawTimetableData(timetableDataToUse);
             const convertedData = convertTimetableDataToTimeSlots(timetableDataToUse);
             setTimetableData(convertedData);
+
+            // Calculate quick stats from cached timetable data
+            const occurrences = getSlotOccurrences(timetableDataToUse);
+            setSlotOccurrences(occurrences);
+
+            // Cache the calculated occurrences in localStorage
+            try {
+              localStorage.setItem('sdash_slotOccurrences', JSON.stringify(occurrences));
+            } catch (e) {
+              console.warn('[Timetable] Failed to cache slot occurrences:', e);
+            }
+
+            // Try to load cached day order stats from localStorage
+            try {
+              const cachedDayOrderStatsStr = localStorage.getItem('sdash_dayOrderStats');
+              if (cachedDayOrderStatsStr) {
+                const cachedDayOrderStats = JSON.parse(cachedDayOrderStatsStr);
+                setDayOrderStats(cachedDayOrderStats);
+                console.log('[Timetable] ✅ Loaded cached day order stats');
+              }
+            } catch (e) {
+              console.warn('[Timetable] Failed to load cached day order stats:', e);
+            }
+
+            // Try to load cached slot occurrences from localStorage
+            try {
+              const cachedSlotOccurrencesStr = localStorage.getItem('sdash_slotOccurrences');
+              if (cachedSlotOccurrencesStr) {
+                const cachedSlotOccurrences = JSON.parse(cachedSlotOccurrencesStr);
+                setSlotOccurrences(cachedSlotOccurrences);
+                console.log('[Timetable] ✅ Loaded cached slot occurrences');
+              }
+            } catch (e) {
+              console.warn('[Timetable] Failed to load cached slot occurrences:', e);
+            }
+
+            console.log('[Timetable] ✅ Quick stats calculated from cached timetable data');
           } else {
             console.warn('[Timetable] ⚠️ Cached timetable has unexpected structure, will fetch fresh data');
           }
@@ -349,6 +386,12 @@ export default function TimetablePage() {
             setCalendarData(calendarArray);
             const stats = getDayOrderStats(calendarArray);
             setDayOrderStats(stats);
+            // Cache day order stats in localStorage
+            try {
+              localStorage.setItem('sdash_dayOrderStats', JSON.stringify(stats));
+            } catch (e) {
+              console.warn('[Timetable] Failed to cache day order stats:', e);
+            }
             console.log('[Timetable] ✅ Day order stats calculated:', stats);
           } else {
             console.warn('[Timetable] ⚠️ Calendar data format not recognized');
@@ -430,8 +473,14 @@ export default function TimetablePage() {
 
           const occurrences = getSlotOccurrences(timetableDataObj);
           console.log('[Timetable] Slot occurrences:', occurrences);
-          
+
           setSlotOccurrences(occurrences);
+          // Cache slot occurrences in localStorage
+          try {
+            localStorage.setItem('sdash_slotOccurrences', JSON.stringify(occurrences));
+          } catch (e) {
+            console.warn('[Timetable] Failed to cache slot occurrences:', e);
+          }
           console.log('[Timetable] Loaded timetable with', occurrences.length, 'courses');
         } else {
           // Keep page visible even when timetable data is unavailable
@@ -560,8 +609,8 @@ export default function TimetablePage() {
       // Dynamically import html2canvas
       const html2canvas = (await import('html2canvas')).default;
 
-      // Find the timetable table element
-      const tableElement = document.querySelector('.timetable-table') as HTMLElement;
+      // Find the timetable grid element
+      const tableElement = document.querySelector('.timetable-grid') as HTMLElement;
       if (!tableElement) {
         console.error('Timetable table not found');
         return;
@@ -637,13 +686,13 @@ export default function TimetablePage() {
       
       daySchedule.table.forEach((entry, index) => {
         if (entry && typeof entry === 'object' && entry !== null) {
-          const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; online?: boolean };
+          const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; slotType?: string; online?: boolean };
           if (course.code && course.name && course.slot) {
             const timeSlot = timeSlots[index] || `Slot ${index + 1}`;
             const slotCode = course.slot;
             const courseTitle = course.name;
             const courseType = course.courseType || 'Theory';
-            const slotType = courseType === 'Practical' ? 'Lab' : 'Theory';
+            const slotType = course.slotType || (courseType === 'Practical' ? 'Lab' : 'Theory');
             
             timeSlotsMap[timeSlot] = {
               slot_code: slotCode,
@@ -910,82 +959,114 @@ export default function TimetablePage() {
             aria-label="Refresh timetable data"
             title="Refresh timetable data"
           >
-            <svg 
-              xmlns="http://www.w3.org/2000/svg" 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              strokeWidth={2} 
-              stroke="currentColor" 
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
               className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
             </svg>
           </button>
         </div>
+
       </div>
+      <div className="absolute top-20 right-4 z-20">
+          <button
+            onClick={handleDownloadTimetable}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-sora font-bold py-2 px-4 rounded-lg transition-colors flex items-center gap-2 text-sm"
+            aria-label="Download timetable"
+            title="Download timetable as image"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+              className="w-4 h-4"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Download
+          </button>
+        </div>
+      <div className="w-full max-w-full bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden relative">
+        
+        <div className="w-full overflow-x-auto">
+          <div
+            className="timetable-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `120px repeat(${timetableData.length}, 1fr)`,
+              gridTemplateRows: `auto repeat(${days.length}, 1fr)`,
+              minWidth: `${120 + (timetableData.length * 140)}px`,
+              gap: '1px',
+              backgroundColor: 'rgba(255, 255, 255, 0.2)'
+            }}
+          >
+            {/* Header Row - Day Order + Time Slots */}
+            <div className="bg-white/20 border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base sticky top-0 z-10">
+              Day Order
+            </div>
+            {timetableData.map((slot) => (
+              <div
+                key={slot.time}
+                className="bg-white/20 border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base sticky top-0 z-10"
+              >
+                {slot.time}
+              </div>
+            ))}
 
-      <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden">
-        <div className="h-full overflow-auto">
-          <table className="w-full h-full border-collapse timetable-table">
-            <thead className="sticky top-0 bg-black/50 backdrop-blur-sm z-10">
-              <tr>
-                <th className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[80px] sm:min-w-[90px] md:min-w-[95px] lg:min-w-[100px] text-[10px] sm:text-xs md:text-sm lg:text-base">
-                  Day Order
-                </th>
-                {timetableData.map((slot) => (
-                  <th key={slot.time} className="border border-white/30 bg-white/20 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] text-[10px] sm:text-xs md:text-sm lg:text-base">
-                    {slot.time}
-                  </th>
-                ))}
-              </tr>
-            </thead>
+            {/* Data Rows */}
+            {days.map((day, dayIndex) => (
+              <React.Fragment key={day}>
+                {/* Day Order Column */}
+                <div className="bg-white/10 border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base">
+                  {day}
+                </div>
 
-            <tbody>
-              {days.map((day, dayIndex) => (
-                <tr key={day}>
-                  <td className="border border-white/30 bg-white/10 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center font-bold text-[10px] sm:text-xs md:text-sm lg:text-base">
-                    {day}
-                  </td>
+                {/* Time Slot Cells */}
+                {timetableData.map((slot) => {
+                  const dayKey = dayKeys[dayIndex];
+                  const cellData = slot[dayKey];
+                  const isObject = typeof cellData === 'object' && cellData !== null;
+                  const courseName = isObject ? (cellData as { course: string }).course : (cellData as string) || "";
 
-                  {timetableData.map((slot) => {
-                    const dayKey = dayKeys[dayIndex];
-                    const cellData = slot[dayKey];
-                    const isObject = typeof cellData === 'object' && cellData !== null;
-                    const courseName = isObject ? (cellData as { course: string }).course : (cellData as string) || "";
-
-                    // Get slot type from raw timetable data if available
-                    let slotType = '';
-                    if (rawTimetableData && rawTimetableData.timetable) {
-                      const dayOrderData = rawTimetableData.timetable[day];
-                      if (dayOrderData && dayOrderData.time_slots[slot.time]) {
-                        slotType = dayOrderData.time_slots[slot.time].slot_type || '';
-                      }
+                  // Get slot type from raw timetable data if available
+                  let slotType = '';
+                  if (rawTimetableData && rawTimetableData.timetable) {
+                    const dayOrderData = rawTimetableData.timetable[day];
+                    if (dayOrderData && dayOrderData.time_slots[slot.time]) {
+                      slotType = dayOrderData.time_slots[slot.time].slot_type || '';
                     }
+                  }
 
-                    // Determine background color based on slotType
-                    let bgColor = 'bg-white/10';
-                    if (slotType) {
-                      const typeLower = slotType.toLowerCase();
-                      if (typeLower === 'theory') {
-                        bgColor = 'bg-blue-500/30';
-                      } else {
-                        bgColor = 'bg-green-500/30';
-                      }
+                  // Determine background color based on slotType
+                  let bgColor = 'bg-white/10';
+                  if (slotType) {
+                    const typeLower = slotType.toLowerCase();
+                    if (typeLower === 'lab') {
+                      bgColor = 'bg-green-500/30';
+                    } else {
+                      bgColor = 'bg-blue-500/30';
                     }
+                  }
 
-                    return (
-                      <td
-                        key={`${day}-${slot.time}`}
-                        className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor}`}
-                      >
-                        {courseName}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  return (
+                    <div
+                      key={`${day}-${slot.time}`}
+                      className={`border border-white/30 p-2 sm:p-2.5 md:p-3 lg:p-3 text-center text-[10px] sm:text-xs md:text-sm lg:text-base ${bgColor} min-h-[60px] flex items-center justify-center`}
+                    >
+                      {courseName}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
         </div>
       </div>
 

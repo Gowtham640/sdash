@@ -780,7 +780,7 @@ export async function POST(request: NextRequest) {
               result.data = {};
             }
             // Transform calendar data from nested format to flat array format expected by frontend
-            let calendarDataForResponse = calendarDbData.data;
+            let calendarDataForResponse: any[] = [];
 
             console.log(`[API /data/all] 🔍 DEBUG: Raw calendar data structure:`);
             console.log(`[API /data/all]   - Type: ${typeof calendarDbData.data}`);
@@ -803,47 +803,98 @@ export async function POST(request: NextRequest) {
               const calendarObj = calendarDbData.data as { calendar?: unknown };
 
               if (calendarObj.calendar && Array.isArray(calendarObj.calendar)) {
-                console.log(`[API /data/all] 🔄 Transforming nested calendar structure to flat array`);
+                console.log(`[API /data/all] 🔄 Processing calendar array`);
 
-                // Transform nested structure to flat array
-                const flatCalendarEvents = calendarObj.calendar.flatMap((monthObj: any) => {
-                  console.log(`[API /data/all]   - Processing month:`, monthObj?.month || 'undefined');
-
-                  if (!monthObj || !monthObj.month || !monthObj.days || !Array.isArray(monthObj.days)) {
-                    console.log(`[API /data/all]   - Skipping invalid month object:`, monthObj);
-                    return [];
-                  }
-
-                  console.log(`[API /data/all]   - Month has ${monthObj.days.length} days`);
-
-                  return monthObj.days.map((day: any) => {
-                    if (!day || typeof day !== 'object') {
-                      console.log(`[API /data/all]   - Skipping invalid day object:`, day);
+                // Check if calendar array contains individual day events or nested month objects
+                const firstItem = calendarObj.calendar[0];
+                if (firstItem && typeof firstItem === 'object' && firstItem.date && firstItem.month) {
+                  // This is already flat day events format, normalize field names
+                  console.log(`[API /data/all] 📅 Calendar data is already flat day events format`);
+                  const normalizedEvents = calendarObj.calendar.map((dayObj: any) => {
+                    if (!dayObj || typeof dayObj !== 'object') {
+                      console.log(`[API /data/all]   - Skipping invalid day object:`, dayObj);
                       return null;
                     }
 
-                    const event = {
-                      date: `${day.date || '01'}/${monthObj.month}`,
-                      day_name: day.day || 'Mon',
-                      content: day.event || null, // Use 'event' field from stored data
-                      day_order: day.dayOrder || '-',
-                      month: monthObj.month,
-                      month_name: monthObj.month.split(' ')[0] || '',
-                      year: monthObj.month.split(' ')[1] || '',
+                    return {
+                      date: dayObj.date,
+                      day_name: dayObj.day_name || 'Mon',
+                      event: dayObj.event || null,
+                      day_order: dayObj.day_order || '-',
+                      month: dayObj.month,
+                      month_name: dayObj.month,
+                      year: dayObj.year || '',
                     };
-
-                    console.log(`[API /data/all]   - Created event: ${event.date} - ${event.content || 'no content'}`);
-                    return event;
                   }).filter((event: any) => event !== null);
-                });
 
-                calendarDataForResponse = flatCalendarEvents;
-                console.log(`[API /data/all] ✅ Transformed calendar: ${flatCalendarEvents.length} events`);
+                  calendarDataForResponse = normalizedEvents;
+                  console.log(`[API /data/all] ✅ Processed calendar: ${normalizedEvents.length} events`);
+                } else {
+                  // This is the old nested month structure, transform it
+                  console.log(`[API /data/all] 🔄 Transforming nested calendar structure to flat array`);
+
+                  // Transform nested structure to flat array
+                  const flatCalendarEvents = calendarObj.calendar.flatMap((monthObj: any) => {
+                    console.log(`[API /data/all]   - Processing month:`, monthObj?.month || 'undefined');
+
+                    if (!monthObj || !monthObj.month || !monthObj.days || !Array.isArray(monthObj.days)) {
+                      console.log(`[API /data/all]   - Skipping invalid month object:`, monthObj);
+                      return [];
+                    }
+
+                    console.log(`[API /data/all]   - Month has ${monthObj.days.length} days`);
+
+                    return monthObj.days.map((day: any) => {
+                      if (!day || typeof day !== 'object') {
+                        console.log(`[API /data/all]   - Skipping invalid day object:`, day);
+                        return null;
+                      }
+
+                      const event = {
+                        date: `${day.date || '01'}/${monthObj.month}`,
+                        day_name: day.day || 'Mon',
+                        event: day.event || null, // Use 'event' field from stored data
+                        day_order: day.dayOrder || '-',
+                        month: monthObj.month,
+                        month_name: monthObj.month.split(' ')[0] || '',
+                        year: monthObj.month.split(' ')[1] || '',
+                      };
+
+                      console.log(`[API /data/all]   - Created event: ${event.date} - ${event.event || 'no content'}`);
+                      return event;
+                    }).filter((event: any) => event !== null);
+                  });
+
+                  calendarDataForResponse = flatCalendarEvents;
+                  console.log(`[API /data/all] ✅ Transformed calendar: ${flatCalendarEvents.length} events`);
+                }
               } else {
                 console.log(`[API /data/all] ⚠️ Calendar object exists but no valid calendar array found`);
               }
+            } else if (Array.isArray(calendarDbData.data)) {
+              // Calendar data is already a flat array, normalize field names
+              console.log(`[API /data/all] 📅 Calendar data is flat array, normalizing field names`);
+              const normalizedEvents = calendarDbData.data.map((dayObj: any) => {
+                if (!dayObj || typeof dayObj !== 'object') {
+                  console.log(`[API /data/all]   - Skipping invalid day object:`, dayObj);
+                  return null;
+                }
+
+                return {
+                  date: dayObj.date,
+                  day_name: dayObj.day_name || 'Mon',
+                  event: dayObj.event || null,
+                  day_order: dayObj.day_order || '-',
+                  month: dayObj.month,
+                  month_name: dayObj.month,
+                  year: dayObj.year || '',
+                };
+              }).filter((event: any) => event !== null);
+
+              calendarDataForResponse = normalizedEvents;
+              console.log(`[API /data/all] ✅ Normalized calendar: ${normalizedEvents.length} events`);
             } else {
-              console.log(`[API /data/all] ℹ️ Calendar data is not nested object structure, using as-is`);
+              console.log(`[API /data/all] ⚠️ Calendar data structure not recognized`);
             }
 
             (result.data as { calendar?: unknown }).calendar = calendarDataForResponse;

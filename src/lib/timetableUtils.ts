@@ -108,7 +108,7 @@ export const getDayOrderStats = (calendarData: CalendarEvent[]): DayOrderStats =
   const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   
   const currentDateStr = getCurrentDateString();
-  const endDateStr = "21/11/2025";
+  const endDateStr = "31/12/2026";
   
   console.log(`[STATS] Counting from ${currentDateStr} to ${endDateStr}`);
   
