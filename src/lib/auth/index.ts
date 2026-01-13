@@ -193,16 +193,87 @@ export async function handleUserSignIn(
       }
 
       console.log(`[Auth] Go backend login successful`);
-      // Since user doesn't exist in auth.users, we can't create a session
-      // Return success but no session - frontend should handle accordingly
-      return {
-        session: null,
-        user: {
-          id: 'temp-user-id', // Placeholder since we don't have a real user ID
-          email: email,
-          role: 'public',
-        },
-      };
+      // Go backend should have created user in auth.users, re-check
+      const { data: usersListAfter, error: authQueryErrorAfter } = await supabaseAdmin.auth.admin.listUsers();
+
+      if (authQueryErrorAfter) {
+        console.error(`[Auth] Error re-checking auth.users after backend login: ${authQueryErrorAfter.message}`);
+        return {
+          session: null,
+          error: `Database error: ${authQueryErrorAfter.message}`,
+          errorCode: AuthErrorCode.SUPABASE_QUERY_ERROR,
+        };
+      }
+
+      // Find the user that was created by the backend
+      const usersWithEmailAfter = usersListAfter ? usersListAfter.users.filter(u => u.email === email) : [];
+
+      // Handle duplicate users - keep the most recently created one
+      let existingAuthUserAfter = null;
+      if (usersWithEmailAfter.length > 1) {
+        console.warn(`[Auth] Found ${usersWithEmailAfter.length} users with email ${email} after backend login, keeping the most recent`);
+        // Sort by created_at descending and take the first (most recent)
+        usersWithEmailAfter.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        existingAuthUserAfter = { user: usersWithEmailAfter[0] };
+      } else if (usersWithEmailAfter.length === 1) {
+        existingAuthUserAfter = { user: usersWithEmailAfter[0] };
+      }
+
+      if (existingAuthUserAfter?.user) {
+        console.log(`[Auth] Found user in auth.users after backend login: ${existingAuthUserAfter.user.id}`);
+
+        // Sign in to get a session
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (signInError) {
+          console.error(`[Auth] Supabase sign-in failed after backend user creation: ${signInError.message}`);
+          return {
+            session: null,
+            error: AuthErrorMessages[AuthErrorCode.SUPABASE_AUTH_ERROR],
+            errorCode: AuthErrorCode.SUPABASE_AUTH_ERROR,
+          };
+        }
+
+        // Fetch user info from Go backend and create public.users entry
+        console.log(`[Auth] Sending GET /user request to fetch user info`);
+        const userUrl = 'http://localhost:8080/user';
+        const userResponse = await fetch(userUrl, {
+          method: 'GET',
+          headers: {
+            'X-User-Id': existingAuthUserAfter.user.id,
+            'X-Email': email
+          }
+        });
+
+        const userResult = await userResponse.json();
+
+        if (!userResult.success) {
+          console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || 'Unknown error'}`);
+          // Continue with authentication even if GET /user fails
+        } else {
+          console.log(`[Auth] Successfully fetched user data from backend`);
+        }
+
+        console.log(`[Auth] Successfully authenticated new user and fetched profile data: ${email}`);
+        return {
+          session: signInData.session,
+          user: {
+            id: existingAuthUserAfter.user.id,
+            email: existingAuthUserAfter.user.email || email,
+            role: 'public', // Default role until synced
+          },
+        };
+      } else {
+        console.error(`[Auth] Backend login succeeded but user not found in auth.users: ${email}`);
+        return {
+          session: null,
+          error: "Backend user creation failed",
+          errorCode: AuthErrorCode.INTERNAL_ERROR,
+        };
+      }
     }
 
     if (existingAuthUser?.user && !existingPublicUser) {
