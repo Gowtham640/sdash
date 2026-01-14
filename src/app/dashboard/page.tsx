@@ -12,6 +12,7 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
 
 // Import types
 interface CalendarEvent {
@@ -1261,6 +1262,7 @@ export default function Dashboard() {
             { label: 'Timetable', href: '/timetable' },
             { label: 'Marks', href: '/marks' },
             { label: 'Calendar', href: '/calender' },
+            { label: 'SPGA Calculator', href: '/spga-calculator' },
             ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
           ]}
           activeHref="/dashboard"
@@ -1289,6 +1291,7 @@ export default function Dashboard() {
             { label: 'Timetable', href: '/timetable' },
             { label: 'Marks', href: '/marks' },
             { label: 'Calendar', href: '/calender' },
+            { label: 'SPGA Calculator', href: '/spga-calculator' },
             ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
           ]}
           activeHref="/dashboard"
@@ -1433,6 +1436,64 @@ export default function Dashboard() {
         hoveredPillTextColor="#000000"
         pillTextColor="#ffffff"
       />
+
+
+      {/* Sidebar - Only visible on medium and larger screens */}
+      <div className="hidden md:fixed md:top-20 md:left-6  md:flex md:flex-col md:space-y-6 md:z-[1000]">
+        <nav className="flex flex-col space-y-4">
+          <Link
+            href="/attendance"
+            className="flex items-center space-x-3 text-white hover:text-blue-300 transition-all duration-300 hover:scale-110 group"
+          >
+            <User className="w-5 h-5 group-hover:w-6 group-hover:h-6 transition-all duration-300" />
+            <span className="font-sora text-sm group-hover:text-base transition-all duration-300">Attendance</span>
+          </Link>
+
+          <Link
+            href="/timetable"
+            className="flex items-center space-x-3 text-white hover:text-blue-300 transition-all duration-300 hover:scale-110 group"
+          >
+            <BookOpen className="w-5 h-5 group-hover:w-6 group-hover:h-6 transition-all duration-300" />
+            <span className="font-sora text-sm group-hover:text-base transition-all duration-300">Timetable</span>
+          </Link>
+
+          <Link
+            href="/marks"
+            className="flex items-center space-x-3 text-white hover:text-blue-300 transition-all duration-300 hover:scale-110 group"
+          >
+            <BarChart3 className="w-5 h-5 group-hover:w-6 group-hover:h-6 transition-all duration-300" />
+            <span className="font-sora text-sm group-hover:text-base transition-all duration-300">Marks</span>
+          </Link>
+
+          <Link
+            href="/calender"
+            className="flex items-center space-x-3 text-white hover:text-blue-300 transition-all duration-300 hover:scale-110 group"
+          >
+            <Calendar className="w-5 h-5 group-hover:w-6 group-hover:h-6 transition-all duration-300" />
+            <span className="font-sora text-sm group-hover:text-base transition-all duration-300">Calendar</span>
+          </Link>
+
+          <Link
+            href="/sgpa-calculator"
+            className="flex items-center space-x-3 text-white hover:text-green-300 transition-all duration-300 hover:scale-110 group"
+          >
+            <Calculator className="w-5 h-5 group-hover:w-6 group-hover:h-6 transition-all duration-300" />
+            <span className="font-sora text-sm group-hover:text-base transition-all duration-300">SGPA Calculator</span>
+          </Link>
+
+          {isAdmin && (
+            <Link
+              href="/admin"
+              className="flex items-center space-x-3 text-red-300 hover:text-red-200 transition-all duration-300 hover:scale-110 group"
+            >
+              <Settings className="w-5 h-5 group-hover:w-6 group-hover:h-6 transition-all duration-300" />
+              <span className="font-sora text-sm group-hover:text-base transition-all duration-300">Admin</span>
+            </Link>
+          )}
+        </nav>
+      </div>
+
+
       <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
