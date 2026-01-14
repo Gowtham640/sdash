@@ -12,6 +12,7 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
 
 // Import types
 interface CalendarEvent {
@@ -74,7 +75,8 @@ export default function Dashboard() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [hasCache, setHasCache] = useState(false);
-  
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+
   // Track errors
   useErrorTracking(error, '/dashboard');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -1261,6 +1263,7 @@ export default function Dashboard() {
             { label: 'Timetable', href: '/timetable' },
             { label: 'Marks', href: '/marks' },
             { label: 'Calendar', href: '/calender' },
+            { label: 'SPGA Calculator', href: '/spga-calculator' },
             ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
           ]}
           activeHref="/dashboard"
@@ -1289,6 +1292,7 @@ export default function Dashboard() {
             { label: 'Timetable', href: '/timetable' },
             { label: 'Marks', href: '/marks' },
             { label: 'Calendar', href: '/calender' },
+            { label: 'SPGA Calculator', href: '/spga-calculator' },
             ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
           ]}
           activeHref="/dashboard"
@@ -1433,14 +1437,213 @@ export default function Dashboard() {
         hoveredPillTextColor="#000000"
         pillTextColor="#ffffff"
       />
-      <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
+
+
+      {/* Expandable Sidebar - Only visible on medium and larger screens */}
+      <div className="hidden md:block">
+        {/* Sidebar Toggle Button */}
+        <button
+          onClick={() => setSidebarExpanded(!sidebarExpanded)}
+          className={`fixed top-14 left-4 z-[1001] bg-white/10 backdrop-blur border border-white/20 rounded-full p-2 transition-all duration-300 hover:bg-white/20 ${
+            sidebarExpanded ? 'left-64' : 'left-4'
+          }`}
+          aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          <svg
+            className={`w-5 h-5 text-white transition-transform duration-300 ${
+              sidebarExpanded ? 'rotate-180' : 'rotate-0'
+            }`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+
+        {/* Sidebar */}
+        <div
+          className={`fixed left-0 top-0 h-full z-[1000] transition-all duration-300 ease-in-out ${
+            sidebarExpanded ? 'w-64' : 'w-16'
+          }`}
+        >
+          {/* Glass Background - only visible when expanded */}
+          <div
+            className={`absolute inset-0 backdrop-blur bg-black/80 border-r border-white/20 transition-opacity duration-300 ${
+              sidebarExpanded ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+
+          {/* Sidebar Content */}
+          <div className="relative h-full flex flex-col">
+            {/* Header - only visible when expanded */}
+            <div
+              className={`p-6 border-b border-white/10 transition-all duration-300 ${
+                sidebarExpanded ? 'opacity-100' : 'opacity-0'
+              }`}
+            >
+              <h2 className="text-xl font-sora font-bold text-white">Navigation</h2>
+            </div>
+
+            {/* Navigation Links */}
+            <nav className="flex-1 p-4 space-y-4">
+              {/* Attendance */}
+              <div className="relative group">
+                <Link
+                  href="/attendance"
+                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
+                  title={sidebarExpanded ? "" : "Attendance"}
+                >
+                  <User className="w-6 h-6 flex-shrink-0" />
+                  <span
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
+                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                    }`}
+                  >
+                    Attendance
+                  </span>
+                </Link>
+                {!sidebarExpanded && (
+                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                    Attendance
+                  </div>
+                )}
+              </div>
+
+              {/* Timetable */}
+              <div className="relative group">
+                <Link
+                  href="/timetable"
+                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
+                  title={sidebarExpanded ? "" : "Timetable"}
+                >
+                  <BookOpen className="w-6 h-6 flex-shrink-0" />
+                  <span
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
+                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                    }`}
+                  >
+                    Timetable
+                  </span>
+                </Link>
+                {!sidebarExpanded && (
+                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                    Timetable
+                  </div>
+                )}
+              </div>
+
+              {/* Marks */}
+              <div className="relative group">
+                <Link
+                  href="/marks"
+                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
+                  title={sidebarExpanded ? "" : "Marks"}
+                >
+                  <BarChart3 className="w-6 h-6 flex-shrink-0" />
+                  <span
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
+                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                    }`}
+                  >
+                    Marks
+                  </span>
+                </Link>
+                {!sidebarExpanded && (
+                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                    Marks
+                  </div>
+                )}
+              </div>
+
+              {/* Calendar */}
+              <div className="relative group">
+                <Link
+                  href="/calender"
+                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
+                  title={sidebarExpanded ? "" : "Calendar"}
+                >
+                  <Calendar className="w-6 h-6 flex-shrink-0" />
+                  <span
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
+                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                    }`}
+                  >
+                    Calendar
+                  </span>
+                </Link>
+                {!sidebarExpanded && (
+                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                    Calendar
+                  </div>
+                )}
+              </div>
+
+              {/* SGPA Calculator */}
+              <div className="relative group">
+                <Link
+                  href="/sgpa-calculator"
+                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-green-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
+                  title={sidebarExpanded ? "" : "SGPA Calculator"}
+                >
+                  <Calculator className="w-6 h-6 flex-shrink-0" />
+                  <span
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
+                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                    }`}
+                  >
+                    SGPA Calculator
+                  </span>
+                </Link>
+                {!sidebarExpanded && (
+                  <div className="absolute left-full ml-2 px-2 py-1 font-sora bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                    SGPA Calculator
+                  </div>
+                )}
+              </div>
+
+              {/* Admin - only show if admin */}
+              {isAdmin && (
+                <div className="relative group">
+                  <Link
+                    href="/admin"
+                    className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-red-300 hover:text-red-200 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
+                    title={sidebarExpanded ? "" : "Admin"}
+                  >
+                    <Settings className="w-6 h-6 flex-shrink-0" />
+                    <span
+                      className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
+                        sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
+                    >
+                      Admin
+                    </span>
+                  </Link>
+                  {!sidebarExpanded && (
+                    <div className="absolute left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                      Admin
+                    </div>
+                  )}
+                </div>
+              )}
+            </nav>
+          </div>
+        </div>
+      </div>
+
+
+      <div className={`mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4 transition-all duration-300 ${
+        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+      }`}>
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
         </div>
       </div>
 
       {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
+        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+      }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Upcoming Calendar
         </div>
@@ -1499,7 +1702,9 @@ export default function Dashboard() {
       </div>
 
       {/* Today's Timetable Section */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
+        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+      }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Today&apos;s Timetable {currentDayOrder && `- ${currentDayOrder}`}
         </div>
@@ -1532,7 +1737,9 @@ export default function Dashboard() {
       </div>
 
       {/* Attendance Section */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
+        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+      }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Attendance Overview
         </div>
@@ -1572,7 +1779,9 @@ export default function Dashboard() {
       </div>
 
       {/* Marks Section */}
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
+        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+      }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Marks Overview
         </div>
