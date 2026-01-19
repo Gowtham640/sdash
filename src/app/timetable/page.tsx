@@ -66,7 +66,7 @@ export default function TimetablePage() {
   const [rawTimetableData, setRawTimetableData] = useState<TimetableData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Track errors
   useErrorTracking(error, '/timetable');
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
@@ -84,7 +84,7 @@ export default function TimetablePage() {
   // Rotate facts every 8 seconds while loading
   useEffect(() => {
     if (!loading) return;
-    
+
     const interval = setInterval(() => {
       setCurrentFact(getRandomFact());
     }, 8000);
@@ -99,7 +99,7 @@ export default function TimetablePage() {
       setIsRefreshing(true);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Timetable] No access token found');
         setError('Please sign in to view your timetable');
@@ -132,32 +132,9 @@ export default function TimetablePage() {
       // Update local state with the returned data
       console.log('[Timetable] ✅ Refresh completed, updating local state...');
 
-      if (result.data) {
-        try {
-          // The refresh API already returns processed data from Supabase
-          const timetableData = result.data as TimetableData;
-          setRawTimetableData(timetableData);
-          const convertedData = convertTimetableDataToTimeSlots(timetableData);
-          setTimetableData(convertedData);
-
-          // Also update localStorage cache for future use
-          setClientCache('timetable', timetableData);
-
-          console.log('[Timetable] ✅ Updated local state with refreshed timetable data');
-        } catch (dataError) {
-          console.error('[Timetable] ❌ Error processing refresh data:', dataError);
-          setError('Failed to process refreshed timetable data');
-          setLoading(false);
-          setIsRefreshing(false);
-          return;
-        }
-      } else {
-        console.warn('[Timetable] ⚠️ No data returned from refresh API');
-        setError('No timetable data available');
-        setLoading(false);
-        setIsRefreshing(false);
-        return;
-      }
+      // After successful refresh, re-fetch data from Supabase cache
+      console.log('[Timetable] ✅ Refresh completed, now fetching fresh data from Supabase...');
+      await fetchUnifiedData(false);
     } catch (err) {
       console.error('[Timetable] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');
@@ -175,7 +152,7 @@ export default function TimetablePage() {
       }
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Timetable] No access token found');
         setError('Please sign in to view your timetable');
@@ -187,14 +164,14 @@ export default function TimetablePage() {
       let cachedTimetable: TimetableData | null = null;
       let hasValidCache = false;
       let needsBackgroundRefresh = false;
-      
+
       if (!forceRefresh) {
         const cachedTimetableRaw = getClientCache('timetable');
-        
+
         // Handle cached timetable structure: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
         if (cachedTimetableRaw) {
           let timetableDataToUse: TimetableData | null = null;
-          
+
           if (typeof cachedTimetableRaw === 'object' && cachedTimetableRaw !== null) {
             // Check if cached data has 'data' property (wrapped API response format)
             if ('data' in cachedTimetableRaw && typeof (cachedTimetableRaw as { data?: unknown }).data === 'object' && (cachedTimetableRaw as { data?: unknown }).data !== null) {
@@ -210,7 +187,7 @@ export default function TimetablePage() {
               console.log('[Timetable] ✅ Using client-side cache for timetable (direct format)');
             }
           }
-          
+
           if (timetableDataToUse) {
             cachedTimetable = timetableDataToUse;
             hasValidCache = true;
@@ -271,7 +248,7 @@ export default function TimetablePage() {
               console.log(`[Timetable] ✅ Found Supabase cache (expired: ${cacheResult.isExpired})`);
               let timetableDataToUse: TimetableData | null = null;
               const cachedData = cacheResult.data;
-              
+
               if (typeof cachedData === 'object' && cachedData !== null) {
                 if ('data' in cachedData && typeof (cachedData as { data?: unknown }).data === 'object' && (cachedData as { data?: unknown }).data !== null) {
                   const wrappedData = (cachedData as { data?: TimetableData }).data;
@@ -282,7 +259,7 @@ export default function TimetablePage() {
                   timetableDataToUse = cachedData as TimetableData;
                 }
               }
-              
+
               if (timetableDataToUse) {
                 cachedTimetable = timetableDataToUse;
                 hasValidCache = true;
@@ -304,13 +281,13 @@ export default function TimetablePage() {
         removeClientCache('timetable');
         console.log('[Timetable] 🗑️ Cleared client cache for force refresh');
       }
-      
+
       // Only fetch if cache is missing or force refresh or expired
       if (!hasValidCache || forceRefresh || needsBackgroundRefresh) {
         const apiStartTime = Date.now();
         const fetchType = forceRefresh ? '(force refresh)' : needsBackgroundRefresh ? '(background refresh - cache expired)' : '(fetching fresh data)';
         console.log(`[Timetable] 🚀 Fetching from API ${fetchType}`);
-        
+
         // Use request deduplication - ensures only ONE page calls backend at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
@@ -319,15 +296,15 @@ export default function TimetablePage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
           });
-          
+
           const result = await response.json();
           return { response, result };
         });
-        
+
         const response = apiResult.response;
         const result = apiResult.result;
         const apiDuration = Date.now() - apiStartTime;
-        
+
         console.log(`[Timetable] 📡 API response received: ${apiDuration}ms`);
         console.log(`[Timetable]   - Success: ${result.success}`);
         console.log(`[Timetable]   - Status: ${response.status}`);
@@ -401,15 +378,15 @@ export default function TimetablePage() {
         // Process timetable data from unified endpoint
         // Unified endpoint returns: { success: boolean, data: { timetable: TimetableData, ... }, error?: string }
         let timetableDataObj: TimetableData | null = null;
-        
+
         console.log('[Timetable] Processing timetable data from API response');
         console.log('[Timetable] result.data type:', typeof result.data);
         console.log('[Timetable] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
-        
+
         // Extract timetable from unified response: { data: { timetable: TimetableData, ... } }
         if (result.data && typeof result.data === 'object' && 'timetable' in result.data) {
           const timetableData = (result.data as { timetable?: unknown }).timetable;
-          
+
           if (timetableData && typeof timetableData === 'object' && timetableData !== null) {
             // Check if it's the new Go backend format (has schedule array)
             const dataObj = timetableData as Record<string, unknown>;
@@ -419,37 +396,37 @@ export default function TimetablePage() {
               timetableDataObj = transformGoBackendTimetableToOldFormat(dataObj);
               console.log('[Timetable] ✅ Transformed Go backend timetable format');
             } else {
-            // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
-            let dataToProcess: unknown = timetableData;
-            
-            // Check if data is wrapped in a 'data' property (API response format from cache)
-            const dataToProcessObj = dataToProcess as Record<string, unknown>;
-            if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
-              console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
-              const wrappedData = dataToProcessObj.data as TimetableData;
-              if (wrappedData && 'timetable' in wrappedData) {
-                dataToProcess = wrappedData;
+              // Handle wrapped format: {data: {timetable: {...}, time_slots: [...], ...}, type: 'timetable', ...}
+              let dataToProcess: unknown = timetableData;
+
+              // Check if data is wrapped in a 'data' property (API response format from cache)
+              const dataToProcessObj = dataToProcess as Record<string, unknown>;
+              if ('data' in dataToProcessObj && typeof dataToProcessObj.data === 'object' && dataToProcessObj.data !== null) {
+                console.log('[Timetable] 🔄 Unwrapping nested data structure (extracting from data property)');
+                const wrappedData = dataToProcessObj.data as TimetableData;
+                if (wrappedData && 'timetable' in wrappedData) {
+                  dataToProcess = wrappedData;
+                }
               }
-            }
-            // Check if it's already in TimetableData format (has timetable property at root)
-            else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
-              // Already in correct format
-              dataToProcess = dataToProcess;
-            }
-            
-            // Verify it's the expected TimetableData format
-            if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
+              // Check if it's already in TimetableData format (has timetable property at root)
+              else if ('timetable' in dataToProcessObj || 'time_slots' in dataToProcessObj) {
+                // Already in correct format
+                dataToProcess = dataToProcess;
+              }
+
+              // Verify it's the expected TimetableData format
+              if (dataToProcess && typeof dataToProcess === 'object' && dataToProcess !== null) {
                 const dataObj2 = dataToProcess as Record<string, unknown>;
                 if ('timetable' in dataObj2 || 'time_slots' in dataObj2) {
-                timetableDataObj = dataToProcess as TimetableData;
-                console.log('[Timetable] ✅ Timetable data loaded');
+                  timetableDataObj = dataToProcess as TimetableData;
+                  console.log('[Timetable] ✅ Timetable data loaded');
+                } else {
+                  console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
+                  console.warn('[Timetable] Available keys:', Object.keys(dataObj2));
+                }
               } else {
                 console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-                  console.warn('[Timetable] Available keys:', Object.keys(dataObj2));
-              }
-            } else {
-              console.warn('[Timetable] ⚠️ Timetable data doesn\'t match expected format');
-              console.warn('[Timetable] dataToProcess is not an object');
+                console.warn('[Timetable] dataToProcess is not an object');
               }
             }
           }
@@ -457,18 +434,18 @@ export default function TimetablePage() {
           console.warn('[Timetable] ⚠️ result.data.timetable is not available');
           console.warn('[Timetable] result.data structure:', result.data);
         }
-        
+
         if (timetableDataObj && timetableDataObj.timetable) {
           console.log('[Timetable] Timetable response data:', timetableDataObj);
           console.log('[Timetable] DO 1 time_slots sample:', timetableDataObj.timetable['DO 1']?.time_slots);
-          
+
           setRawTimetableData(timetableDataObj);
           const convertedData = convertTimetableDataToTimeSlots(timetableDataObj);
           console.log('[Timetable] Converted time slots:', convertedData);
-          
+
           // Save to client cache
           setClientCache('timetable', timetableDataObj);
-          
+
           setTimetableData(convertedData);
 
           const occurrences = getSlotOccurrences(timetableDataObj);
@@ -503,7 +480,7 @@ export default function TimetablePage() {
           if (unifiedData && typeof unifiedData === 'object' && 'calendar' in unifiedData) {
             const calendarDataFromCache = (unifiedData as { calendar?: unknown }).calendar;
             let calendarArray: CalendarEvent[] | null = null;
-            
+
             if (Array.isArray(calendarDataFromCache)) {
               calendarArray = calendarDataFromCache;
             } else if (calendarDataFromCache && typeof calendarDataFromCache === 'object') {
@@ -517,7 +494,7 @@ export default function TimetablePage() {
                 calendarArray = calendarObj.data as CalendarEvent[];
               }
             }
-            
+
             if (calendarArray) {
               setCalendarData(calendarArray);
               const stats = getDayOrderStats(calendarArray);
@@ -649,7 +626,7 @@ export default function TimetablePage() {
       "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
       "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
     ];
-    
+
     const schedule = goData.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
     if (!schedule || !Array.isArray(schedule)) {
       console.warn('[Timetable] Invalid schedule format');
@@ -665,10 +642,10 @@ export default function TimetablePage() {
         timetable: {}
       };
     }
-    
+
     const timetable: Record<string, TimetableDayOrder> = {};
     const slotMapping: Record<string, string> = {};
-    
+
     // Map day numbers (1-5) to DO names
     const dayToDO: Record<number, string> = {
       1: 'DO 1',
@@ -677,13 +654,13 @@ export default function TimetablePage() {
       4: 'DO 4',
       5: 'DO 5'
     };
-    
+
     schedule.forEach((daySchedule) => {
       const doName = dayToDO[daySchedule.day];
       if (!doName) return;
-      
+
       const timeSlotsMap: Record<string, { slot_code: string; course_title: string; slot_type: string; is_alternate: boolean; courseType?: string; online?: boolean }> = {};
-      
+
       daySchedule.table.forEach((entry, index) => {
         if (entry && typeof entry === 'object' && entry !== null) {
           const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; slotType?: string; online?: boolean };
@@ -693,7 +670,7 @@ export default function TimetablePage() {
             const courseTitle = course.name;
             const courseType = course.courseType || 'Theory';
             const slotType = course.slotType || (courseType === 'Practical' ? 'Lab' : 'Theory');
-            
+
             timeSlotsMap[timeSlot] = {
               slot_code: slotCode,
               course_title: courseTitle,
@@ -702,7 +679,7 @@ export default function TimetablePage() {
               courseType: courseType,
               online: course.online || false
             };
-            
+
             // Build slot mapping
             if (!slotMapping[slotCode]) {
               slotMapping[slotCode] = courseTitle;
@@ -710,7 +687,7 @@ export default function TimetablePage() {
           }
         }
       });
-      
+
       if (Object.keys(timeSlotsMap).length > 0) {
         timetable[doName] = {
           do_name: doName,
@@ -718,7 +695,7 @@ export default function TimetablePage() {
         };
       }
     });
-    
+
     return {
       metadata: {
         generated_at: new Date().toISOString(),
@@ -831,7 +808,7 @@ export default function TimetablePage() {
           <div className="text-white text-4xl font-sora font-bold">Timetable</div>
           <div className="text-red-400 text-2xl font-sora text-center px-4">{error}</div>
           <div className="flex gap-4">
-            <button 
+            <button
               onClick={() => fetchUnifiedData()}
               className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
@@ -857,23 +834,23 @@ export default function TimetablePage() {
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10 pb-10 gap-8">
         {/* Home Icon */}
-        <Link 
+        <Link
           href="/dashboard"
           className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
           aria-label="Go to Dashboard"
         >
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            fill="none" 
-            viewBox="0 0 24 24" 
-            strokeWidth={2} 
-            stroke="currentColor" 
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
             className="w-8 h-8"
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
           </svg>
         </Link>
-        
+
         <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
@@ -916,7 +893,7 @@ export default function TimetablePage() {
             </div>
           </div>
         </div>
-        
+
         <div className="w-[95vw] sm:w-[95vw] md:w-[95vw] lg:w-[95vw] h-auto bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col gap-6 justify-center items-center p-8">
           <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
             No timetable data available
@@ -932,23 +909,23 @@ export default function TimetablePage() {
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10 pb-10 gap-8">
       {/* Home Icon */}
-      <Link 
+      <Link
         href="/dashboard"
         className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
         aria-label="Go to Dashboard"
       >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+          stroke="currentColor"
           className="w-8 h-8"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
         </svg>
       </Link>
-      
+
       <div className="flex flex-col items-center gap-4 mb-4 sm:mb-5 md:mb-5.5 lg:mb-6">
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-sora font-bold">Timetable</div>
@@ -974,27 +951,27 @@ export default function TimetablePage() {
 
       </div>
       <div className="absolute top-20 right-4 z-20">
-          <button
-            onClick={handleDownloadTimetable}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-sora font-bold py-2 px-4 rounded-lg transition-colors flex items-center gap-2 text-sm"
-            aria-label="Download timetable"
-            title="Download timetable as image"
+        <button
+          onClick={handleDownloadTimetable}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-sora font-bold py-2 px-4 rounded-lg transition-colors flex items-center gap-2 text-sm"
+          aria-label="Download timetable"
+          title="Download timetable as image"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+            className="w-4 h-4"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-              className="w-4 h-4"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Download
-          </button>
-        </div>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Download
+        </button>
+      </div>
       <div className="w-full max-w-full bg-white/10 border border-white/20 rounded-3xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora overflow-hidden relative">
-        
+
         <div className="w-full overflow-x-auto">
           <div
             className="timetable-grid"
@@ -1106,11 +1083,10 @@ export default function TimetablePage() {
                       {occurrence.courseTitle}
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className={`text-[10px] sm:text-xs font-sora px-1.5 sm:px-2 py-0.5 sm:py-1 rounded ${
-                        occurrence.category === 'Theory' 
-                          ? 'bg-blue-500/20 text-blue-400' 
-                          : 'bg-green-500/20 text-green-400'
-                      }`}>
+                      <div className={`text-[10px] sm:text-xs font-sora px-1.5 sm:px-2 py-0.5 sm:py-1 rounded ${occurrence.category === 'Theory'
+                        ? 'bg-blue-500/20 text-blue-400'
+                        : 'bg-green-500/20 text-green-400'
+                        }`}>
                         {occurrence.category}
                       </div>
                       <div className="text-white/70 text-[10px] sm:text-xs font-sora">
@@ -1118,7 +1094,7 @@ export default function TimetablePage() {
                       </div>
                     </div>
                     <div className="text-white/80 text-[10px] sm:text-xs font-sora">
-                      Day Orders: {occurrence.dayOrders.sort().map((doNum: number) => 
+                      Day Orders: {occurrence.dayOrders.sort().map((doNum: number) =>
                         `DO${doNum}(${occurrence.dayOrderHours[doNum]})`
                       ).join(', ')}
                     </div>
