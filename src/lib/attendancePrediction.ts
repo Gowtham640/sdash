@@ -1,47 +1,9 @@
 // Attendance prediction utility functions
 
 import { parseDate, getCurrentDateString, type DayOrderStats, type SlotOccurrence } from './timetableUtils';
+import { type AttendanceData, type AttendanceSubject, type LeavePeriod } from '@/lib/apiTypes';
 
-export interface AttendanceSubject {
-  row_number: number;
-  subject_code: string;
-  course_title: string;
-  category: string;
-  faculty_name: string;
-  slot: string;
-  room: string;
-  hours_conducted: string;
-  hours_absent: string;
-  attendance: string;
-  attendance_percentage: string;
-}
-
-export interface AttendanceData {
-  metadata: {
-    generated_at: string;
-    source: string;
-    academic_year: string;
-    institution: string;
-    college: string;
-    scraped_at: string;
-  };
-  summary: {
-    total_subjects: number;
-    theory_subjects: number;
-    lab_subjects: number;
-    other_subjects: number;
-    total_hours_conducted: number;
-    total_hours_absent: number;
-    overall_attendance_percentage: string;
-  };
-  all_subjects: AttendanceSubject[];
-}
-
-export interface LeavePeriod {
-  from: Date;
-  to: Date;
-  id: string;
-}
+export type { AttendanceData, AttendanceSubject, LeavePeriod } from '@/lib/apiTypes';
 
 export interface PredictionResult {
   subject: AttendanceSubject;
@@ -536,7 +498,7 @@ export const validateDateRange = (startDate: Date, endDate: Date): { isValid: bo
     return { isValid: false, error: 'Leave start date cannot be in the past' };
   }
   
-  const maxEndDate = new Date('2025-11-21'); // Academic year end
+  const maxEndDate = new Date('2026-11-21'); // Academic year end
   if (endDate > maxEndDate) {
     return { isValid: false, error: 'Leave end date cannot be beyond academic year end' };
   }
@@ -556,7 +518,7 @@ export const validateODMLDateRange = (startDate: Date, endDate: Date): { isValid
     return { isValid: false, error: 'OD/ML start date cannot be before academic year start' };
   }
   
-  const maxEndDate = new Date('2025-11-21'); // Academic year end
+  const maxEndDate = new Date('2026-11-21'); // Academic year end
   if (endDate > maxEndDate) {
     return { isValid: false, error: 'OD/ML end date cannot be beyond academic year end' };
   }

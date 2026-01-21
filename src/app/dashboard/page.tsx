@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData, type CalendarEvent } from "@/lib/timetableUtils";
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
@@ -12,33 +12,17 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { normalizeAttendanceData } from '@/lib/dataTransformers';
 import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
+import type { AttendanceData, MarksData } from '@/lib/apiTypes';
 
-// Import types
-interface CalendarEvent {
-  date: string;
-  day_name: string;
-  content: string;
-  day_order: string;
-  month?: string;
-  month_name?: string;
-  year?: number;
-}
-
-interface AttendanceSubject {
+type TimeSlot = {
+  time: string;
   course_title: string;
   category: string;
-  hours_conducted: string;
-  hours_absent: string;
-  hours_required: string;
-  attendance_percentage: string;
-}
+};
 
-interface AttendanceData {
-  all_subjects: AttendanceSubject[];
-}
-
-interface MarksCourse {
+type MarksCourse = {
   course_code: string;
   course_title: string;
   subject_type: string;
@@ -48,17 +32,7 @@ interface MarksCourse {
     total_marks: string;
     percentage: string;
   }>;
-}
-
-interface MarksData {
-  all_courses: MarksCourse[];
-}
-
-interface TimeSlot {
-  time: string;
-  course_title: string;
-  category: string;
-}
+};
 
 export default function Dashboard() {
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
@@ -86,7 +60,7 @@ export default function Dashboard() {
     { label: 'Services', ariaLabel: 'View our services', link: '/services' },
     { label: 'Contact', ariaLabel: 'Get in touch', link: '/contact' }
   ];
-  
+
   const socialItems = [
     { label: 'Twitter', link: 'https://twitter.com' },
     { label: 'GitHub', link: 'https://github.com' },
@@ -117,12 +91,12 @@ export default function Dashboard() {
     if (parts.length === 2) {
       const [day, monthYear] = parts;
       const [monthName, yearStr] = monthYear.split(' ');
-      
+
       const monthNames: { [key: string]: number } = {
         'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
         'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
       };
-      
+
       const monthNum = monthNames[monthName];
       if (monthNum && yearStr) {
         // Extract year from "'YY" format
@@ -142,7 +116,7 @@ export default function Dashboard() {
   const getThreeDayDates = () => {
     const today = new Date();
     const dates = [];
-    
+
     for (let i = -1; i <= 1; i++) {
       const date = new Date(today);
       date.setDate(today.getDate() + i);
@@ -155,7 +129,7 @@ export default function Dashboard() {
         dateObj: date
       });
     }
-    
+
     return dates;
   };
 
@@ -240,7 +214,7 @@ export default function Dashboard() {
         const slotCode = typedSlot.slot_code;
         const slotMapping = timetableData?.slot_mapping || {};
         const courseTitle = slotMapping[slotCode] || '';
-        
+
         timeSlots.push({
           time,
           course_title: courseTitle,
@@ -257,7 +231,7 @@ export default function Dashboard() {
         const timeParts = startTime.split(':').map(Number);
         let hours = timeParts[0];
         const minutes = timeParts[1];
-        
+
         // Convert 12-hour format to 24-hour for proper sorting
         // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
         // Times 08:xx onwards are AM (keep as is)
@@ -265,7 +239,7 @@ export default function Dashboard() {
         if (hours < 8 && hours !== 0) {
           hours += 12; // Convert 1PM-7PM to 13-19
         }
-        
+
         const minutesValue = hours * 60 + minutes;
         return minutesValue;
       };
@@ -312,7 +286,7 @@ export default function Dashboard() {
     const cachedMarks = getClientCache('marks');
     const cachedTimetable = getClientCache('timetable');
     const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-    
+
     setHasCache(hasAnyCache);
 
     if (!hasAnyCache) {
@@ -344,14 +318,14 @@ export default function Dashboard() {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const password = await getPortalPassword();
-      
+
       if (password) {
         if (attempt > 1) {
           console.log(`[Dashboard] ✅ Password available after ${attempt} attempt(s)`);
         }
         return password;
       }
-      
+
       if (attempt < maxAttempts) {
         // Exponential backoff: 200ms, 400ms, 800ms, 1600ms
         const delay = 200 * Math.pow(2, attempt - 1);
@@ -359,7 +333,7 @@ export default function Dashboard() {
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
-    
+
     console.error('[Dashboard] ❌ Password not available after all retry attempts');
     return null;
   };
@@ -370,7 +344,7 @@ export default function Dashboard() {
       setError(null);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Dashboard] No access token found');
         setError('Please sign in to view dashboard');
@@ -388,7 +362,7 @@ export default function Dashboard() {
       // If timetable is not cached, we need to fetch it along with calendar
       const hasTimetableCache = !!getClientCache('timetable');
       console.log(`[Dashboard] 📋 Timetable cache status: ${hasTimetableCache ? 'available' : 'missing'}`);
-      
+
       // Also check and clean unified cache if it contains calendar data
       const unifiedCache = getClientCache('unified');
       if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
@@ -403,25 +377,25 @@ export default function Dashboard() {
           }
         }
       }
-      
+
       let cachedAttendance: AttendanceData | null = null;
       let cachedMarks: MarksData | null = null;
       let cachedTimetable: unknown | null = null;
       let needsBackgroundRefresh = false;
-      
+
       if (!forceRefresh) {
         // Check client-side cache first
         cachedAttendance = getClientCache<AttendanceData>('attendance');
         cachedMarks = getClientCache<MarksData>('marks');
         cachedTimetable = getClientCache('timetable');
-        
+
         // If client cache is expired, fetch Supabase cache (even if expired)
         if (!cachedAttendance || !cachedMarks || !cachedTimetable) {
           console.log('[Dashboard] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
-          
+
           // Fetch Supabase cache for missing data types
           const supabaseCachePromises: Promise<void>[] = [];
-          
+
           if (!cachedAttendance) {
             supabaseCachePromises.push(
               fetch('/api/data/cache', {
@@ -433,18 +407,23 @@ export default function Dashboard() {
                 .then(result => {
                   if (result.success && result.data) {
                     console.log(`[Dashboard] ✅ Found Supabase cache for attendance (expired: ${result.isExpired})`);
-                    cachedAttendance = result.data as AttendanceData;
-                    setAttendanceData(cachedAttendance);
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Attendance cache is expired, will refresh in background');
+                    const normalized = normalizeAttendanceData(result.data);
+                    if (normalized) {
+                      cachedAttendance = normalized;
+                      setAttendanceData(normalized);
+                      if (result.isExpired) {
+                        needsBackgroundRefresh = true;
+                        console.log('[Dashboard] ⚠️ Attendance cache is expired, will refresh in background');
+                      }
+                    } else {
+                      console.warn('[Dashboard] ⚠️ Supabase attendance cache could not be normalized', result.data);
                     }
                   }
                 })
                 .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase attendance cache:', err))
             );
           }
-          
+
           if (!cachedMarks) {
             supabaseCachePromises.push(
               fetch('/api/data/cache', {
@@ -467,7 +446,7 @@ export default function Dashboard() {
                 .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase marks cache:', err))
             );
           }
-          
+
           if (!cachedTimetable) {
             supabaseCachePromises.push(
               fetch('/api/data/cache', {
@@ -514,11 +493,11 @@ export default function Dashboard() {
                 .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase timetable cache:', err))
             );
           }
-          
+
           // Wait for all Supabase cache fetches to complete
           await Promise.all(supabaseCachePromises);
         }
-        
+
         // Use client-side cached data if available (highest priority)
         if (cachedAttendance) {
           console.log('[Dashboard] ✅ Using client-side cache for attendance');
@@ -565,7 +544,7 @@ export default function Dashboard() {
               });
             }
           }
-          
+
           if (timetableDataToUse) {
             setTimetableData(timetableDataToUse);
             try {
@@ -584,7 +563,7 @@ export default function Dashboard() {
             console.warn('[Dashboard] 📊 Failed to extract timetable from cache - will use fresh data from API');
           }
         }
-        
+
         // Update cache status for skeleton display
         const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
         setHasCache(hasAnyCache);
@@ -596,25 +575,25 @@ export default function Dashboard() {
         removeClientCache('unified');
         console.log('[Dashboard] 🗑️ Cleared client caches for force refresh');
       }
-      
+
       // Determine what needs to be fetched
       // If Supabase cache is expired, we still need to fetch fresh data
       const needAttendance = !cachedAttendance || forceRefresh || needsBackgroundRefresh;
       const needMarks = !cachedMarks || forceRefresh || needsBackgroundRefresh;
       const needTimetable = !cachedTimetable || forceRefresh || needsBackgroundRefresh;
       const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
-      
+
       console.log('[Dashboard] 📊 Cache status:');
       console.log(`[Dashboard]   - Attendance: ${cachedAttendance ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Marks: ${cachedMarks ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
       console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
-      
+
       // Always use unified API endpoint with request deduplication
       // This ensures only one page calls the backend at a time
       // Ensure password is available (handles race condition after login redirect)
       const password = await waitForPassword();
-      
+
       if (!password) {
         console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
       }
@@ -622,12 +601,12 @@ export default function Dashboard() {
       // Declare result at function scope so it's accessible in all branches
       let result: any = null;
       let response: Response | null = null;
-      
+
       if (missingCount > 0 || forceRefresh || needsBackgroundRefresh) {
         // Fetch from API with automatic retry on password-related session_expired
         let apiStartTime = Date.now();
         const fetchType = forceRefresh ? '(force refresh all)' : needsBackgroundRefresh ? '(background refresh - cache expired)' : '(fetching all data)';
-        
+
         // Use request deduplication for unified API calls - ensures only ONE call at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
@@ -637,11 +616,11 @@ export default function Dashboard() {
           let shouldRetry = true;
           let finalResponse: Response | null = null;
           let finalResult: any = null;
-          
+
           while (shouldRetry && attempt <= maxRetries) {
             console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
             apiStartTime = Date.now();
-            
+
             finalResponse = await fetch('/api/data/all', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -649,14 +628,14 @@ export default function Dashboard() {
             });
 
             const apiDuration = Date.now() - apiStartTime;
-            
+
             // Check if response is OK and has content before parsing JSON
             if (!finalResponse.ok) {
               const errorText = await finalResponse.text().catch(() => 'Unknown error');
               console.error(`[Dashboard] ❌ API error response (${finalResponse.status}):`, errorText);
               throw new Error(`API request failed with status ${finalResponse.status}: ${errorText}`);
             }
-            
+
             // Check if response has content
             const contentType = finalResponse.headers.get('content-type');
             if (!contentType || !contentType.includes('application/json')) {
@@ -665,7 +644,7 @@ export default function Dashboard() {
               console.error(`[Dashboard]   - Response body:`, text.substring(0, 200));
               throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
             }
-            
+
             // Parse JSON with error handling
             try {
               const responseText = await finalResponse.text();
@@ -679,24 +658,24 @@ export default function Dashboard() {
               console.error(`[Dashboard]   - Response status: ${finalResponse.status}`);
               throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
             }
-            
+
             console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
             console.log(`[Dashboard]   - Success: ${finalResult.success}`);
             console.log(`[Dashboard]   - Status: ${finalResponse.status}`);
             console.log(`[Dashboard]   - Error: ${finalResult.error || 'none'}`);
-            
+
             // Check if session_expired is due to missing password (retryable)
-            const isSessionExpiredDueToPassword = 
-              (finalResult.error === 'session_expired' || !finalResponse.ok) && 
-              attempt < maxRetries && 
+            const isSessionExpiredDueToPassword =
+              (finalResult.error === 'session_expired' || !finalResponse.ok) &&
+              attempt < maxRetries &&
               !password; // Only retry if password wasn't available initially
-            
+
             if (isSessionExpiredDueToPassword) {
               console.log(`[Dashboard] 🔄 session_expired detected, waiting for password to be stored...`);
               // Wait a bit longer for password storage to complete
               const retryDelay = 500 * attempt; // 500ms, 1000ms, 1500ms
               await new Promise(resolve => setTimeout(resolve, retryDelay));
-              
+
               // Check if password is now available
               const retryPassword = await waitForPassword(3); // Quick check with fewer attempts
               if (retryPassword) {
@@ -707,10 +686,10 @@ export default function Dashboard() {
                 console.warn(`[Dashboard] ⚠️ Password still not available after wait`);
               }
             }
-            
+
             shouldRetry = false; // Exit retry loop
           }
-          
+
           // Ensure response and result are set
           if (!finalResponse || !finalResult) {
             throw new Error('Failed to fetch data from API');
@@ -732,7 +711,7 @@ export default function Dashboard() {
                 body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
               });
               const retryResult = await retryResponse.json();
-              
+
               if (!retryResponse.ok || (retryResult.error === 'session_expired')) {
                 throw new Error('Your session has expired. Please re-enter your password.');
               }
@@ -748,12 +727,12 @@ export default function Dashboard() {
 
           return { response: finalResponse, result: finalResult };
         });
-        
+
         response = apiResult.response;
         result = apiResult.result;
-        
+
         processUnifiedData(result);
-        
+
         // Save individual caches from unified response
         if (result.data) {
           if (result.data.attendance) {
@@ -785,11 +764,11 @@ export default function Dashboard() {
           }
           return result;
         });
-        
+
         // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
         result = calendarResult;
       }
-      
+
       // Register attendance/marks fetch for smart prefetch scheduling
       // Only register if we fetched unified data (result is defined)
       const allMissing = missingCount === 3;
@@ -814,13 +793,13 @@ export default function Dashboard() {
       marks?: { data?: { all_courses: unknown[] }; success?: { data?: { all_courses: unknown[] } } } | null;
       timetable?: { data?: unknown; success?: { data?: unknown } } | null;
     };
-    metadata?: { semester?: number; [key: string]: unknown };
+    metadata?: { semester?: number;[key: string]: unknown };
     semester?: number;
   }) => {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
-    
+
     // Process calendar data - handle both direct format and wrapped format
     console.log('[Dashboard] 📋 ========================================');
     console.log('[Dashboard] 📋 CALENDAR PROCESSING - Starting calendar data processing');
@@ -835,9 +814,9 @@ export default function Dashboard() {
       }
     }
     console.log('[Dashboard] 📋 ========================================');
-    
+
     let calendarEvents: CalendarEvent[] | null = null;
-    
+
     if (Array.isArray(result.data.calendar)) {
       // Check if it's the new nested format: [{month: "Jan '26", dates: [{day, date, event, day_order}, ...]}, ...]
       const firstItem = result.data.calendar[0];
@@ -886,11 +865,11 @@ export default function Dashboard() {
         console.log('[Dashboard]   - Total events:', calendarEvents.length);
       }
     }
-    
+
     if (calendarEvents && calendarEvents.length > 0) {
       // Extract semester from multiple sources with fallbacks
       let extractedSemester: number | null = null;
-      
+
       // 1. Try attendance data first - handle both direct and wrapped formats
       if (result.data.attendance && typeof result.data.attendance === 'object') {
         // Direct format: {metadata: {semester: ...}, ...}
@@ -911,7 +890,7 @@ export default function Dashboard() {
           extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
           console.log('[Dashboard] Semester from attendance.semester (legacy):', extractedSemester);
         }
-      } 
+      }
       // 2. Try response metadata
       else if (result.metadata?.semester) {
         extractedSemester = result.metadata.semester;
@@ -930,34 +909,34 @@ export default function Dashboard() {
           console.log('[Dashboard] Semester from storage cache:', extractedSemester);
         }
       }
-      
+
       // Default to 1 if no semester found
       const finalSemester = extractedSemester || 1;
-      
+
       // Store semester in storage if found
       if (extractedSemester) {
-          setStorageItem('user_semester', extractedSemester.toString());
+        setStorageItem('user_semester', extractedSemester.toString());
         console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
-      
+
       console.log('[Dashboard] 📋 Calendar events count:', calendarEvents.length);
       if (calendarEvents.length > 0) {
         console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
         console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
       }
-      
+
       // Normalize calendar event dates from "DD/Month 'YY" to "DD/MM/YYYY" format for proper matching
       const normalizedCalendarEvents = calendarEvents.map(event => ({
         ...event,
         date: normalizeCalendarDate(event.date)
       }));
-      
+
       console.log('[Dashboard] 📋 Normalized calendar dates:');
       if (normalizedCalendarEvents.length > 0) {
         console.log('[Dashboard] 📋   - First normalized date:', normalizedCalendarEvents[0]?.date);
         console.log('[Dashboard] 📋   - Last normalized date:', normalizedCalendarEvents[normalizedCalendarEvents.length - 1]?.date);
       }
-      
+
       // Display calendar data with normalized dates
       setCalendarData(normalizedCalendarEvents);
       console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', normalizedCalendarEvents.length, 'events');
@@ -970,14 +949,14 @@ export default function Dashboard() {
 
     // Process attendance data - handle both direct format and wrapped format
     let attendanceDataObj: AttendanceData | null = null;
-    
+
     if (result.data.attendance && typeof result.data.attendance === 'object') {
       // Check if it's direct format (has all_subjects, summary, metadata at root)
       if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
         // Direct format
         attendanceDataObj = result.data.attendance as AttendanceData;
         console.log('[Dashboard] Attendance data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
         const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
@@ -997,7 +976,7 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
       setAttendanceData(attendanceDataObj);
       console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
@@ -1015,14 +994,14 @@ export default function Dashboard() {
 
     // Process marks data - handle both direct format and wrapped format
     let marksDataObj: MarksData | null = null;
-    
+
     if (result.data.marks && typeof result.data.marks === 'object') {
       // Check if it's direct format (has all_courses, summary, metadata at root)
       if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
         // Direct format
         marksDataObj = result.data.marks as MarksData;
         console.log('[Dashboard] Marks data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.marks && 'data' in result.data.marks) {
         const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
@@ -1042,7 +1021,7 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
       setMarksData(marksDataObj);
       console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
@@ -1196,7 +1175,7 @@ export default function Dashboard() {
       try {
         // Extract semester using same logic as above
         let extractedSemester: number | null = null;
-        
+
         if (result.data.attendance?.semester) {
           extractedSemester = result.data.attendance.semester;
         } else if (result.data.attendance?.data?.metadata?.semester) {
@@ -1211,7 +1190,7 @@ export default function Dashboard() {
             extractedSemester = parseInt(cachedSemester, 10);
           }
         }
-        
+
         // Process calendar data to match CalendarEvent interface (map 'event' to 'content')
         const processedCalendarForStats = (calendarForStats as any[]).map((e: any) => ({
           date: e.date,
@@ -1281,7 +1260,7 @@ export default function Dashboard() {
   if (loading && showSkeleton) {
     // Show skeleton UI after 2s delay or immediately if cache exists
     const threeDayDates = getThreeDayDates();
-    
+
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
         <PillNav
@@ -1319,10 +1298,10 @@ export default function Dashboard() {
               const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
               const isToday = dayInfo.dateStr === getCurrentDateString();
               const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
-              
+
               let bgColor = 'bg-white/10';
               let textColor = 'text-white';
-              
+
               if (isToday) {
                 bgColor = 'bg-white';
                 textColor = 'text-black';
@@ -1330,9 +1309,9 @@ export default function Dashboard() {
                 bgColor = 'bg-green-500/80';
                 textColor = 'text-white';
               }
-              
+
               return (
-                <div 
+                <div
                   key={dayInfo.dateStr}
                   className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
                 >
@@ -1390,18 +1369,18 @@ export default function Dashboard() {
   }
 
   if (error) {
-  return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
+    return (
+      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
         <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
-          {error.includes('session') && (
-            <NavigationButton
-              path="/auth"
-              onClick={handleReAuthenticate}
-              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
-            >
-              Sign In Again
-            </NavigationButton>
-          )}
+        {error.includes('session') && (
+          <NavigationButton
+            path="/auth"
+            onClick={handleReAuthenticate}
+            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
+          >
+            Sign In Again
+          </NavigationButton>
+        )}
       </div>
     );
   }
@@ -1444,15 +1423,13 @@ export default function Dashboard() {
         {/* Sidebar Toggle Button */}
         <button
           onClick={() => setSidebarExpanded(!sidebarExpanded)}
-          className={`fixed top-14 left-4 z-[1001] bg-white/10 backdrop-blur border border-white/20 rounded-full p-2 transition-all duration-300 hover:bg-white/20 ${
-            sidebarExpanded ? 'left-64' : 'left-4'
-          }`}
+          className={`fixed top-14 left-4 z-[1001] bg-white/10 backdrop-blur border border-white/20 rounded-full p-2 transition-all duration-300 hover:bg-white/20 ${sidebarExpanded ? 'left-64' : 'left-4'
+            }`}
           aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
         >
           <svg
-            className={`w-5 h-5 text-white transition-transform duration-300 ${
-              sidebarExpanded ? 'rotate-180' : 'rotate-0'
-            }`}
+            className={`w-5 h-5 text-white transition-transform duration-300 ${sidebarExpanded ? 'rotate-180' : 'rotate-0'
+              }`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -1463,24 +1440,21 @@ export default function Dashboard() {
 
         {/* Sidebar */}
         <div
-          className={`fixed left-0 top-0 h-full z-[1000] transition-all duration-300 ease-in-out ${
-            sidebarExpanded ? 'w-64' : 'w-16'
-          }`}
+          className={`fixed left-0 top-0 h-full z-[1000] transition-all duration-300 ease-in-out ${sidebarExpanded ? 'w-64' : 'w-16'
+            }`}
         >
           {/* Glass Background - only visible when expanded */}
           <div
-            className={`absolute inset-0 backdrop-blur bg-black/80 border-r border-white/20 transition-opacity duration-300 ${
-              sidebarExpanded ? 'opacity-100' : 'opacity-0'
-            }`}
+            className={`absolute inset-0 backdrop-blur bg-black/80 border-r border-white/20 transition-opacity duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0'
+              }`}
           />
 
           {/* Sidebar Content */}
           <div className="relative h-full flex flex-col">
             {/* Header - only visible when expanded */}
             <div
-              className={`p-6 border-b border-white/10 transition-all duration-300 ${
-                sidebarExpanded ? 'opacity-100' : 'opacity-0'
-              }`}
+              className={`p-6 border-b border-white/10 transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0'
+                }`}
             >
               <h2 className="text-xl font-sora font-bold text-white">Navigation</h2>
             </div>
@@ -1496,9 +1470,8 @@ export default function Dashboard() {
                 >
                   <User className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Attendance
                   </span>
@@ -1519,9 +1492,8 @@ export default function Dashboard() {
                 >
                   <BookOpen className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Timetable
                   </span>
@@ -1542,9 +1514,8 @@ export default function Dashboard() {
                 >
                   <BarChart3 className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Marks
                   </span>
@@ -1565,9 +1536,8 @@ export default function Dashboard() {
                 >
                   <Calendar className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Calendar
                   </span>
@@ -1588,9 +1558,8 @@ export default function Dashboard() {
                 >
                   <Calculator className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     SGPA Calculator
                   </span>
@@ -1612,9 +1581,8 @@ export default function Dashboard() {
                   >
                     <Settings className="w-6 h-6 flex-shrink-0" />
                     <span
-                      className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                        sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
+                      className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                        }`}
                     >
                       Admin
                     </span>
@@ -1632,18 +1600,16 @@ export default function Dashboard() {
       </div>
 
 
-      <div className={`mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4 transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4 transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
         </div>
       </div>
 
       {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Upcoming Calendar
         </div>
@@ -1651,20 +1617,20 @@ export default function Dashboard() {
           {threeDayDates.map((dayInfo) => {
             const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
             const isToday = dayInfo.dateStr === getCurrentDateString();
-            
+
             // Enhanced holiday detection: check day_order and content
             const dayOrder = event?.day_order || '';
             const content = event?.content || '';
-            const isHoliday = 
-              dayOrder === "-" || 
-              dayOrder === "DO -" || 
+            const isHoliday =
+              dayOrder === "-" ||
+              dayOrder === "DO -" ||
               dayOrder.toLowerCase() === "holiday" ||
               dayOrder.toLowerCase().includes('holiday') ||
               (content && content.toLowerCase().includes('holiday'));
-            
+
             let bgColor = 'bg-white/10';
             let textColor = 'text-white';
-            
+
             if (isToday) {
               bgColor = 'bg-white';
               textColor = 'text-black';
@@ -1672,12 +1638,12 @@ export default function Dashboard() {
               bgColor = 'bg-green-500/80';
               textColor = 'text-white';
             }
-            
+
             // Display content (handle empty string as 'No events')
             const displayContent = content && content.trim() !== '' ? content : 'No events';
-            
+
             return (
-              <div 
+              <div
                 key={dayInfo.dateStr}
                 className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
               >
@@ -1702,16 +1668,15 @@ export default function Dashboard() {
       </div>
 
       {/* Today's Timetable Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Today&apos;s Timetable {currentDayOrder && `- ${currentDayOrder}`}
         </div>
         {todaysTimetable.length > 0 ? (
           <div className="flex flex-col gap-3 w-full">
             {todaysTimetable.map((slot, index) => (
-              <div 
+              <div
                 key={index}
                 className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
               >
@@ -1737,9 +1702,8 @@ export default function Dashboard() {
       </div>
 
       {/* Attendance Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Attendance Overview
         </div>
@@ -1748,9 +1712,9 @@ export default function Dashboard() {
             {attendanceData.all_subjects.map((subject, index) => {
               if (!subject || !subject.attendance_percentage) return null; // Skip null/invalid subjects
               const attendancePercent = parseFloat(subject.attendance_percentage.replace('%', ''));
-              
+
               return (
-                <div 
+                <div
                   key={index}
                   className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
                 >
@@ -1779,9 +1743,8 @@ export default function Dashboard() {
       </div>
 
       {/* Marks Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Marks Overview
         </div>
@@ -1789,14 +1752,14 @@ export default function Dashboard() {
           <div className="flex flex-col gap-3 w-full">
             {marksData.all_courses
               .filter(course => course && course.assessments && Array.isArray(course.assessments) && course.assessments.length > 0)
-              .filter((course, index, self) => 
-                course && index === self.findIndex(c => 
+              .filter((course, index, self) =>
+                course && index === self.findIndex(c =>
                   c && c.course_code === course.course_code && c.subject_type === course.subject_type
                 )
               )
               .map((course, index) => {
                 if (!course) return null;
-                
+
                 const getCourseTitle = (course: MarksCourse): string => {
                   return course.course_title || course.course_code;
                 };
@@ -1808,34 +1771,34 @@ export default function Dashboard() {
                   return { obtained, total };
                 };
 
-              const { obtained, total } = getTotalMarks();
-              
-              return (
-                <div 
-                  key={`${course.course_code}-${course.subject_type}-${index}`}
-                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
-                >
-                  <div className="flex-1">
-                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
-                      {getCourseTitle(course)}
-                    </p>
-                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                      {course.course_code} • {course.subject_type}
-                    </p>
-                  </div>
-                  <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
-                    <div className="text-center">
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
-                      <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
+                const { obtained, total } = getTotalMarks();
+
+                return (
+                  <div
+                    key={`${course.course_code}-${course.subject_type}-${index}`}
+                    className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
+                  >
+                    <div className="flex-1">
+                      <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
+                        {getCourseTitle(course)}
+                      </p>
+                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
+                        {course.course_code} • {course.subject_type}
+                      </p>
                     </div>
-                    <div className="text-center">
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
-                      <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
+                    <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
+                      <div className="text-center">
+                        <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
+                        <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
+                        <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         ) : (
           <div className="text-white/70 text-lg font-sora">
@@ -1859,8 +1822,8 @@ export default function Dashboard() {
             >
               Sign In
             </NavigationButton>
-      </div>
-      </div>
+          </div>
+        </div>
       )}
     </div>
   );
