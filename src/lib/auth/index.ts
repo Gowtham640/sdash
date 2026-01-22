@@ -266,6 +266,7 @@ export async function handleUserSignIn(
             email: existingAuthUserAfter.user.email || email,
             role: 'public', // Default role until synced
           },
+          skipGoBackend: true,
         };
       } else {
         console.error(`[Auth] Backend login succeeded but user not found in auth.users: ${email}`);
@@ -298,23 +299,25 @@ export async function handleUserSignIn(
 
       // Now fetch user data from Go backend
       console.log(`[Auth] Sending GET /user request to fetch user info`);
-      const userUrl = 'http://localhost:8080/user';
-      const userResponse = await fetch(userUrl, {
-        method: 'GET',
-        headers: {
-          'X-User-Id': existingAuthUser.user.id, // Use the auth user ID
-          'X-Email': email
-        }
-      });
-
-      const userResult = await userResponse.json();
-
-      if (!userResult.success) {
-        console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || 'Unknown error'}`);
-        // Continue with authentication even if GET /user fails
-      } else {
-        console.log(`[Auth] Successfully fetched user data from backend`);
-      }
+      // const userUrl = 'http://localhost:8080/user';
+      // const userResponse = await fetch(userUrl, {
+      //   method: 'GET',
+      //   headers: {
+      //     'Content-Type': 'application/json',
+      //     'X-User-Id': existingAuthUser.user.id, // Use the auth user ID
+      //     'X-Email': email
+      //   },
+      //   body: JSON.stringify({ account: email, password }),
+      // });
+      //
+      // const userResult = await userResponse.json();
+      //
+      // if (!userResult.success) {
+      //   console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || 'Unknown error'}`);
+      //   // Continue with authentication even if GET /user fails
+      // } else {
+      //   console.log(`[Auth] Successfully fetched user data from backend`);
+      // }
 
       console.log(`[Auth] Successfully authenticated user and fetched profile data: ${email}`);
       return {
