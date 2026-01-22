@@ -1,4 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import type { SignInResponse } from "@/lib/auth/types";
 
 // Wrap imports in try-catch to handle potential import errors
 let handleUserSignIn: ((email: string, password: string) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
@@ -56,7 +58,7 @@ export async function POST(request: NextRequest) {
     console.log(`[API] Sign-in request for: ${email}`);
 
     // Call authentication handler
-    const result = await handleUserSignIn(email, password);
+    const result = (await handleUserSignIn(email, password)) as SignInResponse;
 
     // If sign-in failed, return error response
     if (!result.session || (result as { error?: string }).error) {
@@ -82,20 +84,24 @@ export async function POST(request: NextRequest) {
     // Successfully signed in
     console.log(`[API] Successfully signed in: ${email}`);
 
-    // Login to Go backend to get cookies for subsequent requests
-    console.log(`[API] 🔐 Logging in to Go backend...`);
-    try {
-      const { loginToGoBackend } = await import('@/lib/scraperClient');
-      const goLoginResult = await loginToGoBackend(email, password);
-      
-      if (goLoginResult.authenticated && goLoginResult.cookies) {
-        console.log(`[API] ✅ Go backend login successful - cookies stored`);
-      } else {
-        console.warn(`[API] ⚠️ Go backend login failed or no cookies returned:`, goLoginResult.message || 'Unknown error');
+    // Login to Go backend to get cookies for subsequent requests (only if needed)
+    if (!result.skipGoBackend) {
+      console.log(`[API] 🔐 Logging in to Go backend...`);
+      try {
+        const { loginToGoBackend } = await import('@/lib/scraperClient');
+        const goLoginResult = await loginToGoBackend(email, password);
+        
+        if (goLoginResult.authenticated && goLoginResult.cookies) {
+          console.log(`[API] ✅ Go backend login successful - cookies stored`);
+        } else {
+          console.warn(`[API] ⚠️ Go backend login failed or no cookies returned:`, goLoginResult.message || 'Unknown error');
+        }
+      } catch (goLoginError) {
+        console.error(`[API] ❌ Go backend login error (non-blocking):`, goLoginError);
+        // Don't fail the login if Go backend login fails - user can still use the app
       }
-    } catch (goLoginError) {
-      console.error(`[API] ❌ Go backend login error (non-blocking):`, goLoginError);
-      // Don't fail the login if Go backend login fails - user can still use the app
+    } else {
+      console.log(`[API] Skipping Go backend login (existing Supabase user)`);
     }
 
     // User data sync disabled - project should not write to Supabase tables

@@ -23,6 +23,7 @@ import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, aggregateOdmlHours, type OdmlRecord } from '@/lib/odmlStorage';
 import { normalizeAttendanceData } from '@/lib/dataTransformers';
+import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
 import { isDataFresh } from '@/lib/dataExpiry';
 import type { AttendanceData, AttendanceSubject } from '@/lib/apiTypes';
@@ -170,6 +171,46 @@ const RemainingHoursDisplay = ({ courseTitle, category, dayOrderStats, slotOccur
   return <span className="text-blue-400">{totalRemainingHours} hours</span>;
 };
 
+const loadDayOrderStatsFromLocalStorage = (): DayOrderStats | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const stored = localStorage.getItem('sdash_dayOrderStats');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object') {
+        return parsed as DayOrderStats;
+      }
+    }
+  } catch (error) {
+    console.warn('[Attendance] Failed to parse day order stats from localStorage:', error);
+  }
+
+  return null;
+};
+
+const loadSlotOccurrencesFromLocalStorage = (): SlotOccurrence[] => {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const stored = localStorage.getItem('sdash_slotOccurrences');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        return parsed as SlotOccurrence[];
+      }
+    }
+  } catch (error) {
+    console.warn('[Attendance] Failed to parse slot occurrences from localStorage:', error);
+  }
+
+  return [];
+};
+
 export default function AttendancePage() {
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -197,7 +238,6 @@ export default function AttendancePage() {
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
   const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(null); // Store original data
-
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
@@ -220,9 +260,26 @@ export default function AttendancePage() {
         }
       }
     }
+
+    if (!dayOrderStats) {
+      const storedStats = loadDayOrderStatsFromLocalStorage();
+      if (storedStats) {
+        setDayOrderStats(storedStats);
+        console.log('[Attendance] ✅ Loaded day order stats from localStorage');
+      }
+    }
+
+    if (!slotOccurrences.length) {
+      const storedOccurrences = loadSlotOccurrencesFromLocalStorage();
+      if (storedOccurrences.length) {
+        setSlotOccurrences(storedOccurrences);
+        console.log('[Attendance] ✅ Loaded slot occurrences from localStorage');
+      }
+    }
   };
 
   useEffect(() => {
+    hydrateCalendarAndTimetableFromCache();
     fetchUnifiedData();
   }, []);
 
@@ -357,10 +414,9 @@ export default function AttendancePage() {
     setIsCalculating(true);
 
     try {
-      const results = calculatePredictedAttendance(
+      const results = await calculatePredictedAttendance(
         attendanceData,
         slotOccurrences,
-        calendarData,
         periods,
         odmlPeriods
       );
@@ -394,10 +450,10 @@ export default function AttendancePage() {
     setIsCalculating(true);
 
     try {
-      const results = calculateODMLAdjustedAttendance(
+      const calendarForOdml = await fetchCalendarFromSupabase();
+      const results = await calculateODMLAdjustedAttendance(
         attendanceData,
         slotOccurrences,
-        calendarData,
         periods
       );
 
@@ -414,7 +470,7 @@ export default function AttendancePage() {
               const periodHours = calculateSubjectHoursInDateRange(
                 subject,
                 slotOccurrences,
-                getDayOrderStatsForDateRange(calendarData, period.from, period.to)
+                getDayOrderStatsForDateRange(calendarForOdml, period.from, period.to)
               );
               if (periodHours > 0) {
                 subjectHours[subject.subject_code] = periodHours;

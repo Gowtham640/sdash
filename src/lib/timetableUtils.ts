@@ -103,6 +103,90 @@ export const parseDate = (dateStr: string): Date => {
   return date;
 };
 
+const formatDateKey = (date: Date): string => {
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear().toString();
+  return `${day}/${month}/${year}`;
+};
+
+export const normalizeCalendarDayOrder = (dayOrder?: string | number): number | null => {
+  if (dayOrder === undefined || dayOrder === null) {
+    return null;
+  }
+
+  const sanitized = String(dayOrder).trim();
+
+  if (!sanitized) {
+    return null;
+  }
+
+  if (sanitized === '-' || sanitized.toLowerCase().includes('holiday')) {
+    return null;
+  }
+
+  const match = sanitized.match(/\d+/);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = parseInt(match[0], 10);
+  if (Number.isNaN(parsed) || parsed < 1 || parsed > 5) {
+    return null;
+  }
+
+  return parsed;
+};
+
+export const buildCalendarDayOrderMap = (calendarData: CalendarEvent[]): Record<string, number> => {
+  const dayOrderMap: Record<string, number> = {};
+
+  calendarData.forEach(event => {
+    if (!event.date) return;
+    const normalizedOrder = normalizeCalendarDayOrder(event.day_order);
+    if (!normalizedOrder) {
+      return;
+    }
+
+    try {
+      const eventDate = parseDate(event.date);
+      const key = formatDateKey(eventDate);
+      dayOrderMap[key] = normalizedOrder;
+    } catch (error) {
+      console.warn('[Calendar] Failed to parse calendar date for map:', event.date, error);
+    }
+  });
+
+  return dayOrderMap;
+};
+
+export const getDayOrderStatsFromCalendarMap = (
+  calendarDayOrderMap: Record<string, number>,
+  startDate: Date,
+  endDate: Date
+): DayOrderStats => {
+  const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  const normalizedStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const normalizedEnd = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+
+  Object.entries(calendarDayOrderMap).forEach(([dateStr, dayOrder]) => {
+    try {
+      const eventDate = parseDate(dateStr);
+      if (eventDate < normalizedStart || eventDate > normalizedEnd) {
+        return;
+      }
+
+      if (dayOrder >= 1 && dayOrder <= 5) {
+        stats[dayOrder]++;
+      }
+    } catch (error) {
+      console.warn('[Calendar] Failed to parse map date:', dateStr, error);
+    }
+  });
+
+  return stats;
+};
+
 // Calculate day order statistics from calendar data
 export const getDayOrderStats = (calendarData: CalendarEvent[]): DayOrderStats => {
   const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };

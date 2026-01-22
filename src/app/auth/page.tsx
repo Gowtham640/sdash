@@ -85,12 +85,33 @@ export default function AuthPage() {
 
   const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const handleSignIn = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSignIn = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
     setIsLoading(true);
     credentialsRef.current = { email, password };
     setShowDisclaimer(false);
+    try {
+      const checkResponse = await fetch("/api/auth/check-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const checkData = await checkResponse.json();
+
+      if (checkResponse.ok && checkData.exists) {
+        setIsSuccess(true);
+        setIsLoading(false);
+        router.push("/dashboard");
+        return;
+      }
+    } catch (err) {
+      console.error("[Auth Page] Early user check failed:", err);
+      setError("Unable to verify account existence. Please try again.");
+      setIsLoading(false);
+      return;
+    }
+
     setStage("delayBeforeSlider");
     setSliderValue(0);
     setCheckboxChecked(false);

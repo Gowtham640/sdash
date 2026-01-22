@@ -9,6 +9,7 @@ export interface SignInResponse {
   };
   error?: string;
   errorCode?: string;
+  skipGoBackend?: boolean;
 }
 
 export interface PortalValidationResult {

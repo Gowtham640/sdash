@@ -156,6 +156,7 @@ export async function handleUserSignIn(
           email: existingAuthUser.user.email || email,
           role: existingPublicUser.role || 'public',
         },
+        skipGoBackend: true,
       };
     }
 
