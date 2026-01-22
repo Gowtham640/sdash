@@ -1,44 +1,29 @@
 'use client';
 import React, { useState, useEffect } from "react";
-import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData, type CalendarEvent } from "@/lib/timetableUtils";
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
-import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
-import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { normalizeAttendanceData } from '@/lib/dataTransformers';
 import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
+import type { AttendanceData, MarksData } from '@/lib/apiTypes';
+import { fetchCalendarFromSupabase } from "@/lib/calendarFetcher";
 
-// Import types
-interface CalendarEvent {
-  date: string;
-  day_name: string;
-  content: string;
-  day_order: string;
-  month?: string;
-  month_name?: string;
-  year?: number;
-}
+console.log("VERSION 2.0 - TESTING CACHE");
 
-interface AttendanceSubject {
+type TimeSlot = {
+  time: string;
   course_title: string;
   category: string;
-  hours_conducted: string;
-  hours_absent: string;
-  hours_required: string;
-  attendance_percentage: string;
-}
+};
 
-interface AttendanceData {
-  all_subjects: AttendanceSubject[];
-}
-
-interface MarksCourse {
+type MarksCourse = {
   course_code: string;
   course_title: string;
   subject_type: string;
@@ -48,17 +33,7 @@ interface MarksCourse {
     total_marks: string;
     percentage: string;
   }>;
-}
-
-interface MarksData {
-  all_courses: MarksCourse[];
-}
-
-interface TimeSlot {
-  time: string;
-  course_title: string;
-  category: string;
-}
+};
 
 export default function Dashboard() {
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
@@ -86,7 +61,7 @@ export default function Dashboard() {
     { label: 'Services', ariaLabel: 'View our services', link: '/services' },
     { label: 'Contact', ariaLabel: 'Get in touch', link: '/contact' }
   ];
-  
+
   const socialItems = [
     { label: 'Twitter', link: 'https://twitter.com' },
     { label: 'GitHub', link: 'https://github.com' },
@@ -117,12 +92,12 @@ export default function Dashboard() {
     if (parts.length === 2) {
       const [day, monthYear] = parts;
       const [monthName, yearStr] = monthYear.split(' ');
-      
+
       const monthNames: { [key: string]: number } = {
         'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
         'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
       };
-      
+
       const monthNum = monthNames[monthName];
       if (monthNum && yearStr) {
         // Extract year from "'YY" format
@@ -142,7 +117,7 @@ export default function Dashboard() {
   const getThreeDayDates = () => {
     const today = new Date();
     const dates = [];
-    
+
     for (let i = -1; i <= 1; i++) {
       const date = new Date(today);
       date.setDate(today.getDate() + i);
@@ -155,7 +130,7 @@ export default function Dashboard() {
         dateObj: date
       });
     }
-    
+
     return dates;
   };
 
@@ -240,7 +215,7 @@ export default function Dashboard() {
         const slotCode = typedSlot.slot_code;
         const slotMapping = timetableData?.slot_mapping || {};
         const courseTitle = slotMapping[slotCode] || '';
-        
+
         timeSlots.push({
           time,
           course_title: courseTitle,
@@ -257,7 +232,7 @@ export default function Dashboard() {
         const timeParts = startTime.split(':').map(Number);
         let hours = timeParts[0];
         const minutes = timeParts[1];
-        
+
         // Convert 12-hour format to 24-hour for proper sorting
         // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
         // Times 08:xx onwards are AM (keep as is)
@@ -265,7 +240,7 @@ export default function Dashboard() {
         if (hours < 8 && hours !== 0) {
           hours += 12; // Convert 1PM-7PM to 13-19
         }
-        
+
         const minutesValue = hours * 60 + minutes;
         return minutesValue;
       };
@@ -312,7 +287,7 @@ export default function Dashboard() {
     const cachedMarks = getClientCache('marks');
     const cachedTimetable = getClientCache('timetable');
     const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-    
+
     setHasCache(hasAnyCache);
 
     if (!hasAnyCache) {
@@ -344,14 +319,14 @@ export default function Dashboard() {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const password = await getPortalPassword();
-      
+
       if (password) {
         if (attempt > 1) {
           console.log(`[Dashboard] ✅ Password available after ${attempt} attempt(s)`);
         }
         return password;
       }
-      
+
       if (attempt < maxAttempts) {
         // Exponential backoff: 200ms, 400ms, 800ms, 1600ms
         const delay = 200 * Math.pow(2, attempt - 1);
@@ -359,7 +334,7 @@ export default function Dashboard() {
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
-    
+
     console.error('[Dashboard] ❌ Password not available after all retry attempts');
     return null;
   };
@@ -370,7 +345,7 @@ export default function Dashboard() {
       setError(null);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Dashboard] No access token found');
         setError('Please sign in to view dashboard');
@@ -378,426 +353,90 @@ export default function Dashboard() {
         return;
       }
 
-      // Check individual client-side caches first (unless force refresh)
-      // Note: Calendar is always fetched fresh from public.calendar table, not from cache
-      // Remove any old calendar cache that might exist
       removeClientCache('calendar');
       console.log('[Dashboard] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
 
-      // Ensure timetable data is available for today's timetable display
-      // If timetable is not cached, we need to fetch it along with calendar
-      const hasTimetableCache = !!getClientCache('timetable');
-      console.log(`[Dashboard] 📋 Timetable cache status: ${hasTimetableCache ? 'available' : 'missing'}`);
-      
-      // Also check and clean unified cache if it contains calendar data
-      const unifiedCache = getClientCache('unified');
-      if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
-        const unifiedData = unifiedCache as { data?: { calendar?: unknown } };
-        if (unifiedData.data?.calendar) {
-          console.log('[Dashboard] 🗑️ Found calendar in unified cache, removing it');
-          // Remove calendar from unified cache data
-          if (unifiedData.data) {
-            delete unifiedData.data.calendar;
-            setClientCache('unified', unifiedCache);
-            console.log('[Dashboard] ✅ Cleaned calendar from unified cache');
-          }
-        }
-      }
-      
-      let cachedAttendance: AttendanceData | null = null;
-      let cachedMarks: MarksData | null = null;
-      let cachedTimetable: unknown | null = null;
-      let needsBackgroundRefresh = false;
-      
-      if (!forceRefresh) {
-        // Check client-side cache first
-        cachedAttendance = getClientCache<AttendanceData>('attendance');
-        cachedMarks = getClientCache<MarksData>('marks');
-        cachedTimetable = getClientCache('timetable');
-        
-        // If client cache is expired, fetch Supabase cache (even if expired)
-        if (!cachedAttendance || !cachedMarks || !cachedTimetable) {
-          console.log('[Dashboard] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
-          
-          // Fetch Supabase cache for missing data types
-          const supabaseCachePromises: Promise<void>[] = [];
-          
-          if (!cachedAttendance) {
-            supabaseCachePromises.push(
-              fetch('/api/data/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ access_token, data_type: 'attendance' })
-              })
-                .then(res => res.json())
-                .then(result => {
-                  if (result.success && result.data) {
-                    console.log(`[Dashboard] ✅ Found Supabase cache for attendance (expired: ${result.isExpired})`);
-                    cachedAttendance = result.data as AttendanceData;
-                    setAttendanceData(cachedAttendance);
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Attendance cache is expired, will refresh in background');
-                    }
-                  }
-                })
-                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase attendance cache:', err))
-            );
-          }
-          
-          if (!cachedMarks) {
-            supabaseCachePromises.push(
-              fetch('/api/data/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ access_token, data_type: 'marks' })
-              })
-                .then(res => res.json())
-                .then(result => {
-                  if (result.success && result.data) {
-                    console.log(`[Dashboard] ✅ Found Supabase cache for marks (expired: ${result.isExpired})`);
-                    cachedMarks = result.data as MarksData;
-                    setMarksData(cachedMarks);
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Marks cache is expired, will refresh in background');
-                    }
-                  }
-                })
-                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase marks cache:', err))
-            );
-          }
-          
-          if (!cachedTimetable) {
-            supabaseCachePromises.push(
-              fetch('/api/data/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ access_token, data_type: 'timetable' })
-              })
-                .then(res => res.json())
-                .then(result => {
-                  if (result.success && result.data) {
-                    console.log(`[Dashboard] ✅ Found Supabase cache for timetable (expired: ${result.isExpired})`);
-                    cachedTimetable = result.data;
-                    // Process timetable data
-                    let timetableDataToUse: typeof timetableData | null = null;
-                    if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
-                      if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
-                        const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
-                        if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
-                          timetableDataToUse = cachedData;
-                        }
-                      } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
-                        timetableDataToUse = cachedTimetable as typeof timetableData;
-                      }
-                    }
-                    if (timetableDataToUse) {
-                      setTimetableData(timetableDataToUse);
-                      try {
-                        const timetableForUtils = {
-                          timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
-                          slot_mapping: timetableDataToUse.slot_mapping,
-                        } as TimetableData;
-                        const occurrences = getSlotOccurrences(timetableForUtils);
-                        setSlotOccurrences(occurrences);
-                      } catch (err) {
-                        console.error('[Dashboard] ❌ Error processing cached timetable:', err);
-                      }
-                    }
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Timetable cache is expired, will refresh in background');
-                    }
-                  }
-                })
-                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase timetable cache:', err))
-            );
-          }
-          
-          // Wait for all Supabase cache fetches to complete
-          await Promise.all(supabaseCachePromises);
-        }
-        
-        // Use client-side cached data if available (highest priority)
-        if (cachedAttendance) {
-          console.log('[Dashboard] ✅ Using client-side cache for attendance');
-          setAttendanceData(cachedAttendance);
-        }
-        if (cachedMarks) {
-          console.log('[Dashboard] ✅ Using client-side cache for marks');
-          setMarksData(cachedMarks);
-        }
-        if (cachedTimetable) {
-          console.log('[Dashboard] ✅ Using client-side cache for timetable');
-          console.log('[Dashboard] 📊 Cached timetable structure:', {
-            type: typeof cachedTimetable,
-            isNull: cachedTimetable === null,
-            keys: cachedTimetable && typeof cachedTimetable === 'object' ? Object.keys(cachedTimetable) : 'not an object',
-            hasDataProperty: cachedTimetable && typeof cachedTimetable === 'object' && 'data' in cachedTimetable,
-            dataKeys: cachedTimetable && typeof cachedTimetable === 'object' && 'data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' ? Object.keys((cachedTimetable as any).data) : 'no data property',
-            hasTimetable: cachedTimetable && typeof cachedTimetable === 'object' && ('timetable' in cachedTimetable || ('data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' && 'timetable' in (cachedTimetable as any).data)),
-            hasTimeSlots: cachedTimetable && typeof cachedTimetable === 'object' && ('time_slots' in cachedTimetable || ('data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' && 'time_slots' in (cachedTimetable as any).data))
-          });
-          let timetableDataToUse: typeof timetableData | null = null;
-
-          if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
-            if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
-              const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
-              if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
-                timetableDataToUse = cachedData;
-                console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
-                console.log('[Dashboard] 📊 Extracted data structure:', {
-                  hasTimetable: 'timetable' in cachedData,
-                  hasSlotMapping: 'slot_mapping' in cachedData,
-                  timetableKeys: cachedData.timetable ? Object.keys(cachedData.timetable) : 'no timetable',
-                  slotMappingKeys: cachedData.slot_mapping ? Object.keys(cachedData.slot_mapping) : 'no slot_mapping'
-                });
-              }
-            } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
-              timetableDataToUse = cachedTimetable as typeof timetableData;
-              console.log('[Dashboard] ✅ Using timetable in direct format');
-              console.log('[Dashboard] 📊 Direct format structure:', {
-                hasTimetable: 'timetable' in cachedTimetable,
-                hasSlotMapping: 'slot_mapping' in cachedTimetable,
-                timetableKeys: (cachedTimetable as any).timetable ? Object.keys((cachedTimetable as any).timetable) : 'no timetable',
-                slotMappingKeys: (cachedTimetable as any).slot_mapping ? Object.keys((cachedTimetable as any).slot_mapping) : 'no slot_mapping'
-              });
-            }
-          }
-          
-          if (timetableDataToUse) {
-            setTimetableData(timetableDataToUse);
-            try {
-              const timetableForUtils = {
-                timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
-                slot_mapping: timetableDataToUse.slot_mapping,
-              } as TimetableData;
-              const occurrences = getSlotOccurrences(timetableForUtils);
-              setSlotOccurrences(occurrences);
-              console.log('[Dashboard] ✅ Timetable slot occurrences loaded:', occurrences.length);
-            } catch (err) {
-              console.error('[Dashboard] ❌ Error processing cached timetable:', err);
-            }
-          } else {
-            console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
-            console.warn('[Dashboard] 📊 Failed to extract timetable from cache - will use fresh data from API');
-          }
-        }
-        
-        // Update cache status for skeleton display
-        const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-        setHasCache(hasAnyCache);
-      } else {
-        // Force refresh: clear client caches
-        removeClientCache('attendance');
-        removeClientCache('marks');
-        removeClientCache('timetable');
-        removeClientCache('unified');
-        console.log('[Dashboard] 🗑️ Cleared client caches for force refresh');
-      }
-      
-      // Determine what needs to be fetched
-      // If Supabase cache is expired, we still need to fetch fresh data
-      const needAttendance = !cachedAttendance || forceRefresh || needsBackgroundRefresh;
-      const needMarks = !cachedMarks || forceRefresh || needsBackgroundRefresh;
-      const needTimetable = !cachedTimetable || forceRefresh || needsBackgroundRefresh;
-      const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
-      
-      console.log('[Dashboard] 📊 Cache status:');
-      console.log(`[Dashboard]   - Attendance: ${cachedAttendance ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Marks: ${cachedMarks ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
-      
-      // Always use unified API endpoint with request deduplication
-      // This ensures only one page calls the backend at a time
-      // Ensure password is available (handles race condition after login redirect)
       const password = await waitForPassword();
-      
-      if (!password) {
-        console.warn('[Dashboard] ⚠️ Password not available - API request may fail, but will retry on session_expired');
-      }
 
-      // Declare result at function scope so it's accessible in all branches
-      let result: any = null;
-      let response: Response | null = null;
-      
-      if (missingCount > 0 || forceRefresh || needsBackgroundRefresh) {
-        // Fetch from API with automatic retry on password-related session_expired
-        let apiStartTime = Date.now();
-        const fetchType = forceRefresh ? '(force refresh all)' : needsBackgroundRefresh ? '(background refresh - cache expired)' : '(fetching all data)';
-        
-        // Use request deduplication for unified API calls - ensures only ONE call at a time
-        const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
-        const apiResult = await deduplicateRequest(requestKey, async () => {
-          // First attempt
-          let attempt = 1;
-          const maxRetries = 3;
-          let shouldRetry = true;
-          let finalResponse: Response | null = null;
-          let finalResult: any = null;
-          
-          while (shouldRetry && attempt <= maxRetries) {
-            console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
-            apiStartTime = Date.now();
-            
-            finalResponse = await fetch('/api/data/all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-            });
-
-            const apiDuration = Date.now() - apiStartTime;
-            
-            // Check if response is OK and has content before parsing JSON
-            if (!finalResponse.ok) {
-              const errorText = await finalResponse.text().catch(() => 'Unknown error');
-              console.error(`[Dashboard] ❌ API error response (${finalResponse.status}):`, errorText);
-              throw new Error(`API request failed with status ${finalResponse.status}: ${errorText}`);
-            }
-            
-            // Check if response has content
-            const contentType = finalResponse.headers.get('content-type');
-            if (!contentType || !contentType.includes('application/json')) {
-              const text = await finalResponse.text();
-              console.error(`[Dashboard] ❌ Invalid response content type:`, contentType);
-              console.error(`[Dashboard]   - Response body:`, text.substring(0, 200));
-              throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
-            }
-            
-            // Parse JSON with error handling
-            try {
-              const responseText = await finalResponse.text();
-              if (!responseText || responseText.trim().length === 0) {
-                console.error(`[Dashboard] ❌ Empty response body`);
-                throw new Error('Empty response from server');
-              }
-              finalResult = JSON.parse(responseText);
-            } catch (jsonError) {
-              console.error(`[Dashboard] ❌ JSON parse error:`, jsonError);
-              console.error(`[Dashboard]   - Response status: ${finalResponse.status}`);
-              throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
-            }
-            
-            console.log(`[Dashboard] 📡 API response received: ${apiDuration}ms`);
-            console.log(`[Dashboard]   - Success: ${finalResult.success}`);
-            console.log(`[Dashboard]   - Status: ${finalResponse.status}`);
-            console.log(`[Dashboard]   - Error: ${finalResult.error || 'none'}`);
-            
-            // Check if session_expired is due to missing password (retryable)
-            const isSessionExpiredDueToPassword = 
-              (finalResult.error === 'session_expired' || !finalResponse.ok) && 
-              attempt < maxRetries && 
-              !password; // Only retry if password wasn't available initially
-            
-            if (isSessionExpiredDueToPassword) {
-              console.log(`[Dashboard] 🔄 session_expired detected, waiting for password to be stored...`);
-              // Wait a bit longer for password storage to complete
-              const retryDelay = 500 * attempt; // 500ms, 1000ms, 1500ms
-              await new Promise(resolve => setTimeout(resolve, retryDelay));
-              
-              // Check if password is now available
-              const retryPassword = await waitForPassword(3); // Quick check with fewer attempts
-              if (retryPassword) {
-                console.log(`[Dashboard] ✅ Password now available, retrying API call...`);
-                attempt++;
-                continue; // Retry the API call
-              } else {
-                console.warn(`[Dashboard] ⚠️ Password still not available after wait`);
-              }
-            }
-            
-            shouldRetry = false; // Exit retry loop
-          }
-          
-          // Ensure response and result are set
-          if (!finalResponse || !finalResult) {
-            throw new Error('Failed to fetch data from API');
-          }
-
-          // Only show session_expired error if all retries failed and password is confirmed unavailable
-          if (!finalResponse.ok || (finalResult.error === 'session_expired')) {
-            const finalPasswordCheck = await waitForPassword(2); // Quick final check
-            if (!finalPasswordCheck) {
-              // Password is definitely not available - legitimate session expired
-              console.error('[Dashboard] ❌ Session expired - password not available after all retries');
-              throw new Error('Your session has expired. Please re-enter your password.');
-            } else {
-              // Password became available - retry one more time
-              console.log('[Dashboard] 🔄 Password available on final check, retrying...');
-              const retryResponse = await fetch('/api/data/all', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
-              });
-              const retryResult = await retryResponse.json();
-              
-              if (!retryResponse.ok || (retryResult.error === 'session_expired')) {
-                throw new Error('Your session has expired. Please re-enter your password.');
-              }
-              // Success on final retry - update result and continue processing
-              finalResponse = retryResponse;
-              finalResult = retryResult;
-            }
-          }
-
-          if (!finalResult.success) {
-            throw new Error(finalResult.error || 'Failed to fetch data');
-          }
-
-          return { response: finalResponse, result: finalResult };
+      const fetchCacheEntry = async (dataType: 'attendance' | 'marks' | 'timetable') => {
+        const response = await fetch('/api/data/cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token, data_type: dataType }),
         });
-        
-        response = apiResult.response;
-        result = apiResult.result;
-        
-        processUnifiedData(result);
-        
-        // Save individual caches from unified response
-        if (result.data) {
-          if (result.data.attendance) {
-            setClientCache('attendance', result.data.attendance);
-          }
-          if (result.data.marks) {
-            setClientCache('marks', result.data.marks);
-          }
-          if (result.data.timetable) {
-            setClientCache('timetable', result.data.timetable);
-          }
+        if (!response.ok) {
+          throw new Error(`Cache request failed for ${dataType}`);
         }
-      } else if (missingCount === 0) {
-        // Check if we need timetable data for today's timetable display
-        const needsTimetable = !hasTimetableCache;
-        const dataToFetch = needsTimetable ? ['calendar', 'timetable'] : ['calendar'];
+        return response.json() as Promise<{ success: boolean; data: unknown; isExpired: boolean }>;
+      };
 
-        console.log(`[Dashboard] ✅ All other data cached, fetching: ${dataToFetch.join(', ')}...`);
-        const requestKey = `fetch_${dataToFetch.join('_')}_${access_token.substring(0, 10)}`;
-        const calendarResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, false, dataToFetch))
-          });
-          const result = await response.json();
-          if (result.success && result.data?.calendar) {
-            processUnifiedData(result);
-          }
-          return result;
-        });
-        
-        // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
-        result = calendarResult;
-      }
-      
-      // Register attendance/marks fetch for smart prefetch scheduling
-      // Only register if we fetched unified data (result is defined)
-      const allMissing = missingCount === 3;
-      if (missingCount > 1 || allMissing) {
-        if (result && result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
-          registerAttendanceFetch();
+      const refreshDataType = async (dataType: 'attendance' | 'marks' | 'timetable') => {
+        const payload: Record<string, unknown> = { access_token, data_type: dataType };
+        if (password) {
+          payload.password = password;
         }
+        const response = await fetch('/api/data/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          const errText = await response.text().catch(() => 'Unknown error');
+          throw new Error(`Backend refresh failed for ${dataType}: ${errText}`);
+        }
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.error || `Failed to refresh ${dataType}`);
+        }
+        return result;
+      };
+
+      const ensureFreshData = async (dataType: 'attendance' | 'marks' | 'timetable') => {
+        if (forceRefresh) {
+          await refreshDataType(dataType);
+        }
+        let cache = await fetchCacheEntry(dataType);
+        if (!cache.success || cache.isExpired || !cache.data) {
+          console.log(`[Dashboard] 🔄 Cache miss/expired for ${dataType}, requesting backend`);
+          await refreshDataType(dataType);
+          cache = await fetchCacheEntry(dataType);
+        }
+        if (!cache.success || !cache.data) {
+          throw new Error(`Cache missing for ${dataType} even after refresh`);
+        }
+        return cache.data;
+      };
+
+      const [attendanceCache, marksCache, timetableCache] = await Promise.all([
+        ensureFreshData('attendance'),
+        ensureFreshData('marks'),
+        ensureFreshData('timetable'),
+      ]);
+
+      const normalizedAttendance = normalizeAttendanceData(attendanceCache);
+      if (!normalizedAttendance) {
+        throw new Error('Attendance cache payload is malformed');
       }
+
+      setClientCache('attendance', normalizedAttendance);
+      const marksPayload = marksCache as MarksData;
+      setClientCache('marks', marksPayload);
+      setClientCache('timetable', timetableCache);
+
+      const calendarEvents = await fetchCalendarFromSupabase();
+
+      const unifiedPayload: Parameters<typeof processUnifiedData>[0] = {
+        data: {
+          calendar: { data: calendarEvents },
+          attendance: { data: normalizedAttendance },
+          marks: { data: marksPayload },
+          timetable: { data: timetableCache },
+        },
+      };
+
+      processUnifiedData(unifiedPayload);
+      setHasCache(true);
+      registerAttendanceFetch();
 
     } catch (err) {
       console.error('[Dashboard] Error fetching data:', err);
@@ -814,13 +453,13 @@ export default function Dashboard() {
       marks?: { data?: { all_courses: unknown[] }; success?: { data?: { all_courses: unknown[] } } } | null;
       timetable?: { data?: unknown; success?: { data?: unknown } } | null;
     };
-    metadata?: { semester?: number; [key: string]: unknown };
+    metadata?: { semester?: number;[key: string]: unknown };
     semester?: number;
   }) => {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
-    
+
     // Process calendar data - handle both direct format and wrapped format
     console.log('[Dashboard] 📋 ========================================');
     console.log('[Dashboard] 📋 CALENDAR PROCESSING - Starting calendar data processing');
@@ -835,9 +474,28 @@ export default function Dashboard() {
       }
     }
     console.log('[Dashboard] 📋 ========================================');
-    
+
+    const unwrapNestedData = (value: unknown): Record<string, unknown> | null => {
+      let current = value;
+      let depth = 0;
+
+      while (current && typeof current === 'object' && depth < 5) {
+        const obj = current as Record<string, unknown>;
+
+        if ('data' in obj && obj.data && typeof obj.data === 'object' && obj.data !== current) {
+          current = obj.data;
+          depth += 1;
+          continue;
+        }
+
+        return obj;
+      }
+
+      return typeof current === 'object' && current !== null ? (current as Record<string, unknown>) : null;
+    };
+
     let calendarEvents: CalendarEvent[] | null = null;
-    
+
     if (Array.isArray(result.data.calendar)) {
       // Check if it's the new nested format: [{month: "Jan '26", dates: [{day, date, event, day_order}, ...]}, ...]
       const firstItem = result.data.calendar[0];
@@ -886,11 +544,11 @@ export default function Dashboard() {
         console.log('[Dashboard]   - Total events:', calendarEvents.length);
       }
     }
-    
+
     if (calendarEvents && calendarEvents.length > 0) {
       // Extract semester from multiple sources with fallbacks
       let extractedSemester: number | null = null;
-      
+
       // 1. Try attendance data first - handle both direct and wrapped formats
       if (result.data.attendance && typeof result.data.attendance === 'object') {
         // Direct format: {metadata: {semester: ...}, ...}
@@ -911,7 +569,7 @@ export default function Dashboard() {
           extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
           console.log('[Dashboard] Semester from attendance.semester (legacy):', extractedSemester);
         }
-      } 
+      }
       // 2. Try response metadata
       else if (result.metadata?.semester) {
         extractedSemester = result.metadata.semester;
@@ -930,34 +588,34 @@ export default function Dashboard() {
           console.log('[Dashboard] Semester from storage cache:', extractedSemester);
         }
       }
-      
+
       // Default to 1 if no semester found
       const finalSemester = extractedSemester || 1;
-      
+
       // Store semester in storage if found
       if (extractedSemester) {
-          setStorageItem('user_semester', extractedSemester.toString());
+        setStorageItem('user_semester', extractedSemester.toString());
         console.log('[Dashboard] 💾 Stored semester in storage:', extractedSemester);
       }
-      
+
       console.log('[Dashboard] 📋 Calendar events count:', calendarEvents.length);
       if (calendarEvents.length > 0) {
         console.log('[Dashboard] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
         console.log('[Dashboard] 📋   - Sample dates range:', calendarEvents[0]?.date, 'to', calendarEvents[calendarEvents.length - 1]?.date);
       }
-      
+
       // Normalize calendar event dates from "DD/Month 'YY" to "DD/MM/YYYY" format for proper matching
       const normalizedCalendarEvents = calendarEvents.map(event => ({
         ...event,
         date: normalizeCalendarDate(event.date)
       }));
-      
+
       console.log('[Dashboard] 📋 Normalized calendar dates:');
       if (normalizedCalendarEvents.length > 0) {
         console.log('[Dashboard] 📋   - First normalized date:', normalizedCalendarEvents[0]?.date);
         console.log('[Dashboard] 📋   - Last normalized date:', normalizedCalendarEvents[normalizedCalendarEvents.length - 1]?.date);
       }
-      
+
       // Display calendar data with normalized dates
       setCalendarData(normalizedCalendarEvents);
       console.log('[Dashboard] ✅ ✅ ✅ Calendar data loaded and set:', normalizedCalendarEvents.length, 'events');
@@ -970,14 +628,14 @@ export default function Dashboard() {
 
     // Process attendance data - handle both direct format and wrapped format
     let attendanceDataObj: AttendanceData | null = null;
-    
+
     if (result.data.attendance && typeof result.data.attendance === 'object') {
       // Check if it's direct format (has all_subjects, summary, metadata at root)
       if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
         // Direct format
         attendanceDataObj = result.data.attendance as AttendanceData;
         console.log('[Dashboard] Attendance data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
         const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
@@ -997,7 +655,7 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
       setAttendanceData(attendanceDataObj);
       console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
@@ -1015,14 +673,14 @@ export default function Dashboard() {
 
     // Process marks data - handle both direct format and wrapped format
     let marksDataObj: MarksData | null = null;
-    
+
     if (result.data.marks && typeof result.data.marks === 'object') {
       // Check if it's direct format (has all_courses, summary, metadata at root)
       if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
         // Direct format
         marksDataObj = result.data.marks as MarksData;
         console.log('[Dashboard] Marks data is direct format');
-      } 
+      }
       // Check if it's wrapped format: {success: true, data: {...}}
       else if ('success' in result.data.marks && 'data' in result.data.marks) {
         const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
@@ -1042,7 +700,7 @@ export default function Dashboard() {
         }
       }
     }
-    
+
     if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
       setMarksData(marksDataObj);
       console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
@@ -1060,12 +718,17 @@ export default function Dashboard() {
 
     // Process timetable data
     let timetableDataObj: typeof timetableData | null = null;
+    let timetableSource: Record<string, unknown> | null = null;
+    let timetableProvided = false;
 
-    if (result.data.timetable && typeof result.data.timetable === 'object') {
-      const timetableObj = result.data.timetable as Record<string, unknown>;
+    if (result.data.timetable !== undefined && result.data.timetable !== null) {
+      timetableProvided = true;
+      timetableSource = unwrapNestedData(result.data.timetable);
+    }
 
+    if (timetableSource) {
       // Check if it's backend schedule format and transform it
-      if (timetableObj.schedule && Array.isArray(timetableObj.schedule)) {
+      if (timetableSource.schedule && Array.isArray(timetableSource.schedule)) {
         console.log('[Dashboard] 🔄 Transforming backend schedule format...');
 
         const timeSlots = [
@@ -1073,7 +736,7 @@ export default function Dashboard() {
           "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
         ];
 
-        const schedule = timetableObj.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
+        const schedule = timetableSource.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
         if (!schedule || !Array.isArray(schedule)) {
           console.warn('[Dashboard] Invalid schedule format');
           timetableDataObj = {
@@ -1137,6 +800,7 @@ export default function Dashboard() {
             timetable: timetable
           };
         }
+
         console.log('[Dashboard] ✅ Transformed backend schedule format');
         console.log('[Dashboard] 📊 Fresh timetable structure after transformation:', {
           hasTimetable: !!timetableDataObj?.timetable,
@@ -1145,6 +809,23 @@ export default function Dashboard() {
           slotMappingKeys: timetableDataObj?.slot_mapping ? Object.keys(timetableDataObj.slot_mapping) : 'no slot_mapping',
           sampleSlotMapping: timetableDataObj?.slot_mapping ? Object.entries(timetableDataObj.slot_mapping).slice(0, 3) : 'no slot_mapping'
         });
+      }
+
+      // Handle cached payloads that already match the TimetableData structure
+      if (!timetableDataObj && 'timetable' in timetableSource && typeof timetableSource.timetable === 'object') {
+        const slotMappingCandidate = timetableSource.slot_mapping && typeof timetableSource.slot_mapping === 'object'
+          ? (timetableSource.slot_mapping as Record<string, string>)
+          : {};
+
+        const timetableCandidate = timetableSource.timetable as Record<string, { do_name?: string; time_slots?: Record<string, unknown> }> | undefined;
+
+        timetableDataObj = {
+          slot_mapping: slotMappingCandidate,
+          timetable: timetableCandidate || {}
+        };
+
+        console.log('[Dashboard] ✅ Using cached timetable structure (timtable property detected)');
+        console.log('[Dashboard] 📊 Cached timetable keys:', timetableDataObj.timetable ? Object.keys(timetableDataObj.timetable) : []);
       }
     }
 
@@ -1164,7 +845,7 @@ export default function Dashboard() {
       } catch (err) {
         console.error('[Dashboard] ❌ Error processing timetable:', err);
       }
-    } else if (result.data.timetable !== undefined && result.data.timetable !== null) {
+    } else if (timetableProvided) {
       // Only overwrite if timetable was explicitly provided in result (not undefined/null)
       // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No timetable data found');
@@ -1196,7 +877,7 @@ export default function Dashboard() {
       try {
         // Extract semester using same logic as above
         let extractedSemester: number | null = null;
-        
+
         if (result.data.attendance?.semester) {
           extractedSemester = result.data.attendance.semester;
         } else if (result.data.attendance?.data?.metadata?.semester) {
@@ -1211,7 +892,7 @@ export default function Dashboard() {
             extractedSemester = parseInt(cachedSemester, 10);
           }
         }
-        
+
         // Process calendar data to match CalendarEvent interface (map 'event' to 'content')
         const processedCalendarForStats = (calendarForStats as any[]).map((e: any) => ({
           date: e.date,
@@ -1281,7 +962,7 @@ export default function Dashboard() {
   if (loading && showSkeleton) {
     // Show skeleton UI after 2s delay or immediately if cache exists
     const threeDayDates = getThreeDayDates();
-    
+
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
         <PillNav
@@ -1319,10 +1000,10 @@ export default function Dashboard() {
               const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
               const isToday = dayInfo.dateStr === getCurrentDateString();
               const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
-              
+
               let bgColor = 'bg-white/10';
               let textColor = 'text-white';
-              
+
               if (isToday) {
                 bgColor = 'bg-white';
                 textColor = 'text-black';
@@ -1330,9 +1011,9 @@ export default function Dashboard() {
                 bgColor = 'bg-green-500/80';
                 textColor = 'text-white';
               }
-              
+
               return (
-                <div 
+                <div
                   key={dayInfo.dateStr}
                   className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
                 >
@@ -1390,18 +1071,18 @@ export default function Dashboard() {
   }
 
   if (error) {
-  return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
+    return (
+      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
         <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
-          {error.includes('session') && (
-            <NavigationButton
-              path="/auth"
-              onClick={handleReAuthenticate}
-              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
-            >
-              Sign In Again
-            </NavigationButton>
-          )}
+        {error.includes('session') && (
+          <NavigationButton
+            path="/auth"
+            onClick={handleReAuthenticate}
+            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
+          >
+            Sign In Again
+          </NavigationButton>
+        )}
       </div>
     );
   }
@@ -1444,15 +1125,13 @@ export default function Dashboard() {
         {/* Sidebar Toggle Button */}
         <button
           onClick={() => setSidebarExpanded(!sidebarExpanded)}
-          className={`fixed top-14 left-4 z-[1001] bg-white/10 backdrop-blur border border-white/20 rounded-full p-2 transition-all duration-300 hover:bg-white/20 ${
-            sidebarExpanded ? 'left-64' : 'left-4'
-          }`}
+          className={`fixed top-14 left-4 z-[1001] bg-white/10 backdrop-blur border border-white/20 rounded-full p-2 transition-all duration-300 hover:bg-white/20 ${sidebarExpanded ? 'left-64' : 'left-4'
+            }`}
           aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
         >
           <svg
-            className={`w-5 h-5 text-white transition-transform duration-300 ${
-              sidebarExpanded ? 'rotate-180' : 'rotate-0'
-            }`}
+            className={`w-5 h-5 text-white transition-transform duration-300 ${sidebarExpanded ? 'rotate-180' : 'rotate-0'
+              }`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -1463,24 +1142,21 @@ export default function Dashboard() {
 
         {/* Sidebar */}
         <div
-          className={`fixed left-0 top-0 h-full z-[1000] transition-all duration-300 ease-in-out ${
-            sidebarExpanded ? 'w-64' : 'w-16'
-          }`}
+          className={`fixed left-0 top-0 h-full z-[1000] transition-all duration-300 ease-in-out ${sidebarExpanded ? 'w-64' : 'w-16'
+            }`}
         >
           {/* Glass Background - only visible when expanded */}
           <div
-            className={`absolute inset-0 backdrop-blur bg-black/80 border-r border-white/20 transition-opacity duration-300 ${
-              sidebarExpanded ? 'opacity-100' : 'opacity-0'
-            }`}
+            className={`absolute inset-0 backdrop-blur bg-black/80 border-r border-white/20 transition-opacity duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0'
+              }`}
           />
 
           {/* Sidebar Content */}
           <div className="relative h-full flex flex-col">
             {/* Header - only visible when expanded */}
             <div
-              className={`p-6 border-b border-white/10 transition-all duration-300 ${
-                sidebarExpanded ? 'opacity-100' : 'opacity-0'
-              }`}
+              className={`p-6 border-b border-white/10 transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0'
+                }`}
             >
               <h2 className="text-xl font-sora font-bold text-white">Navigation</h2>
             </div>
@@ -1496,9 +1172,8 @@ export default function Dashboard() {
                 >
                   <User className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Attendance
                   </span>
@@ -1519,9 +1194,8 @@ export default function Dashboard() {
                 >
                   <BookOpen className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Timetable
                   </span>
@@ -1542,9 +1216,8 @@ export default function Dashboard() {
                 >
                   <BarChart3 className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Marks
                   </span>
@@ -1565,9 +1238,8 @@ export default function Dashboard() {
                 >
                   <Calendar className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     Calendar
                   </span>
@@ -1588,9 +1260,8 @@ export default function Dashboard() {
                 >
                   <Calculator className="w-6 h-6 flex-shrink-0" />
                   <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                      sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                    }`}
+                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      }`}
                   >
                     SGPA Calculator
                   </span>
@@ -1612,9 +1283,8 @@ export default function Dashboard() {
                   >
                     <Settings className="w-6 h-6 flex-shrink-0" />
                     <span
-                      className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${
-                        sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
+                      className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                        }`}
                     >
                       Admin
                     </span>
@@ -1632,18 +1302,16 @@ export default function Dashboard() {
       </div>
 
 
-      <div className={`mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4 transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4 transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
           Welcome to your Dashboard
         </div>
       </div>
 
       {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Upcoming Calendar
         </div>
@@ -1651,20 +1319,20 @@ export default function Dashboard() {
           {threeDayDates.map((dayInfo) => {
             const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
             const isToday = dayInfo.dateStr === getCurrentDateString();
-            
+
             // Enhanced holiday detection: check day_order and content
             const dayOrder = event?.day_order || '';
             const content = event?.content || '';
-            const isHoliday = 
-              dayOrder === "-" || 
-              dayOrder === "DO -" || 
+            const isHoliday =
+              dayOrder === "-" ||
+              dayOrder === "DO -" ||
               dayOrder.toLowerCase() === "holiday" ||
               dayOrder.toLowerCase().includes('holiday') ||
               (content && content.toLowerCase().includes('holiday'));
-            
+
             let bgColor = 'bg-white/10';
             let textColor = 'text-white';
-            
+
             if (isToday) {
               bgColor = 'bg-white';
               textColor = 'text-black';
@@ -1672,12 +1340,12 @@ export default function Dashboard() {
               bgColor = 'bg-green-500/80';
               textColor = 'text-white';
             }
-            
+
             // Display content (handle empty string as 'No events')
             const displayContent = content && content.trim() !== '' ? content : 'No events';
-            
+
             return (
-              <div 
+              <div
                 key={dayInfo.dateStr}
                 className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
               >
@@ -1702,16 +1370,15 @@ export default function Dashboard() {
       </div>
 
       {/* Today's Timetable Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Today&apos;s Timetable {currentDayOrder && `- ${currentDayOrder}`}
         </div>
         {todaysTimetable.length > 0 ? (
           <div className="flex flex-col gap-3 w-full">
             {todaysTimetable.map((slot, index) => (
-              <div 
+              <div
                 key={index}
                 className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
               >
@@ -1737,9 +1404,8 @@ export default function Dashboard() {
       </div>
 
       {/* Attendance Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Attendance Overview
         </div>
@@ -1748,9 +1414,9 @@ export default function Dashboard() {
             {attendanceData.all_subjects.map((subject, index) => {
               if (!subject || !subject.attendance_percentage) return null; // Skip null/invalid subjects
               const attendancePercent = parseFloat(subject.attendance_percentage.replace('%', ''));
-              
+
               return (
-                <div 
+                <div
                   key={index}
                   className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
                 >
@@ -1779,9 +1445,8 @@ export default function Dashboard() {
       </div>
 
       {/* Marks Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${
-        sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-      }`}>
+      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
+        }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
           Marks Overview
         </div>
@@ -1789,14 +1454,14 @@ export default function Dashboard() {
           <div className="flex flex-col gap-3 w-full">
             {marksData.all_courses
               .filter(course => course && course.assessments && Array.isArray(course.assessments) && course.assessments.length > 0)
-              .filter((course, index, self) => 
-                course && index === self.findIndex(c => 
+              .filter((course, index, self) =>
+                course && index === self.findIndex(c =>
                   c && c.course_code === course.course_code && c.subject_type === course.subject_type
                 )
               )
               .map((course, index) => {
                 if (!course) return null;
-                
+
                 const getCourseTitle = (course: MarksCourse): string => {
                   return course.course_title || course.course_code;
                 };
@@ -1808,34 +1473,34 @@ export default function Dashboard() {
                   return { obtained, total };
                 };
 
-              const { obtained, total } = getTotalMarks();
-              
-              return (
-                <div 
-                  key={`${course.course_code}-${course.subject_type}-${index}`}
-                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
-                >
-                  <div className="flex-1">
-                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
-                      {getCourseTitle(course)}
-                    </p>
-                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                      {course.course_code} • {course.subject_type}
-                    </p>
-                  </div>
-                  <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
-                    <div className="text-center">
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
-                      <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
+                const { obtained, total } = getTotalMarks();
+
+                return (
+                  <div
+                    key={`${course.course_code}-${course.subject_type}-${index}`}
+                    className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
+                  >
+                    <div className="flex-1">
+                      <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
+                        {getCourseTitle(course)}
+                      </p>
+                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
+                        {course.course_code} • {course.subject_type}
+                      </p>
                     </div>
-                    <div className="text-center">
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
-                      <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
+                    <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
+                      <div className="text-center">
+                        <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
+                        <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
+                        <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         ) : (
           <div className="text-white/70 text-lg font-sora">
@@ -1859,8 +1524,8 @@ export default function Dashboard() {
             >
               Sign In
             </NavigationButton>
-      </div>
-      </div>
+          </div>
+        </div>
       )}
     </div>
   );

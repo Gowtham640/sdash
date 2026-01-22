@@ -1,0 +1,67 @@
+POST http://localhost:8080/login
+GET http://localhost:8080/user (with headers)
+GET http://localhost:8080/courses (with headers)
+GET http://localhost:8080/timetable (with headers)
+GET http://localhost:8080/calendar (with headers)
+GET http://localhost:8080/health
+
+IMPORTANT:
+1. Frontend will NOT create the user in auth.users and it will NOT push the user info to public.users.
+2. Even if you get any data from the backend in response messages it sends you will NOT use it or you will NOT push anything to supabase. You MUST only read and retrieve data from supabase. 
+3. If any request fails then fallback to using the expired record, if even that doesnt exist then show error.
+4. You are allowed to only push data into public.user_odml , public.calendar , public.events .
+Rules:
+- Do not assume/guess at all
+- Do NOT suggest improvements
+- Do NOT refactor
+- Do NOT add features
+- If something cannot be verified from the provided files, explicitly say so
+- For any table based query check @tables.md to understand schemas,rls policies etc..
+- DO NOT run and test more than 2 times. Do multiple checks before you test.
+
+Output:
+- Summary of the changes you did
+- Summary of the new flow
+- Summary of the check done on the login+user info flow.
+
+
+
+1. LOGIN - POST /login
+Request:
+{  "account": "string",    // Required: SRM registration number/account  "password": "string",   // Required: SRM password  "cdigest": "string",    // Optional: Captcha digest for retry  "captcha": "string"     // Optional: Captcha solution}
+Success Response:
+{  "success": true,  "userInfo": {    "name": "",    "mobile": "",    "program": "",    "semester": 0,    "regNumber": "",    "batch": "",    "year": 0,    "department": "",    "section": "",    "specialization": ""  }}
+Error Response:
+{  "success": false,  "error": "Authentication failed"}
+2. USER INFO - GET /user
+Request Headers:
+X-User-Id: string    // Required: User UUID from loginX-Email: string      // Required: User email
+Request Body: None
+Success Response:
+{  "success": true}
+Error Response:
+{  "success": false}
+3. CALENDAR - GET /calendar
+Request Headers:
+X-User-Id: string    // Required: User UUID from loginX-Email: string      // Required: User email  X-Password: string   // Required: SRM password (for token refresh)
+Request Body: None
+Success Response:
+{  "error": false,  "status": 200,  "today": {    "date": 12,    "day": "Monday",    "event": "Holiday",    "day_order": "Day 1"  },  "tomorrow": {    "date": 13,    "day": "Tuesday",     "event": null,    "day_order": "Day 2"  },  "index": 0,  "calendar": [    {      "month": "Jan '26",      "dates": [        {          "date": 1,          "day": "Wed",          "event": "New Year Holiday",          "day_order": "Day 3"        }      ]    }  ]}
+Error Response:
+{  "success": false}
+4. TIMETABLE - GET /timetable
+Request Headers:
+X-User-Id: string    // Required: User UUID from loginX-Email: string      // Required: User emailX-Password: string   // Required: SRM password (for token refresh)
+Request Body: None
+Success Response:
+{  "regNumber": "RA2411003011707",  "batch": "1",  "schedule": [    {      "day": 1,      "table": [        {          "code": "21MAB204T",          "name": "Probability and Queueing Theory",          "slot": "A",          "roomNo": "TP 204 S",          "courseType": "Theory",          "online": false,          "isOptional": false        },        {          "code": "21MAB204T",          "name": "Probability and Queueing Theory",           "slot": "A",          "roomNo": "TP 204 S",          "courseType": "Theory",          "online": false,          "isOptional": false        },        null,        null,        {          "code": "MATH101",          "name": "Calculus",          "slot": "F",          "roomNo": "LH102",           "courseType": "Theory",          "online": false,          "isOptional": false        },        // ... 5 more slots (index 5-9)      ]    },    // ... 4 more days  ]}
+Error Response:
+{  "success": false}
+5. COURSES - GET /courses
+Request Headers:
+X-User-Id: string    // Required: User UUID from loginX-Email: string      // Required: User emailX-Password: string   // Required: SRM password (for token refresh)
+Request Body: None
+Success Response:
+{  "regNumber": "RA2411003011707",  "courses": [    {      "code": "21MAB204T",      "title": "Probability and Queueing Theory",      "credit": "4",      "category": "Regular",      "courseCategory": "Basic Science",      "type": "Theory",      "slotType": "Theory",      "faculty": "Dr. Santosh Kumar (102515)",      "slot": "A",      "room": "TP 204 S",      "academicYear": "AY2025-26-EVEN"    },    {      "code": "21CSC204J",      "title": "Design and Analysis of Algorithms",      "credit": "4",      "category": "Regular",       "courseCategory": "Professional Core",      "type": "Lab Based Theory",      "slotType": "Theory",      "faculty": "Dr.Yazhinian S (103805)",      "slot": "B",      "room": "TP 204 S",      "academicYear": "AY2025-26-EVEN"    }  ],  "status": 200,  "error": null}
+Error Response:
+{  "success": false}
