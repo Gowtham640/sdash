@@ -10,17 +10,13 @@ import { getStorageItem, setStorageItem, removeStorageItem } from "./browserStor
 // Supports both NEXT_PUBLIC_BACKEND_URL (client-side) and BACKEND_URL (server-side)
 // Falls back to localhost:8080 for local development
 function getBackendUrl(): string {
-  // Check environment variables (available in both client and server contexts)
-  const backendUrl =
-    'http://localhost:8080';
+  const envBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
 
-  // Validate and return
-  if (backendUrl && backendUrl.trim() !== '') {
-    return backendUrl.trim();
+  if (envBackendUrl && envBackendUrl.trim() !== '') {
+    return envBackendUrl.trim();
   }
 
-  // Fallback to localhost:8080
-  return 'http://localhost:8080';
+  return 'https://sensors-mba-andreas-surrounded.trycloudflare.com';
 }
 
 // Get BACKEND_URL at runtime
@@ -989,9 +985,12 @@ async function callGoEndpoint<T = unknown>(
     console.warn(`[Backend Client] ⚠️ Direct POST to /login - use loginToGoBackend() instead`);
     requestOptions.body = JSON.stringify(requestBody);
     console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));
-  } else {
+  } else if (method !== 'GET' && method !== 'HEAD') {
     requestOptions.body = JSON.stringify(requestBody);
-    console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));
+    console.log(`[Backend Client] 📦 REQUEST BODY ATTACHED (${method})`);
+  } else {
+    // For GET/HEAD requests we do NOT attach a body
+    console.log(`[Backend Client] 🚫 GET/HEAD detected: Skipping body attachment to prevent Node.js crash.`);
   }
 
   // GET requests don't need body or query params - authentication is via X-CSRF-Token header

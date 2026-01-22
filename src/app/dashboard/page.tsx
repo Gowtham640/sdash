@@ -15,6 +15,8 @@ import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucid
 import type { AttendanceData, MarksData } from '@/lib/apiTypes';
 import { fetchCalendarFromSupabase } from "@/lib/calendarFetcher";
 
+console.log("VERSION 2.0 - TESTING CACHE");
+
 type TimeSlot = {
   time: string;
   course_title: string;
@@ -473,6 +475,25 @@ export default function Dashboard() {
     }
     console.log('[Dashboard] 📋 ========================================');
 
+    const unwrapNestedData = (value: unknown): Record<string, unknown> | null => {
+      let current = value;
+      let depth = 0;
+
+      while (current && typeof current === 'object' && depth < 5) {
+        const obj = current as Record<string, unknown>;
+
+        if ('data' in obj && obj.data && typeof obj.data === 'object' && obj.data !== current) {
+          current = obj.data;
+          depth += 1;
+          continue;
+        }
+
+        return obj;
+      }
+
+      return typeof current === 'object' && current !== null ? (current as Record<string, unknown>) : null;
+    };
+
     let calendarEvents: CalendarEvent[] | null = null;
 
     if (Array.isArray(result.data.calendar)) {
@@ -697,12 +718,17 @@ export default function Dashboard() {
 
     // Process timetable data
     let timetableDataObj: typeof timetableData | null = null;
+    let timetableSource: Record<string, unknown> | null = null;
+    let timetableProvided = false;
 
-    if (result.data.timetable && typeof result.data.timetable === 'object') {
-      const timetableObj = result.data.timetable as Record<string, unknown>;
+    if (result.data.timetable !== undefined && result.data.timetable !== null) {
+      timetableProvided = true;
+      timetableSource = unwrapNestedData(result.data.timetable);
+    }
 
+    if (timetableSource) {
       // Check if it's backend schedule format and transform it
-      if (timetableObj.schedule && Array.isArray(timetableObj.schedule)) {
+      if (timetableSource.schedule && Array.isArray(timetableSource.schedule)) {
         console.log('[Dashboard] 🔄 Transforming backend schedule format...');
 
         const timeSlots = [
@@ -710,7 +736,7 @@ export default function Dashboard() {
           "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
         ];
 
-        const schedule = timetableObj.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
+        const schedule = timetableSource.schedule as Array<{ day: number; table: Array<unknown> }> | undefined;
         if (!schedule || !Array.isArray(schedule)) {
           console.warn('[Dashboard] Invalid schedule format');
           timetableDataObj = {
@@ -774,6 +800,7 @@ export default function Dashboard() {
             timetable: timetable
           };
         }
+
         console.log('[Dashboard] ✅ Transformed backend schedule format');
         console.log('[Dashboard] 📊 Fresh timetable structure after transformation:', {
           hasTimetable: !!timetableDataObj?.timetable,
@@ -782,6 +809,23 @@ export default function Dashboard() {
           slotMappingKeys: timetableDataObj?.slot_mapping ? Object.keys(timetableDataObj.slot_mapping) : 'no slot_mapping',
           sampleSlotMapping: timetableDataObj?.slot_mapping ? Object.entries(timetableDataObj.slot_mapping).slice(0, 3) : 'no slot_mapping'
         });
+      }
+
+      // Handle cached payloads that already match the TimetableData structure
+      if (!timetableDataObj && 'timetable' in timetableSource && typeof timetableSource.timetable === 'object') {
+        const slotMappingCandidate = timetableSource.slot_mapping && typeof timetableSource.slot_mapping === 'object'
+          ? (timetableSource.slot_mapping as Record<string, string>)
+          : {};
+
+        const timetableCandidate = timetableSource.timetable as Record<string, { do_name?: string; time_slots?: Record<string, unknown> }> | undefined;
+
+        timetableDataObj = {
+          slot_mapping: slotMappingCandidate,
+          timetable: timetableCandidate || {}
+        };
+
+        console.log('[Dashboard] ✅ Using cached timetable structure (timtable property detected)');
+        console.log('[Dashboard] 📊 Cached timetable keys:', timetableDataObj.timetable ? Object.keys(timetableDataObj.timetable) : []);
       }
     }
 
@@ -801,7 +845,7 @@ export default function Dashboard() {
       } catch (err) {
         console.error('[Dashboard] ❌ Error processing timetable:', err);
       }
-    } else if (result.data.timetable !== undefined && result.data.timetable !== null) {
+    } else if (timetableProvided) {
       // Only overwrite if timetable was explicitly provided in result (not undefined/null)
       // This prevents overwriting cached data when only calendar is fetched
       console.warn('[Dashboard] ⚠️ No timetable data found');
