@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { CacheDataType } from "@/lib/supabaseCache";
 import { fetchUserCacheEntries } from "@/lib/userCacheReader";
+import { callBackendScraper } from "@/lib/scraperClient";
+import type { CacheDataType } from "@/lib/supabaseCache";
 
 const VALID_TYPES: CacheDataType[] = ["attendance", "marks", "timetable", "calendar"];
 
@@ -23,7 +24,7 @@ function decodeJWT(token: string): Record<string, unknown> | null {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { access_token, data_type } = body;
+    const { access_token, data_type, password } = body;
 
     if (!access_token) {
       return NextResponse.json({ success: false, error: "Access token is required" }, { status: 400 });
@@ -44,16 +45,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user_id = decoded.sub as string;
     const entryType = data_type as CacheDataType;
+    const user_id = decoded.sub as string;
+    const user_email = (decoded.email as string) || decoded.sub as string;
+
+    if (!password) {
+      return NextResponse.json(
+        { success: false, error: "Password is required to refresh data" },
+        { status: 400 }
+      );
+    }
+
+    const action = `get_${entryType}_data`;
+    console.log(`[API /data/refresh] 🔄 Triggering backend refresh for ${entryType}`);
+    const backendResult = await callBackendScraper(action, {
+      email: user_email,
+      password,
+      user_id,
+    });
+
+    if (!backendResult.success) {
+      console.error(`[API /data/refresh] ❌ Backend refresh failed for ${entryType}:`, backendResult.error);
+      return NextResponse.json(
+        { success: false, error: backendResult.error || 'Backend refresh failed' },
+        { status: 502 }
+      );
+    }
 
     let entries: Record<CacheDataType, { data: unknown | null; expiresAt: string | null }>;
     try {
       entries = await fetchUserCacheEntries(user_id, [entryType]);
     } catch (error) {
-      console.error("[API /data/refresh] Failed to read user cache:", error);
+      console.error("[API /data/refresh] Failed to read user cache after refresh:", error);
       return NextResponse.json(
-        { success: false, error: "Failed to read cached data" },
+        { success: false, error: "Failed to read cached data after refresh" },
         { status: 500 }
       );
     }

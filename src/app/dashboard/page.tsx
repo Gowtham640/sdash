@@ -34,6 +34,8 @@ interface TimeSlot {
   category: string;
 }
 
+type CachePayloadType = 'attendance' | 'marks' | 'timetable';
+
 export default function Dashboard() {
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
@@ -76,6 +78,55 @@ export default function Dashboard() {
     const month = (now.getMonth() + 1).toString().padStart(2, '0');
     const year = now.getFullYear();
     return `${day}/${month}/${year}`;
+  };
+
+  const ensureSupabaseData = async ({
+    access_token,
+    password,
+  }: {
+    access_token: string;
+    password?: string;
+  }) => {
+    const dataTypes: CachePayloadType[] = ['attendance', 'marks', 'timetable'];
+    for (const dataType of dataTypes) {
+      try {
+        const cacheResponse = await fetch('/api/data/cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token, data_type: dataType }),
+        });
+        const cacheResult = await cacheResponse.json();
+
+        const needsRefresh =
+          !cacheResult.success ||
+          cacheResult.data == null ||
+          cacheResult.isExpired === true;
+
+        if (!needsRefresh) {
+          continue;
+        }
+
+        if (!password) {
+          console.warn(`[Dashboard] ⚠️ Cannot refresh ${dataType} without password`);
+          continue;
+        }
+
+        const refreshResponse = await fetch('/api/data/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token, data_type: dataType, password }),
+        });
+        const refreshResult = await refreshResponse.json();
+
+        if (refreshResult.success) {
+          console.log(`[Dashboard] ✅ Refreshed ${dataType} via backend`);
+        } else {
+          console.warn(`[Dashboard] ⚠️ Refresh for ${dataType} failed:`, refreshResult.error);
+        }
+      } catch (error) {
+        console.error(`[Dashboard] ❌ Error ensuring ${dataType} cache:`, error);
+      }
+    }
   };
 
   // Convert calendar event date from "DD/Month 'YY" format to "DD/MM/YYYY" format
@@ -371,24 +422,17 @@ export default function Dashboard() {
         return;
       }
 
-      // Check individual client-side caches first (unless force refresh)
-      // Note: Calendar is always fetched fresh from public.calendar table, not from cache
-      // Remove any old calendar cache that might exist
       removeClientCache('calendar');
       console.log('[Dashboard] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
 
-      // Ensure timetable data is available for today's timetable display
-      // If timetable is not cached, we need to fetch it along with calendar
       const hasTimetableCache = !!getClientCache('timetable');
       console.log(`[Dashboard] 📋 Timetable cache status: ${hasTimetableCache ? 'available' : 'missing'}`);
 
-      // Also check and clean unified cache if it contains calendar data
       const unifiedCache = getClientCache('unified');
       if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
         const unifiedData = unifiedCache as { data?: { calendar?: unknown } };
         if (unifiedData.data?.calendar) {
           console.log('[Dashboard] 🗑️ Found calendar in unified cache, removing it');
-          // Remove calendar from unified cache data
           if (unifiedData.data) {
             delete unifiedData.data.calendar;
             setClientCache('unified', unifiedCache);
@@ -397,211 +441,19 @@ export default function Dashboard() {
         }
       }
 
-      let cachedAttendance: AttendanceData | null = null;
-      let cachedMarks: MarksData | null = null;
-      let cachedTimetable: unknown | null = null;
-      let needsBackgroundRefresh = false;
-
+      const dataToFetch = ['calendar', 'timetable', 'attendance', 'marks'];
+      const requestBody = getRequestBodyWithPassword(access_token, forceRefresh, dataToFetch);
       if (!forceRefresh) {
-        // Check client-side cache first
-        cachedAttendance = getClientCache<AttendanceData>('attendance');
-        cachedMarks = getClientCache<MarksData>('marks');
-        cachedTimetable = getClientCache('timetable');
-
-        // If client cache is expired, fetch Supabase cache (even if expired)
-        if (!cachedAttendance || !cachedMarks || !cachedTimetable) {
-          console.log('[Dashboard] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
-
-          // Fetch Supabase cache for missing data types
-          const supabaseCachePromises: Promise<void>[] = [];
-
-          if (!cachedAttendance) {
-            supabaseCachePromises.push(
-              fetch('/api/data/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ access_token, data_type: 'attendance' })
-              })
-                .then(res => res.json())
-                .then(result => {
-                  if (result.success && result.data) {
-                    console.log(`[Dashboard] ✅ Found Supabase cache for attendance (expired: ${result.isExpired})`);
-                    cachedAttendance = result.data as AttendanceData;
-                    setAttendanceData(cachedAttendance);
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Attendance cache is expired, will refresh in background');
-                    }
-                  }
-                })
-                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase attendance cache:', err))
-            );
-          }
-
-          if (!cachedMarks) {
-            supabaseCachePromises.push(
-              fetch('/api/data/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ access_token, data_type: 'marks' })
-              })
-                .then(res => res.json())
-                .then(result => {
-                  if (result.success && result.data) {
-                    console.log(`[Dashboard] ✅ Found Supabase cache for marks (expired: ${result.isExpired})`);
-                    cachedMarks = result.data as MarksData;
-                    setMarksData(cachedMarks);
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Marks cache is expired, will refresh in background');
-                    }
-                  }
-                })
-                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase marks cache:', err))
-            );
-          }
-
-          if (!cachedTimetable) {
-            supabaseCachePromises.push(
-              fetch('/api/data/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ access_token, data_type: 'timetable' })
-              })
-                .then(res => res.json())
-                .then(result => {
-                  if (result.success && result.data) {
-                    console.log(`[Dashboard] ✅ Found Supabase cache for timetable (expired: ${result.isExpired})`);
-                    cachedTimetable = result.data;
-                    // Process timetable data
-                    let timetableDataToUse: typeof timetableData | null = null;
-                    if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
-                      if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
-                        const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
-                        if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
-                          timetableDataToUse = cachedData;
-                        }
-                      } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
-                        timetableDataToUse = cachedTimetable as typeof timetableData;
-                      }
-                    }
-                    if (timetableDataToUse) {
-                      setTimetableData(timetableDataToUse);
-                      try {
-                        const timetableForUtils = {
-                          timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
-                          slot_mapping: timetableDataToUse.slot_mapping,
-                        } as TimetableData;
-                        const occurrences = getSlotOccurrences(timetableForUtils);
-                        setSlotOccurrences(occurrences);
-                      } catch (err) {
-                        console.error('[Dashboard] ❌ Error processing cached timetable:', err);
-                      }
-                    }
-                    if (result.isExpired) {
-                      needsBackgroundRefresh = true;
-                      console.log('[Dashboard] ⚠️ Timetable cache is expired, will refresh in background');
-                    }
-                  }
-                })
-                .catch(err => console.error('[Dashboard] ❌ Error fetching Supabase timetable cache:', err))
-            );
-          }
-
-          // Wait for all Supabase cache fetches to complete
-          await Promise.all(supabaseCachePromises);
-        }
-
-        // Use client-side cached data if available (highest priority)
-        if (cachedAttendance) {
-          console.log('[Dashboard] ✅ Using client-side cache for attendance');
-          setAttendanceData(cachedAttendance);
-        }
-        if (cachedMarks) {
-          console.log('[Dashboard] ✅ Using client-side cache for marks');
-          setMarksData(cachedMarks);
-        }
-        if (cachedTimetable) {
-          console.log('[Dashboard] ✅ Using client-side cache for timetable');
-          console.log('[Dashboard] 📊 Cached timetable structure:', {
-            type: typeof cachedTimetable,
-            isNull: cachedTimetable === null,
-            keys: cachedTimetable && typeof cachedTimetable === 'object' ? Object.keys(cachedTimetable) : 'not an object',
-            hasDataProperty: cachedTimetable && typeof cachedTimetable === 'object' && 'data' in cachedTimetable,
-            dataKeys: cachedTimetable && typeof cachedTimetable === 'object' && 'data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' ? Object.keys((cachedTimetable as any).data) : 'no data property',
-            hasTimetable: cachedTimetable && typeof cachedTimetable === 'object' && ('timetable' in cachedTimetable || ('data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' && 'timetable' in (cachedTimetable as any).data)),
-            hasTimeSlots: cachedTimetable && typeof cachedTimetable === 'object' && ('time_slots' in cachedTimetable || ('data' in cachedTimetable && typeof (cachedTimetable as any).data === 'object' && 'time_slots' in (cachedTimetable as any).data))
-          });
-          let timetableDataToUse: typeof timetableData | null = null;
-
-          if (typeof cachedTimetable === 'object' && cachedTimetable !== null) {
-            if ('data' in cachedTimetable && typeof (cachedTimetable as { data?: unknown }).data === 'object' && (cachedTimetable as { data?: unknown }).data !== null) {
-              const cachedData = (cachedTimetable as { data?: typeof timetableData }).data;
-              if (cachedData && ('timetable' in cachedData || 'time_slots' in cachedData)) {
-                timetableDataToUse = cachedData;
-                console.log('[Dashboard] ✅ Extracted timetable from wrapped format (data property)');
-                console.log('[Dashboard] 📊 Extracted data structure:', {
-                  hasTimetable: 'timetable' in cachedData,
-                  hasSlotMapping: 'slot_mapping' in cachedData,
-                  timetableKeys: cachedData.timetable ? Object.keys(cachedData.timetable) : 'no timetable',
-                  slotMappingKeys: cachedData.slot_mapping ? Object.keys(cachedData.slot_mapping) : 'no slot_mapping'
-                });
-              }
-            } else if ('timetable' in cachedTimetable || 'time_slots' in cachedTimetable) {
-              timetableDataToUse = cachedTimetable as typeof timetableData;
-              console.log('[Dashboard] ✅ Using timetable in direct format');
-              console.log('[Dashboard] 📊 Direct format structure:', {
-                hasTimetable: 'timetable' in cachedTimetable,
-                hasSlotMapping: 'slot_mapping' in cachedTimetable,
-                timetableKeys: (cachedTimetable as any).timetable ? Object.keys((cachedTimetable as any).timetable) : 'no timetable',
-                slotMappingKeys: (cachedTimetable as any).slot_mapping ? Object.keys((cachedTimetable as any).slot_mapping) : 'no slot_mapping'
-              });
-            }
-          }
-
-          if (timetableDataToUse) {
-            setTimetableData(timetableDataToUse);
-            try {
-              const timetableForUtils = {
-                timetable: (timetableDataToUse.timetable || {}) as TimetableData['timetable'],
-                slot_mapping: timetableDataToUse.slot_mapping,
-              } as TimetableData;
-              const occurrences = getSlotOccurrences(timetableForUtils);
-              setSlotOccurrences(occurrences);
-              console.log('[Dashboard] ✅ Timetable slot occurrences loaded:', occurrences.length);
-            } catch (err) {
-              console.error('[Dashboard] ❌ Error processing cached timetable:', err);
-            }
-          } else {
-            console.warn('[Dashboard] ⚠️ Cached timetable has unexpected structure');
-            console.warn('[Dashboard] 📊 Failed to extract timetable from cache - will use fresh data from API');
-          }
-        }
-
-        // Update cache status for skeleton display
-        const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-        setHasCache(hasAnyCache);
-      } else {
-        // Force refresh: clear client caches
-        removeClientCache('attendance');
-        removeClientCache('marks');
-        removeClientCache('timetable');
-        removeClientCache('unified');
-        console.log('[Dashboard] 🗑️ Cleared client caches for force refresh');
+        await ensureSupabaseData({
+          access_token,
+          password: requestBody.password,
+        });
       }
 
-      // Determine what needs to be fetched
-      // If Supabase cache is expired, we still need to fetch fresh data
-      const needAttendance = !cachedAttendance || forceRefresh || needsBackgroundRefresh;
-      const needMarks = !cachedMarks || forceRefresh || needsBackgroundRefresh;
-      const needTimetable = !cachedTimetable || forceRefresh || needsBackgroundRefresh;
-      const missingCount = [needAttendance, needMarks, needTimetable].filter(Boolean).length;
+      const missingCount = 3;
+      const needsBackgroundRefresh = false;
 
-      console.log('[Dashboard] 📊 Cache status:');
-      console.log(`[Dashboard]   - Attendance: ${cachedAttendance ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Marks: ${cachedMarks ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Timetable: ${cachedTimetable ? '✓ Cached' : '✗ Need fetch'}`);
-      console.log(`[Dashboard]   - Missing count: ${missingCount}/3`);
+      console.log('[Dashboard] 📊 Cache status: checking user_cache entries for attendance/marks/timetable');
 
       // Always use unified API endpoint with request deduplication
       // This ensures only one page calls the backend at a time
@@ -638,7 +490,7 @@ export default function Dashboard() {
             finalResponse = await fetch('/api/data/all', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+              body: JSON.stringify(requestBody)
             });
 
             const apiDuration = Date.now() - apiStartTime;
@@ -722,7 +574,7 @@ export default function Dashboard() {
               const retryResponse = await fetch('/api/data/all', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+                body: JSON.stringify(requestBody)
               });
               const retryResult = await retryResponse.json();
 
@@ -759,31 +611,7 @@ export default function Dashboard() {
             setClientCache('timetable', result.data.timetable);
           }
         }
-      } else if (missingCount === 0) {
-        // Check if we need timetable data for today's timetable display
-        const needsTimetable = !hasTimetableCache;
-        const baseCalendarData = needsTimetable ? ['calendar', 'timetable'] : ['calendar'];
-        const dataToFetch = [...baseCalendarData, 'attendance', 'marks'];
-
-        console.log(`[Dashboard] ✅ All other data cached, fetching: ${dataToFetch.join(', ')}...`);
-        const requestKey = `fetch_${dataToFetch.join('_')}_${access_token.substring(0, 10)}`;
-        const calendarResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, false, dataToFetch))
-          });
-          const result = await response.json();
-          if (result.success && result.data?.calendar) {
-            processUnifiedData(result);
-          }
-          return result;
-        });
-
-        // Assign to outer result variable so it can be used later (e.g., in registerAttendanceFetch check)
-        result = calendarResult;
       }
-
       // Register attendance/marks fetch for smart prefetch scheduling
       // Only register if we fetched unified data (result is defined)
       const allMissing = missingCount === 3;
@@ -801,7 +629,7 @@ export default function Dashboard() {
     }
   };
 
-  const processUnifiedData = (result: {
+  function processUnifiedData(result: {
     data: {
       calendar?: { data?: Array<unknown>; success?: { data?: Array<unknown> } } | null;
       attendance?: { data?: { all_subjects: unknown[]; metadata?: { semester?: number } }; success?: { data?: { all_subjects: unknown[]; metadata?: { semester?: number } } }; semester?: number } | null;
@@ -810,7 +638,7 @@ export default function Dashboard() {
     };
     metadata?: { semester?: number;[key: string]: unknown };
     semester?: number;
-  }) => {
+  }) {
     console.log('[Dashboard] Processing unified data:', result);
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
