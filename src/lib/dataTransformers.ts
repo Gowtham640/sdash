@@ -473,6 +473,14 @@ export function transformGoBackendAttendance(goData: unknown): unknown {
   }
 
 
+  if (isAttendanceResponse(goData)) {
+
+    console.log('[DataTransformer] Detected attendance response format - converting to frontend format...');
+
+    return normalizeAttendanceResponse(goData);
+
+  }
+
 
   // Check if it's already an array (raw Go backend format from cache)
 
@@ -716,6 +724,14 @@ export function transformGoBackendMarks(goData: unknown): unknown {
 
   }
 
+
+  if (isMarksResponse(goData)) {
+
+    console.log('[DataTransformer] Detected marks response format - converting to frontend format...');
+
+    return normalizeMarksResponse(goData);
+
+  }
 
 
   // Check if it's already an array (raw Go backend format from cache)

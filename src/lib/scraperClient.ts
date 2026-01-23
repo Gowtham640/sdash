@@ -8,15 +8,17 @@ import { getStorageItem, setStorageItem, removeStorageItem } from "./browserStor
 
 // Get backend URL from environment variables
 // Supports both NEXT_PUBLIC_BACKEND_URL (client-side) and BACKEND_URL (server-side)
-// Falls back to localhost:8080 for local development
+// Throws if the required env vars are missing so callers always target the configured host.
 function getBackendUrl(): string {
   const envBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
 
-  if (envBackendUrl && envBackendUrl.trim() !== '') {
-    return envBackendUrl.trim();
+  if (!envBackendUrl || envBackendUrl.trim() === "") {
+    throw new Error(
+      "[Backend Client] NEXT_PUBLIC_BACKEND_URL or BACKEND_URL must be set to the backend base URL."
+    );
   }
 
-  return 'https://sensors-mba-andreas-surrounded.trycloudflare.com';
+  return envBackendUrl.trim().replace(/\/+$/, "");
 }
 
 // Get BACKEND_URL at runtime
@@ -25,10 +27,11 @@ const BACKEND_URL = getBackendUrl();
 // Only log in server context to avoid exposing URL in client bundles
 if (typeof window === 'undefined') {
   console.log('[Backend Client] BACKEND_URL:', BACKEND_URL);
-  const envSource =
-    process.env.NEXT_PUBLIC_BACKEND_URL ? 'NEXT_PUBLIC_BACKEND_URL' :
-      process.env.BACKEND_URL ? 'BACKEND_URL' :
-        'fallback (localhost:8080)';
+  const envSource = process.env.NEXT_PUBLIC_BACKEND_URL
+    ? 'NEXT_PUBLIC_BACKEND_URL'
+    : process.env.BACKEND_URL
+      ? 'BACKEND_URL'
+      : 'undefined (should not happen)';
   console.log('[Backend Client] BACKEND_URL source:', envSource);
 }
 
@@ -55,6 +58,7 @@ export interface ScraperResponse<T = unknown> {
  */
 export interface GoBackendLoginResponse {
   authenticated: boolean;
+  success?: boolean;
   token?: string; // Session token from login response body
   user?: {
     name: string;
@@ -80,7 +84,7 @@ export interface GoBackendLoginResponse {
  * Go backend login request format (NEW: includes email field)
  */
 export interface GoBackendLoginRequest {
-  account: string;
+  email: string;
   password: string;
   cdigest?: string;
   captcha?: string;
@@ -88,7 +92,7 @@ export interface GoBackendLoginRequest {
 
 function buildLoginPayload(email: string, password?: string) {
   return {
-    account: email,
+    email,
     password: password ?? "",
   };
 }
@@ -492,7 +496,7 @@ export async function loginToGoBackend(
 
   try {
     const requestBody: GoBackendLoginRequest = {
-      account,
+      email: account,
       password,
       ...(cdigest ? { cdigest } : {}),
       ...(captcha ? { captcha } : {}),

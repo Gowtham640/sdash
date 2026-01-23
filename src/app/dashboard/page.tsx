@@ -4,7 +4,7 @@ import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, Ti
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
 import StaggeredMenu from '../../components/StaggeredMenu';
-import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { getRequestBodyWithPassword, clearPortalPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import NavigationButton from "@/components/NavigationButton";
@@ -12,7 +12,10 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { normalizeAttendanceData, normalizeMarksData } from "@/lib/dataTransformers";
 import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
+import { useRouter } from "next/navigation";
+import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "@/lib/apiTypes";
 
 // Import types
 interface CalendarEvent {
@@ -23,35 +26,6 @@ interface CalendarEvent {
   month?: string;
   month_name?: string;
   year?: number;
-}
-
-interface AttendanceSubject {
-  course_title: string;
-  category: string;
-  hours_conducted: string;
-  hours_absent: string;
-  hours_required: string;
-  attendance_percentage: string;
-}
-
-interface AttendanceData {
-  all_subjects: AttendanceSubject[];
-}
-
-interface MarksCourse {
-  course_code: string;
-  course_title: string;
-  subject_type: string;
-  assessments: Array<{
-    assessment_name: string;
-    marks_obtained: string;
-    total_marks: string;
-    percentage: string;
-  }>;
-}
-
-interface MarksData {
-  all_courses: MarksCourse[];
 }
 
 interface TimeSlot {
@@ -76,6 +50,8 @@ export default function Dashboard() {
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [hasCache, setHasCache] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const router = useRouter();
 
   // Track errors
   useErrorTracking(error, '/dashboard');
@@ -330,6 +306,23 @@ export default function Dashboard() {
 
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
+  };
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('[Dashboard] Logout failed:', err);
+    } finally {
+      clearPortalPassword();
+      removeStorageItem('access_token');
+      removeStorageItem('refresh_token');
+      removeStorageItem('user');
+      removeStorageItem('user_semester');
+      setIsLoggingOut(false);
+      router.push('/auth');
+    }
   };
 
   /**
@@ -769,7 +762,8 @@ export default function Dashboard() {
       } else if (missingCount === 0) {
         // Check if we need timetable data for today's timetable display
         const needsTimetable = !hasTimetableCache;
-        const dataToFetch = needsTimetable ? ['calendar', 'timetable'] : ['calendar'];
+        const baseCalendarData = needsTimetable ? ['calendar', 'timetable'] : ['calendar'];
+        const dataToFetch = [...baseCalendarData, 'attendance', 'marks'];
 
         console.log(`[Dashboard] ✅ All other data cached, fetching: ${dataToFetch.join(', ')}...`);
         const requestKey = `fetch_${dataToFetch.join('_')}_${access_token.substring(0, 10)}`;
@@ -969,92 +963,26 @@ export default function Dashboard() {
     }
 
     // Process attendance data - handle both direct format and wrapped format
-    let attendanceDataObj: AttendanceData | null = null;
-
-    if (result.data.attendance && typeof result.data.attendance === 'object') {
-      // Check if it's direct format (has all_subjects, summary, metadata at root)
-      if ('all_subjects' in result.data.attendance || 'summary' in result.data.attendance) {
-        // Direct format
-        attendanceDataObj = result.data.attendance as AttendanceData;
-        console.log('[Dashboard] Attendance data is direct format');
-      }
-      // Check if it's wrapped format: {success: true, data: {...}}
-      else if ('success' in result.data.attendance && 'data' in result.data.attendance) {
-        const attendanceWrapper = result.data.attendance as { success?: boolean | { data?: AttendanceData }; data?: AttendanceData };
-        const successValue = attendanceWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && attendanceWrapper.data) {
-          attendanceDataObj = attendanceWrapper.data;
-          console.log('[Dashboard] Attendance data is wrapped format');
-        }
-      }
-      // Check legacy nested format: {data: {...}} or {success: {data: {...}}}
-      else if ('data' in result.data.attendance) {
-        const legacyData = (result.data.attendance as { data?: AttendanceData }).data;
-        if (legacyData && ('all_subjects' in legacyData || 'summary' in legacyData)) {
-          attendanceDataObj = legacyData;
-          console.log('[Dashboard] Attendance data is legacy nested format');
-        }
-      }
-    }
-
-    if (attendanceDataObj && (attendanceDataObj.all_subjects || (attendanceDataObj as { summary?: unknown }).summary)) {
-      setAttendanceData(attendanceDataObj);
-      console.log('[Dashboard] ✅ Attendance data loaded:', attendanceDataObj.all_subjects?.length || 0);
+    const normalizedAttendance = normalizeAttendanceData(result.data.attendance);
+    if (normalizedAttendance) {
+      setAttendanceData(normalizedAttendance);
+      console.log('[Dashboard] ✅ Attendance data normalized and loaded:', normalizedAttendance.all_subjects?.length || 0);
     } else if (result.data.attendance !== undefined && result.data.attendance !== null) {
-      // Only overwrite if attendance was explicitly provided in result (not undefined/null)
-      // This prevents overwriting cached data when only calendar is fetched
-      console.warn('[Dashboard] ⚠️ No attendance data found');
-      console.warn('[Dashboard] Attendance data type:', typeof result.data.attendance);
-      console.warn('[Dashboard] Attendance data value:', result.data.attendance);
+      console.warn('[Dashboard] ⚠️ No attendance data found after normalization');
       setAttendanceData(null);
     } else {
-      // result.data.attendance is undefined/null - don't overwrite existing state (likely from cache)
       console.log('[Dashboard] ℹ️ Attendance not in API response, keeping existing state (likely from cache)');
     }
 
     // Process marks data - handle both direct format and wrapped format
-    let marksDataObj: MarksData | null = null;
-
-    if (result.data.marks && typeof result.data.marks === 'object') {
-      // Check if it's direct format (has all_courses, summary, metadata at root)
-      if ('all_courses' in result.data.marks || 'summary' in result.data.marks) {
-        // Direct format
-        marksDataObj = result.data.marks as MarksData;
-        console.log('[Dashboard] Marks data is direct format');
-      }
-      // Check if it's wrapped format: {success: true, data: {...}}
-      else if ('success' in result.data.marks && 'data' in result.data.marks) {
-        const marksWrapper = result.data.marks as { success?: boolean | { data?: MarksData }; data?: MarksData };
-        const successValue = marksWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && marksWrapper.data) {
-          marksDataObj = marksWrapper.data;
-          console.log('[Dashboard] Marks data is wrapped format');
-        }
-      }
-      // Check legacy nested format: {data: {...}} or {success: {data: {...}}}
-      else if ('data' in result.data.marks) {
-        const legacyData = (result.data.marks as { data?: MarksData }).data;
-        if (legacyData && ('all_courses' in legacyData || 'summary' in legacyData)) {
-          marksDataObj = legacyData;
-          console.log('[Dashboard] Marks data is legacy nested format');
-        }
-      }
-    }
-
-    if (marksDataObj && (marksDataObj.all_courses || (marksDataObj as { summary?: unknown }).summary)) {
-      setMarksData(marksDataObj);
-      console.log('[Dashboard] ✅ Marks data loaded:', marksDataObj.all_courses?.length || 0);
+    const normalizedMarks = normalizeMarksData(result.data.marks);
+    if (normalizedMarks) {
+      setMarksData(normalizedMarks);
+      console.log('[Dashboard] ✅ Marks data normalized and loaded:', normalizedMarks.all_courses?.length || 0);
     } else if (result.data.marks !== undefined && result.data.marks !== null) {
-      // Only overwrite if marks was explicitly provided in result (not undefined/null)
-      // This prevents overwriting cached data when only calendar is fetched
-      console.warn('[Dashboard] ⚠️ No marks data found');
-      console.warn('[Dashboard] Marks data type:', typeof result.data.marks);
-      console.warn('[Dashboard] Marks data value:', result.data.marks);
+      console.warn('[Dashboard] ⚠️ No marks data found after normalization');
       setMarksData(null);
     } else {
-      // result.data.marks is undefined/null - don't overwrite existing state (likely from cache)
       console.log('[Dashboard] ℹ️ Marks not in API response, keeping existing state (likely from cache)');
     }
 
@@ -1236,8 +1164,8 @@ export default function Dashboard() {
     // Note: Calendar is NOT cached - it's always fetched fresh from public.calendar table
     const cacheData = {
       data: {
-        attendance: attendanceDataObj || attendanceData,
-        marks: marksDataObj || marksData,
+        attendance: attendanceData,
+        marks: marksData,
         timetable: timetableDataObj || timetableData,
       },
     };
@@ -1446,6 +1374,13 @@ export default function Dashboard() {
         hoveredPillTextColor="#000000"
         pillTextColor="#ffffff"
       />
+      <button
+        onClick={handleLogout}
+        disabled={isLoggingOut}
+        className="absolute top-5 right-5 z-[1005] px-3 py-1.5 rounded-full bg-red-600/95 hover:bg-red-500 border border-white/20 text-white font-sora text-xs sm:text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {isLoggingOut ? "Signing out..." : "Log Out"}
+      </button>
 
 
       {/* Expandable Sidebar - Only visible on medium and larger screens */}

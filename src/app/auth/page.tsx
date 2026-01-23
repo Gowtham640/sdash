@@ -3,8 +3,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
-import { storePortalPassword } from "@/lib/passwordStorage";
-import { setStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
+import { storePortalPassword, clearPortalPassword } from "@/lib/passwordStorage";
+import { setStorageItem, getStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
 
 // Lazy load LiquidEther to improve initial page load performance
 const LiquidEther = lazy(() => import("@/components/LiquidEther"));
@@ -34,6 +34,7 @@ export default function AuthPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [showLiquidEther, setShowLiquidEther] = useState(false);
     const [showDisclaimer, setShowDisclaimer] = useState(true);
+    const [hasSession, setHasSession] = useState(false);
     const [stage, setStage] = useState<AuthStage>("login");
     const [listMoved, setListMoved] = useState(false);
     const [selectedSequence, setSelectedSequence] = useState<string[]>([]);
@@ -74,6 +75,11 @@ export default function AuthPage() {
                 'Please use normal browsing mode for best experience.'
             );
         }
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        setHasSession(!!getStorageItem("access_token"));
     }, []);
 
     // Load LiquidEther after initial render to prioritize content loading
@@ -154,6 +160,7 @@ export default function AuthPage() {
     const handleDisclaimerComplete = () => {
         setShowDisclaimer(false);
     };
+
 
     const handleSignIn = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -418,6 +425,7 @@ export default function AuthPage() {
 
     return (
         <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
+
             {showLiquidEther && (
                 <div className="absolute inset-0 z-0">
                     <Suspense fallback={null}>

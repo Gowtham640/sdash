@@ -1,4 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+from pathlib import Path
+
+content = """import { NextRequest, NextResponse } from "next/server";
 import type { CacheDataType } from "@/lib/supabaseCache";
 import { fetchUserCacheEntries } from "@/lib/userCacheReader";
 
@@ -76,3 +78,6 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+"""
+
+Path("src/app/api/data/cache/route.ts").write_text(content)
