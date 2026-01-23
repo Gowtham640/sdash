@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabaseClient";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { loginToGoBackend } from "@/lib/scraperClient";
+import { loginToGoBackend, fetchUserDataFromGoBackend } from "@/lib/scraperClient";
 import {
   SignInResponse,
   AuthErrorCode,
@@ -161,30 +161,20 @@ export async function handleUserSignIn(
     }
 
     if (!existingAuthUser?.user) {
-      // Case 2: User doesn't exist in auth.users - send GET login request to Go backend
-      console.log(`[Auth] User not found in auth.users, sending GET login request to Go backend: ${email}`);
+      // Case 2: User doesn't exist in auth.users - send login request to Go backend
+      console.log(`[Auth] User not found in auth.users, routing login through Go backend: ${email}`);
 
-      const backendUrl = 'http://localhost:8080/login';
-      const loginRequest = {
-        account: email, // SRM registration number/account
-        password: password,
-        cdigest: undefined, // Optional captcha digest
-        captcha: undefined  // Optional captcha solution
-      };
+      const backendResult = await loginToGoBackend(email, password);
+      const loginSuccess =
+        backendResult.success !== undefined ? backendResult.success : backendResult.authenticated;
 
-      console.log(`[Auth] Sending POST request to ${backendUrl}`);
-      const loginResponse = await fetch(backendUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(loginRequest)
-      });
-
-      const backendResult = await loginResponse.json();
-
-      if (!backendResult.success) {
-        const errorMessage = backendResult.error || "Authentication failed";
+      if (!loginSuccess) {
+        const errorMessage =
+          backendResult.message ||
+          (Array.isArray(backendResult.errors) && backendResult.errors.length > 0
+            ? backendResult.errors.join(", ")
+            : undefined) ||
+          "Authentication failed";
         console.error(`[Auth] Go backend login failed: ${errorMessage}`);
         return {
           session: null,
@@ -238,24 +228,30 @@ export async function handleUserSignIn(
           };
         }
 
-        // Fetch user info from Go backend and create public.users entry
-        console.log(`[Auth] Sending GET /user request to fetch user info`);
-        const userUrl = 'http://localhost:8080/user';
-        const userResponse = await fetch(userUrl, {
-          method: 'GET',
-          headers: {
-            'X-User-Id': existingAuthUserAfter.user.id,
-            'X-Email': email
+        const sessionToken =
+          typeof backendResult.token === "string" && backendResult.token.trim()
+            ? backendResult.token.trim()
+            : backendResult.session &&
+              typeof backendResult.session === "object" &&
+              typeof (backendResult.session as { token?: unknown }).token === "string"
+              ? (backendResult.session as { token?: string }).token
+              : undefined;
+
+        if (sessionToken) {
+          const userResult = await fetchUserDataFromGoBackend(
+            sessionToken,
+            existingAuthUserAfter.user.id,
+            email,
+            password
+          );
+
+          if (!userResult.success) {
+            console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || "Unknown error"}`);
+          } else {
+            console.log(`[Auth] Successfully fetched user data from backend`);
           }
-        });
-
-        const userResult = await userResponse.json();
-
-        if (!userResult.success) {
-          console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || 'Unknown error'}`);
-          // Continue with authentication even if GET /user fails
         } else {
-          console.log(`[Auth] Successfully fetched user data from backend`);
+          console.warn(`[Auth] Backend login response did not include a token; skipping user data fetch`);
         }
 
         console.log(`[Auth] Successfully authenticated new user and fetched profile data: ${email}`);
@@ -298,27 +294,6 @@ export async function handleUserSignIn(
       }
 
       // Now fetch user data from Go backend
-      console.log(`[Auth] Sending GET /user request to fetch user info`);
-      // const userUrl = 'http://localhost:8080/user';
-      // const userResponse = await fetch(userUrl, {
-      //   method: 'GET',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'X-User-Id': existingAuthUser.user.id, // Use the auth user ID
-      //     'X-Email': email
-      //   },
-      //   body: JSON.stringify({ account: email, password }),
-      // });
-      //
-      // const userResult = await userResponse.json();
-      //
-      // if (!userResult.success) {
-      //   console.warn(`[Auth] Warning: Failed to fetch user data: ${userResult.error || 'Unknown error'}`);
-      //   // Continue with authentication even if GET /user fails
-      // } else {
-      //   console.log(`[Auth] Successfully fetched user data from backend`);
-      // }
-
       console.log(`[Auth] Successfully authenticated user and fetched profile data: ${email}`);
       return {
         session: signInData.session,

@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
 
     // User data sync disabled - project should not write to Supabase tables
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         success: true,
         data: {
@@ -116,6 +116,33 @@ export async function POST(request: NextRequest) {
       },
       { status: 200 }
     );
+
+    if (result.session) {
+      const isProduction = process.env.NODE_ENV === 'production';
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const expiresAtSeconds = typeof result.session.expires_at === 'number' ? result.session.expires_at : null;
+      const maxAgeSeconds = expiresAtSeconds
+        ? Math.max(60, expiresAtSeconds - nowSeconds)
+        : 3600;
+
+      response.cookies.set('sdash_access_token', result.session.access_token, {
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+        secure: isProduction,
+        maxAge: maxAgeSeconds,
+      });
+
+      response.cookies.set('sdash_user_role', result.user?.role || 'public', {
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+        secure: isProduction,
+        maxAge: maxAgeSeconds,
+      });
+    }
+
+    return response;
   } catch (error) {
     console.error(
       `[API] Unexpected error: ${error instanceof Error ? error.message : String(error)}`
