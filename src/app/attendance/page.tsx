@@ -1390,7 +1390,7 @@ export default function AttendancePage() {
                   </div>
 
                   {/* Right Side - Pie Chart (attendance donut visual) */}
-                  <div className="flex flex-col items-center justify-center w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
+                  <div className="flex flex-col items-center justify-center w-[170px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[170px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
                     {(() => {
                       console.log('[PIE CHART DEBUG] Subject:', subject.subject_code);
                       console.log('[PIE CHART DEBUG] pieChartData:', pieChartData);
@@ -1403,7 +1403,7 @@ export default function AttendancePage() {
                     })()}
                     <div
                       className="relative w-full h-full flex items-center justify-center"
-                      style={{ minWidth: '200px', minHeight: '200px' }}
+                      style={{ minWidth: '150px', minHeight: '150px' }}
                       ref={(el) => {
                         if (el) {
                           const rect = el.getBoundingClientRect();
@@ -1447,10 +1447,10 @@ export default function AttendancePage() {
                       </ResponsiveContainer>
                       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                         <div className="text-center">
-                          <div className="text-white font-sora text-xl sm:text-2xl md:text-3xl lg:text-3xl font-bold">
+                          <div className="text-white font-sora text-md sm:text-2xl md:text-3xl lg:text-3xl font-bold">
                             {attendancePercentage.toFixed(1)}%
                           </div>
-                          <div className="text-gray-400 font-sora text-xs sm:text-sm">
+                          <div className="text-gray-400 font-sora text-[7px] sm:text-sm">
                             {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
                           </div>
                           {prediction && (
