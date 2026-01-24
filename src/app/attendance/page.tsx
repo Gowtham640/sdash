@@ -227,6 +227,7 @@ export default function AttendancePage() {
   const [showPredictionModal, setShowPredictionModal] = useState(false);
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [semester, setSemester] = useState<number>(1); // Default to semester 1
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [predictionResults, setPredictionResults] = useState<PredictionResult[]>([]);
   const [isPredictionMode, setIsPredictionMode] = useState(false);
   const [leavePeriods, setLeavePeriods] = useState<LeavePeriod[]>([]);
@@ -241,6 +242,53 @@ export default function AttendancePage() {
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
+  const applyAttendanceDataPayload = (payload: AttendanceData) => {
+    setAttendanceData(payload);
+    setOriginalAttendanceData(payload);
+    setSemester(payload.metadata?.semester || 1);
+    setClientCache('attendance', payload);
+  };
+
+  const fetchAttendanceDataFromSupabase = async (
+    access_token: string,
+    options: { maxRetries?: number; retryDelayMs?: number } = {}
+  ): Promise<{ data: AttendanceData | null; isExpired: boolean }> => {
+    const { maxRetries = 1, retryDelayMs = 0 } = options;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        const response = await fetch('/api/data/cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token, data_type: 'attendance' })
+        });
+
+        if (!response.ok) {
+          console.warn('[Attendance] Supabase cache request failed:', response.status, response.statusText);
+        } else {
+          const cacheResult = await response.json();
+
+          if (cacheResult.success && cacheResult.data) {
+            const normalized = normalizeAttendanceData(cacheResult.data);
+            if (normalized) {
+              return {
+                data: normalized,
+                isExpired: !!cacheResult.isExpired
+              };
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[Attendance] ❌ Error fetching attendance cache from Supabase:', error);
+      }
+
+      if (attempt < maxRetries && retryDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      }
+    }
+
+    return { data: null, isExpired: false };
+  };
 
   const hydrateCalendarAndTimetableFromCache = () => {
     if (!calendarData.length) {
@@ -578,29 +626,28 @@ export default function AttendancePage() {
       // Update local state with the returned data
       console.log('[Attendance] ✅ Refresh completed, updating local state...');
 
-      if (result.data) {
-        try {
-          // The refresh API already returns processed data from Supabase
-          const attendanceData = result.data as AttendanceData;
-          setOriginalAttendanceData(attendanceData);
-          setAttendanceData(attendanceData);
+      const supabaseCache = await fetchAttendanceDataFromSupabase(access_token, { maxRetries: 5, retryDelayMs: 700 });
 
-          // Also update localStorage cache for future use
-          setClientCache('attendance', attendanceData);
-
-          console.log('[Attendance] ✅ Updated local state with refreshed attendance data');
-        } catch (dataError) {
-          console.error('[Attendance] ❌ Error processing refresh data:', dataError);
-          setError('Failed to process refreshed attendance data');
+      if (supabaseCache.data) {
+        applyAttendanceDataPayload(supabaseCache.data);
+        console.log('[Attendance] ✅ Updated local state with refreshed attendance data from Supabase');
+      } else {
+        const fallbackNormalized = result.data ? normalizeAttendanceData(result.data) : null;
+        if (fallbackNormalized) {
+          applyAttendanceDataPayload(fallbackNormalized);
+          console.log('[Attendance] ✅ Applied fallback refresh data (supabase cache empty but backend returned payload)');
+        } else {
+          console.warn('[Attendance] ⚠️ No attendance data available after refresh');
+          setError('No attendance data available');
           setLoading(false);
+          setIsRefreshing(false);
           return;
         }
-      } else {
-        console.warn('[Attendance] ⚠️ No data returned from refresh API');
-        setError('No attendance data available');
-        setLoading(false);
-        return;
       }
+
+      setLoading(false);
+      setIsRefreshing(false);
+      return;
     } catch (err) {
       console.error('[Attendance] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');
@@ -632,31 +679,17 @@ export default function AttendancePage() {
         // If client cache is expired, fetch Supabase cache (even if expired)
         if (!cachedAttendance) {
           console.log('[Attendance] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
-          try {
-            const result = await fetch('/api/data/cache', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ access_token, data_type: 'attendance' })
-            });
-            const cacheResult = await result.json();
-            if (cacheResult.success && cacheResult.data) {
-              console.log(`[Attendance] ✅ Found Supabase cache (expired: ${cacheResult.isExpired})`);
-              const normalized = normalizeAttendanceData(cacheResult.data);
-              if (normalized) {
-                cachedAttendance = normalized;
-                setAttendanceData(normalized);
-                setOriginalAttendanceData(normalized);
-                setSemester(normalized.metadata?.semester || 1);
-                if (cacheResult.isExpired) {
-                  needsBackgroundRefresh = true;
-                  console.log('[Attendance] ⚠️ Cache is expired, will refresh in background');
-                }
-              } else {
-                console.warn('[Attendance] ⚠️ Supabase cache could not be normalized', cacheResult.data);
-              }
+          const supabaseCache = await fetchAttendanceDataFromSupabase(access_token);
+          if (supabaseCache.data) {
+            console.log(`[Attendance] ✅ Found Supabase cache (expired: ${supabaseCache.isExpired})`);
+            cachedAttendance = supabaseCache.data;
+            applyAttendanceDataPayload(supabaseCache.data);
+            if (supabaseCache.isExpired) {
+              needsBackgroundRefresh = true;
+              console.log('[Attendance] ⚠️ Cache is expired, will refresh in background');
             }
-          } catch (err) {
-            console.error('[Attendance] ❌ Error fetching Supabase cache:', err);
+          } else {
+            console.warn('[Attendance] ⚠️ Supabase cache could not be normalized or is unavailable');
           }
         } else {
           // Use client-side cached data

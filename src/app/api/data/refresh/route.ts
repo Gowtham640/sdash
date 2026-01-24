@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchUserCacheEntries } from "@/lib/userCacheReader";
-import { callBackendScraper } from "@/lib/scraperClient";
+import { callBackendScraper, hydrateCacheEntry } from "@/lib/scraperClient";
 import type { CacheDataType } from "@/lib/supabaseCache";
 
 const VALID_TYPES: CacheDataType[] = ["attendance", "marks", "timetable", "calendar"];
@@ -62,37 +61,32 @@ export async function POST(request: NextRequest) {
       email: user_email,
       password,
       user_id,
+      requestedType: entryType,
     });
 
     if (!backendResult.success) {
-      console.error(`[API /data/refresh] ❌ Backend refresh failed for ${entryType}:`, backendResult.error);
+      console.error(`[API /data/refresh] ❌ Backend refresh failed for ${entryType}:`, backendResult.reason);
       return NextResponse.json(
-        { success: false, error: backendResult.error || 'Backend refresh failed' },
+        { success: false, error: backendResult.reason || 'Backend refresh failed' },
         { status: 502 }
       );
     }
 
-    let entries: Record<CacheDataType, { data: unknown | null; expiresAt: string | null }>;
-    try {
-      entries = await fetchUserCacheEntries(user_id, [entryType]);
-    } catch (error) {
-      console.error("[API /data/refresh] Failed to read user cache after refresh:", error);
+    const hydration = await hydrateCacheEntry(user_id, entryType);
+
+    if (!hydration.success) {
       return NextResponse.json(
-        { success: false, error: "Failed to read cached data after refresh" },
+        { success: false, error: `Failed to read cached ${entryType} data after refresh` },
         { status: 500 }
       );
     }
 
-    const entry = entries[entryType];
-    const expiresAt = entry?.expiresAt ?? null;
-    const isExpired = expiresAt ? new Date() > new Date(expiresAt) : false;
-
     return NextResponse.json({
       success: true,
-      data: entry?.data ?? null,
-      data_type: entryType,
-      expiresAt,
-      isExpired,
+      data: hydration.data,
+      data_type: hydration.data_type,
+      expiresAt: hydration.expiresAt,
+      isExpired: hydration.isExpired,
     });
   } catch (error) {
     console.error("[API /data/refresh] Unexpected error:", error);
