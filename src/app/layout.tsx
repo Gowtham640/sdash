@@ -1,18 +1,19 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono,Open_Sans,Sora } from "next/font/google";
+import { Geist, Geist_Mono, Open_Sans, Sora } from "next/font/google";
 import "./globals.css";
 import AnalyticsProvider from "@/components/AnalyticsProvider";
+import BottomNavigationBar from "@/components/BottomNavigationBar";
 
-const sans= Open_Sans({
+const sans = Open_Sans({
   variable: "--font-open-sans",
   subsets: ["latin"],
   weight: ["300", "400", "500", "600", "700", "800"],
   style: ["normal", "italic"],
 });
-const sora= Sora({
+const sora = Sora({
   variable: "--font-sora",
   subsets: ["latin"],
-  weight: ["100","200","300", "400", "500", "600", "700", "800"],
+  weight: ["100", "200", "300", "400", "500", "600", "700", "800"],
 });
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -40,7 +41,8 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${sans.variable} ${sora.variable} antialiased`}
       >
         <AnalyticsProvider>
-          {children}
+          <div className="min-h-screen relative z-10">{children}</div>
+          <BottomNavigationBar />
         </AnalyticsProvider>
       </body>
     </html>

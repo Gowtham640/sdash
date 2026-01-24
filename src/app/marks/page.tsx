@@ -10,6 +10,7 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { registerAttendanceFetch } from "@/lib/attendancePrefetchScheduler";
+import Particles from '@/components/Particles';
 
 interface MarksEntry {
   total: number | null;
@@ -49,6 +50,22 @@ export default function MarksPage() {
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+
+  const renderParticleLayer = () => (
+    <div className="fixed inset-0 z-1 pointer-events-none">
+      <Particles
+        particleColors={["#ffffff"]}
+        particleCount={100}
+        particleSpread={20}
+        speed={0.1}
+        particleBaseSize={200}
+        moveParticlesOnHover
+        alphaParticles={false}
+        disableRotation={false}
+        pixelRatio={typeof window !== 'undefined' ? window.devicePixelRatio : 1}
+      />
+    </div>
+  );
 
   useErrorTracking(error, '/marks');
 
@@ -268,6 +285,7 @@ export default function MarksPage() {
 
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
+      {renderParticleLayer()}
       <Link
         href="/dashboard"
         className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"

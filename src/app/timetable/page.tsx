@@ -11,6 +11,7 @@ import { useErrorTracking } from "@/lib/useErrorTracking";
 import type html2canvas from 'html2canvas';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
+import Particles from "@/components/Particles";
 
 interface TimeSlotCell {
   course: string;
@@ -76,6 +77,22 @@ export default function TimetablePage() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+
+  const renderParticleLayer = () => (
+    <div className="fixed inset-0 z-10 pointer-events-none">
+      <Particles
+        particleColors={["#ffffff"]}
+        particleCount={500}
+        particleSpread={20}
+        speed={0.1}
+        particleBaseSize={200}
+        moveParticlesOnHover
+        alphaParticles={false}
+        disableRotation={false}
+        pixelRatio={typeof window !== 'undefined' ? window.devicePixelRatio : 1}
+      />
+    </div>
+  );
 
   useEffect(() => {
     fetchUnifiedData();
@@ -834,6 +851,7 @@ export default function TimetablePage() {
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10 pb-10 gap-8">
         {/* Home Icon */}
+        {renderParticleLayer()}
         <Link
           href="/dashboard"
           className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
@@ -908,6 +926,7 @@ export default function TimetablePage() {
 
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden pt-10 pb-10 gap-8">
+      {renderParticleLayer()}
       {/* Home Icon */}
       <Link
         href="/dashboard"

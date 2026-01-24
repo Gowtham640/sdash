@@ -266,15 +266,10 @@ export default function AuthPage() {
         const checkData = await checkResponse.json();
         if (!checkData.auth_exists) {
             await performLogin();
-        } else if (!checkData.public_exists) {
-            const userData = await fetchUserDataSafely();
-            if (userData) {
-                setStorageItem("user", JSON.stringify(userData));
-            } else {
-                console.warn("[Auth Page] User info missing; continuing without it.");
-            }
+        } else {
+            router.push("/dashboard");
         }
-    }, [performLogin, fetchUserDataSafely]);
+    }, [performLogin, router]);
 
     useEffect(() => {
         if (stage !== "colorSuccess" || testIndex !== MEMORY_TESTS.length - 1) {

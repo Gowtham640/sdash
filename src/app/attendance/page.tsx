@@ -27,6 +27,7 @@ import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
 import { isDataFresh } from '@/lib/dataExpiry';
 import type { AttendanceData, AttendanceSubject } from '@/lib/apiTypes';
+import Particles from '@/components/Particles';
 
 interface AttendanceApiResponse {
   success: boolean;
@@ -1017,10 +1018,26 @@ export default function AttendancePage() {
   }
 
   // Show empty state if no attendance data but no error (allows refresh button to work)
+  const renderParticleLayer = () => (
+    <div className="fixed inset-0 z-0 pointer-events-none">
+      <Particles
+        particleColors={["#ffffff"]}
+        particleCount={100}
+        particleSpread={20}
+        speed={0.1}
+        particleBaseSize={200}
+        moveParticlesOnHover
+        alphaParticles={false}
+        disableRotation={false}
+        pixelRatio={typeof window !== 'undefined' ? window.devicePixelRatio : 1}
+      />
+    </div>
+  );
+
   if (!attendanceData) {
     return (
       <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-        {/* Home Icon */}
+        {renderParticleLayer()}
         <Link
           href="/dashboard"
           className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
@@ -1084,6 +1101,7 @@ export default function AttendancePage() {
 
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
+      {renderParticleLayer()}
       {/* Home Icon */}
       <Link
         href="/dashboard"
@@ -1259,8 +1277,10 @@ export default function AttendancePage() {
             return (
               <div key={`${subject.subject_code}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
                 {/* Main Card Content */}
-                <div className="flex flex-col sm:flex-row items-center justify-between p-3 sm:p-4 md:p-5 lg:p-6 gap-4 sm:gap-4 md:gap-6 lg:gap-6 min-h-[300px]">
-                  {/* Left Side - Subject Info */}
+                <div
+                  className="flex flex-row flex-wrap items-center justify-between p-3 sm:p-4 md:p-5 lg:p-6 gap-4 min-h-[300px]"
+                >
+                  {/* Left Side - Subject Info (data block for each subject) */}
                   <div className="flex flex-col justify-start items-start gap-4 flex-1 w-full sm:w-auto">
                     <div>
                       <div className="text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold max-w-[400px] leading-tight">
@@ -1364,7 +1384,7 @@ export default function AttendancePage() {
                     </div>
                   </div>
 
-                  {/* Right Side - Pie Chart */}
+                  {/* Right Side - Pie Chart (attendance donut visual) */}
                   <div className="flex flex-col items-center justify-center w-[200px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[200px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
                     {(() => {
                       console.log('[PIE CHART DEBUG] Subject:', subject.subject_code);

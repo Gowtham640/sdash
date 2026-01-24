@@ -16,6 +16,7 @@ import { normalizeAttendanceData, normalizeMarksData } from "@/lib/dataTransform
 import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
 import { useRouter } from "next/navigation";
 import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "@/lib/apiTypes";
+import Particles from "@/components/Particles";
 
 // Import types
 interface CalendarEvent {
@@ -1036,115 +1037,17 @@ export default function Dashboard() {
             Welcome to your Dashboard
           </div>
         </div>
-
-        {/* Calendar Section - Show actual calendar if available */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-            Upcoming Calendar
-          </div>
-          <div className="flex flex-col gap-3 w-full">
-            {threeDayDates.map((dayInfo) => {
-              const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
-              const isToday = dayInfo.dateStr === getCurrentDateString();
-              const isHoliday = event?.day_order === "-" || event?.day_order === "DO -" || (event?.content && event.content.toLowerCase().includes('holiday'));
-
-              let bgColor = 'bg-white/10';
-              let textColor = 'text-white';
-
-              if (isToday) {
-                bgColor = 'bg-white';
-                textColor = 'text-black';
-              } else if (isHoliday) {
-                bgColor = 'bg-green-500/80';
-                textColor = 'text-white';
-              }
-
-              return (
-                <div
-                  key={dayInfo.dateStr}
-                  className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
-                >
-                  <div className="flex gap-1.5 sm:gap-2 md:gap-3 lg:gap-3 items-center">
-                    <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[80px] lg:min-w-[85px]`}>
-                      {dayInfo.dayName}
-                    </p>
-                    <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora`}>
-                      {dayInfo.dateStr}
-                    </p>
-                  </div>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
-                    {event?.content || 'No events'}
-                  </p>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
-                    {event?.day_order || '-'}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Today's Timetable Section - Skeleton */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <SkeletonLoader className="w-full h-8 mb-2" />
-          <div className="flex flex-col gap-3 w-full">
-            {[1, 2, 3].map((i) => (
-              <SkeletonLoader key={i} className="w-full h-16 rounded-2xl" />
-            ))}
-          </div>
-        </div>
-
-        {/* Attendance Section - Skeleton */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <SkeletonLoader className="w-full h-8 mb-2" />
-          <div className="flex flex-col gap-3 w-full">
-            {[1, 2, 3, 4].map((i) => (
-              <SkeletonLoader key={i} className="w-full h-20 rounded-2xl" />
-            ))}
-          </div>
-        </div>
-
-        {/* Marks Section - Skeleton */}
-        <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center">
-          <SkeletonLoader className="w-full h-8 mb-2" />
-          <div className="flex flex-col gap-3 w-full">
-            {[1, 2, 3, 4].map((i) => (
-              <SkeletonLoader key={i} className="w-full h-20 rounded-2xl" />
-            ))}
-          </div>
+        <div className="space-y-6">
+          <SkeletonLoader className="w-[90vw] h-8 rounded-full" />
+          <SkeletonLoader className="w-[90vw] h-16 rounded-2xl" />
+          <SkeletonLoader className="w-[90vw] h-16 rounded-2xl" />
+          <SkeletonLoader className="w-[90vw] h-16 rounded-2xl" />
         </div>
       </div>
     );
   };
 
-  if (loading && !showSkeleton) {
-    // Show minimal loading state for first 2 seconds if no cache
-    return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-        <PillNav
-          logo=""
-          logoAlt=""
-          items={[
-            { label: 'Attendance', href: '/attendance' },
-            { label: 'Timetable', href: '/timetable' },
-            { label: 'Marks', href: '/marks' },
-            { label: 'Calendar', href: '/calender' },
-            { label: 'SPGA Calculator', href: '/spga-calculator' },
-            ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
-          ]}
-          activeHref="/dashboard"
-          className="custom-nav"
-          ease="power2.easeOut"
-          pillColor="#000000"
-          baseColor="#ffffff"
-          hoveredPillTextColor="#000000"
-          pillTextColor="#ffffff"
-        />
-      </div>
-    );
-  }
-
-  if (loading && showSkeleton) {
+  if (loading) {
     return renderDashboardSkeleton();
   }
 
@@ -1183,7 +1086,21 @@ export default function Dashboard() {
   });
 
   return (
+
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
+      <div className="fixed inset-0 z-10 pointer-events-none">
+        <Particles
+          particleColors={["#ffffff"]}
+          particleCount={500}
+          particleSpread={20}
+          speed={0.1}
+          particleBaseSize={200}
+          moveParticlesOnHover
+          alphaParticles={false}
+          disableRotation={false}
+          pixelRatio={window.devicePixelRatio || 1}
+        />
+      </div>
       <PillNav
         logo=""
         logoAlt=""
