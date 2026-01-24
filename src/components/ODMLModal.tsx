@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
@@ -49,6 +49,17 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
     from: undefined,
     to: undefined
   });
+  const [isCompact, setIsCompact] = useState(false);
+
+  useEffect(() => {
+    const checkSize = () => {
+      if (typeof window === 'undefined') return;
+      setIsCompact(window.innerHeight < 700);
+    };
+    checkSize();
+    window.addEventListener('resize', checkSize);
+    return () => window.removeEventListener('resize', checkSize);
+  }, []);
 
   const addODMLPeriod = () => {
     if (!currentDateRange?.from || !currentDateRange?.to) {
@@ -159,9 +170,9 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-black border border-white/20 rounded-3xl p-6 max-w-6xl w-auto max-h-[90vh] items-center overflow-y-auto">
+      <div className={`bg-black border border-white/20 rounded-3xl ${isCompact ? 'p-4' : 'p-6'} max-w-6xl w-auto max-h-[90vh] items-center overflow-y-auto`}>
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-white font-sora text-2xl font-bold">📋 OD/ML Management</h2>
+          <h2 className={`text-white font-sora font-bold ${isCompact ? 'text-xl' : 'text-2xl'}`}>📋 OD/ML Management</h2>
           <Button 
             onClick={handleClose}
             variant="ghost"
@@ -176,7 +187,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
           <label className="text-white font-sora text-lg font-bold mb-3 block">
             Add OD/ML Period:
           </label>
-          <div className="bg-white/10 border border-white/20 rounded-2xl p-4">
+          <div className={`bg-white/10 border border-white/20 rounded-2xl ${isCompact ? 'p-3' : 'p-4'}`}>
             <Calendar
               mode="range"
               selected={currentDateRange}
@@ -196,10 +207,10 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
                 weekday: "text-white/70 font-sora",
                 week: "bg-transparent",
                 day: "text-white hover:bg-white/20 hover:text-white",
-                day_selected: "bg-green-500 text-white hover:bg-green-600",
-                day_range_start: "bg-green-500 text-white hover:bg-green-600",
-                day_range_end: "bg-green-500 text-white hover:bg-green-600",
-                day_range_middle: "bg-green-500/50 text-white hover:bg-green-500/70",
+                day_selected: "bg-green-500/80 text-white hover:bg-green-600",
+                day_range_start: "bg-green-500/80 text-white hover:bg-green-600",
+                day_range_end: "bg-green-500/80 text-white hover:bg-green-600",
+                day_range_middle: "bg-green-500/60 text-white hover:bg-green-500/70",
                 day_today: "bg-white/20 text-black font-bold hover:bg-white/30",
                 day_outside: "text-white/50 hover:text-white/70",
                 day_disabled: "text-white/30 hover:text-white/30",

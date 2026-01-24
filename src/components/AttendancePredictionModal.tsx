@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
@@ -43,6 +43,18 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
     from: undefined,
     to: undefined
   });
+  const [isCompact, setIsCompact] = useState(false);
+
+  useEffect(() => {
+    const checkSize = () => {
+      if (typeof window === 'undefined') return;
+      setIsCompact(window.innerHeight < 700);
+    };
+
+    checkSize();
+    window.addEventListener('resize', checkSize);
+    return () => window.removeEventListener('resize', checkSize);
+  }, []);
 
   const addLeavePeriod = () => {
     if (!currentDateRange?.from || !currentDateRange?.to) {
@@ -106,9 +118,9 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-black border border-white/20 rounded-3xl p-6 max-w-6xl w-auto max-h-[90vh] items-center overflow-y-auto">
+      <div className={`bg-black border border-white/20 rounded-3xl ${isCompact ? 'p-4' : 'p-6'} max-w-6xl w-auto max-h-[90vh] items-center overflow-y-auto`}>
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-white font-sora text-2xl font-bold">Attendance Prediction</h2>
+          <h2 className={`text-white font-sora font-bold ${isCompact ? 'text-xl' : 'text-2xl'}`}>Attendance Prediction</h2>
           <Button 
             onClick={handleClose}
             variant="ghost"
@@ -123,7 +135,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
           <label className="text-white font-sora text-lg font-bold mb-3 block">
             Add Leave Period:
           </label>
-          <div className="bg-white/10 border border-white/20 rounded-2xl p-4">
+          <div className={`bg-white/10 border border-white/20 rounded-2xl ${isCompact ? 'p-3' : 'p-4'}`}>
             <Calendar
               mode="range"
               selected={currentDateRange}
@@ -143,10 +155,10 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
                 weekday: "text-white/70 font-sora",
                 week: "bg-transparent",
                 day: "text-white hover:bg-white/20 hover:text-white",
-                day_selected: "bg-green-500 text-white hover:bg-green-600",
-                day_range_start: "bg-green-500 text-white hover:bg-green-600",
-                day_range_end: "bg-green-500 text-white hover:bg-green-600",
-                day_range_middle: "bg-green-500/50 text-white hover:bg-green-500/70",
+                day_selected: "bg-green-500/80 text-white hover:bg-green-600",
+                day_range_start: "bg-green-500/80 text-white hover:bg-green-600",
+                day_range_end: "bg-green-500/80 text-white hover:bg-green-600",
+                day_range_middle: "bg-green-500/60 text-white hover:bg-green-500/70",
                 day_today: "bg-white/20 text-black font-bold hover:bg-white/30",
                 day_outside: "text-white/50 hover:text-white/70",
                 day_disabled: "text-white/30 hover:text-white/30",
@@ -155,7 +167,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
           </div>
           
           {currentDateRange?.from && currentDateRange?.to && (
-            <div className="mt-3 flex items-center gap-4">
+          <div className={`mt-3 flex items-center gap-4 ${isCompact ? 'flex-col items-start' : ''}`}>
               <div className="text-white/80 font-sora text-sm">
                 Selected: {formatDateRange(currentDateRange.from, currentDateRange.to)}
                 
@@ -172,7 +184,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
 
         {/* Leave Periods List */}
         {leavePeriods.length > 0 && (
-          <div className="mb-6">
+          <div className={`mb-6 ${isCompact ? 'space-y-3' : ''}`}>
             <label className="text-white font-sora text-lg font-bold mb-3 block">
               Leave Periods ({leavePeriods.length}):
             </label>
@@ -198,7 +210,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
         )}
 
         {/* Calculate Button */}
-        <div className="mb-6">
+            <div className="mb-6">
           <Button 
             onClick={handleCalculate}
             disabled={leavePeriods.length === 0 || isCalculating}
