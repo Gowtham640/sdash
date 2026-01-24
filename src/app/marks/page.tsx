@@ -11,6 +11,7 @@ import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientC
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { registerAttendanceFetch } from "@/lib/attendancePrefetchScheduler";
 import Particles from '@/components/Particles';
+import { trackPostRequest } from "@/lib/postAnalytics";
 
 interface MarksEntry {
   total: number | null;
@@ -112,10 +113,12 @@ export default function MarksPage() {
 
         if (!cachedPayload) {
           try {
-            const cacheResponse = await fetch('/api/data/cache', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ access_token, data_type: 'marks' })
+            const cacheResponse = await trackPostRequest('/api/data/cache', {
+              action: 'cache_fetch',
+              dataType: 'marks',
+              primary: false,
+              payload: { access_token, data_type: 'marks' },
+              omitPayloadKeys: ['access_token'],
             });
             const cacheResult = await cacheResponse.json();
             if (cacheResult.success && cacheResult.data) {
@@ -139,10 +142,11 @@ export default function MarksPage() {
       if (!cachedPayload || forceRefresh || needsBackgroundRefresh) {
         const requestKey = `fetch_marks_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          const response = await trackPostRequest('/api/data/all', {
+            action: 'data_unified_fetch',
+            dataType: 'marks',
+            payload: getRequestBodyWithPassword(access_token, forceRefresh),
+            omitPayloadKeys: ['password', 'access_token'],
           });
           const result = await response.json();
           return { response, result };

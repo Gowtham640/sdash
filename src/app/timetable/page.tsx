@@ -12,6 +12,7 @@ import type html2canvas from 'html2canvas';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import Particles from "@/components/Particles";
+import { trackPostRequest } from "@/lib/postAnalytics";
 
 interface TimeSlotCell {
   course: string;
@@ -127,13 +128,14 @@ export default function TimetablePage() {
 
       console.log('[Timetable] 🔄 Force refreshing timetable data...');
 
-      const response = await fetch('/api/data/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const response = await trackPostRequest('/api/data/refresh', {
+        action: 'data_refresh',
+        dataType: 'timetable',
+        payload: {
           ...getRequestBodyWithPassword(access_token, false),
           data_type: 'timetable'
-        })
+        },
+        omitPayloadKeys: ['password', 'access_token'],
       });
 
       const result = await response.json();
@@ -255,10 +257,12 @@ export default function TimetablePage() {
           // Client cache expired, fetch Supabase cache (even if expired)
           console.log('[Timetable] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
           try {
-            const result = await fetch('/api/data/cache', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ access_token, data_type: 'timetable' })
+            const result = await trackPostRequest('/api/data/cache', {
+              action: 'cache_fetch',
+              dataType: 'timetable',
+              primary: false,
+              payload: { access_token, data_type: 'timetable' },
+              omitPayloadKeys: ['access_token'],
             });
             const cacheResult = await result.json();
             if (cacheResult.success && cacheResult.data) {
@@ -308,10 +312,11 @@ export default function TimetablePage() {
         // Use request deduplication - ensures only ONE page calls backend at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          const response = await trackPostRequest('/api/data/all', {
+            action: 'data_unified_fetch',
+            dataType: 'user',
+            payload: getRequestBodyWithPassword(access_token, forceRefresh),
+            omitPayloadKeys: ['password', 'access_token'],
           });
 
           const result = await response.json();
@@ -523,10 +528,11 @@ export default function TimetablePage() {
           // Fetch calendar data separately if not in cache
           console.log('[Timetable] 📅 Fetching calendar data for day order stats...');
           try {
-            const calendarResponse = await fetch('/api/data/all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(getRequestBodyWithPassword(access_token, false, ['calendar']))
+            const calendarResponse = await trackPostRequest('/api/data/all', {
+              action: 'data_unified_fetch',
+              dataType: 'calendar',
+              payload: getRequestBodyWithPassword(access_token, false, ['calendar']),
+              omitPayloadKeys: ['password', 'access_token'],
             });
             const calendarResult = await calendarResponse.json();
             if (calendarResult.success && calendarResult.data?.calendar) {

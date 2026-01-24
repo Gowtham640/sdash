@@ -21,6 +21,7 @@ import { trackFeatureClick } from "@/lib/analytics";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
+import { trackPostRequest } from "@/lib/postAnalytics";
 import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, aggregateOdmlHours, type OdmlRecord } from '@/lib/odmlStorage';
 import { normalizeAttendanceData } from '@/lib/dataTransformers';
 import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
@@ -258,10 +259,12 @@ export default function AttendancePage() {
 
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
-        const response = await fetch('/api/data/cache', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ access_token, data_type: 'attendance' })
+        const response = await trackPostRequest('/api/data/cache', {
+          action: 'cache_fetch',
+          dataType: 'attendance',
+          primary: false,
+          payload: { access_token, data_type: 'attendance' },
+          omitPayloadKeys: ['access_token'],
         });
 
         if (!response.ok) {
@@ -605,13 +608,14 @@ export default function AttendancePage() {
 
       console.log('[Attendance] 🔄 Force refreshing attendance data...');
 
-      const response = await fetch('/api/data/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const response = await trackPostRequest('/api/data/refresh', {
+        action: 'data_refresh',
+        dataType: 'attendance',
+        payload: {
           ...getRequestBodyWithPassword(access_token, false),
           data_type: 'attendance'
-        })
+        },
+        omitPayloadKeys: ['password', 'access_token'],
       });
 
       const result = await response.json();
@@ -714,10 +718,11 @@ export default function AttendancePage() {
         // Use request deduplication - ensures only ONE page calls backend at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
         const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await fetch('/api/data/all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getRequestBodyWithPassword(access_token, forceRefresh))
+          const response = await trackPostRequest('/api/data/all', {
+            action: 'data_unified_fetch',
+            dataType: 'attendance',
+            payload: getRequestBodyWithPassword(access_token, forceRefresh),
+            omitPayloadKeys: ['password', 'access_token'],
           });
 
           const result = await response.json();

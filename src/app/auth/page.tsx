@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { storePortalPassword, clearPortalPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
+import { trackPostRequest } from "@/lib/postAnalytics";
 
 // Lazy load LiquidEther to improve initial page load performance
 const LiquidEther = lazy(() => import("@/components/LiquidEther"));
@@ -208,10 +209,11 @@ export default function AuthPage() {
             throw new Error("Credentials missing.");
         }
 
-        const loginResponse = await fetch("/api/auth/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: credentials.email, password: credentials.password }),
+        const loginResponse = await trackPostRequest("/api/auth/login", {
+            action: "login",
+            dataType: "login",
+            payload: { email: credentials.email, password: credentials.password },
+            omitPayloadKeys: ["password"],
         });
         const loginData = await loginResponse.json();
 
@@ -260,10 +262,11 @@ export default function AuthPage() {
             throw new Error("Credentials missing.");
         }
 
-        const checkResponse = await fetch("/api/auth/check-user", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: credentials.email }),
+        const checkResponse = await trackPostRequest("/api/auth/check-user", {
+            action: "auth_check_user",
+            dataType: "user",
+            payload: { email: credentials.email },
+            omitPayloadKeys: ["password"],
         });
 
         if (!checkResponse.ok) {

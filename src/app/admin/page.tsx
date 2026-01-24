@@ -1,7 +1,8 @@
 'use client';
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { getStorageItem } from "@/lib/browserStorage";
 import { Checkbox } from "@/components/ui/checkbox";
+import { trackPostRequest } from "@/lib/postAnalytics";
 import {
   BarChart,
   Bar,
@@ -15,6 +16,7 @@ import {
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
+  Legend,
 } from 'recharts';
 
 type PageType = 'analytics' | 'modifications';
@@ -75,6 +77,8 @@ export default function AdminPage() {
       sessions: number;
       uniqueSessions: number;
       activeSessions: number;
+    totalPostRequests?: number;
+    topDataType?: { type: string; count: number };
     };
     charts?: {
       pageVisitsByPage: Array<{ page: string; count: number }>;
@@ -107,7 +111,17 @@ export default function AdminPage() {
       cache: { min: number; max: number; avg: number };
       api: { min: number; max: number; avg: number };
     };
+  requestAnalytics?: {
+    dataRequestsByType: Array<{ type: string; count: number }>;
+    errorsByReason: Array<{ reason: string; count: number }>;
+    successFailureOverTime: Array<{ date: string; success: number; failure: number }>;
+    loginSummary: { total: number; success: number; failure: number };
+    loginOverTime: Array<{ date: string; success: number; failure: number }>;
+  };
   } | null>(null);
+  const formatDataTypeLabel = (type?: string) =>
+    type ? type.replace(/_/g, " ") : "N/A";
+  const requestAnalyticsData = analyticsData?.requestAnalytics;
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
 
   // Modal state for stat card details
@@ -256,10 +270,12 @@ export default function AdminPage() {
         return;
       }
 
-      const response = await fetch('/api/admin/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ access_token })
+      const response = await trackPostRequest('/api/admin/check', {
+        action: 'admin_access_check',
+        dataType: 'user',
+        primary: false,
+        payload: { access_token },
+        omitPayloadKeys: ['access_token'],
       });
 
       const result = await response.json();
@@ -625,14 +641,16 @@ export default function AdminPage() {
       // Save for all selected courses and semesters
       const course = selectedCourses[0] || 'BTech';
       const semester = selectedSemesters[0] || 1;
-      const response = await fetch('/api/admin/calendar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course: course,
-          semester: semester,
+      const response = await trackPostRequest('/api/admin/calendar', {
+        action: 'admin_calendar_save',
+        dataType: 'calendar',
+        payload: {
+          course,
+          semester,
           calendarData: updatedFullCalendar
-        })
+        },
+        payloadSummary: { course, semester },
+        omitPayloadKeys: ['calendarData'],
       });
 
       const result = await response.json();
@@ -891,7 +909,22 @@ export default function AdminPage() {
                     <div className="relative text-white/90 text-xs font-sora mb-1">Feature Used</div>
                     <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.featureClicks || 0}</div>
                   </div>
+                  <div 
+                    className="relative p-4 backdrop-blur rounded-2xl border border-cyan-400/30 overflow-hidden transition-transform hover:scale-105"
+                    style={{ background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.4) 0%, rgba(14, 165, 233, 0.5) 100%)', boxShadow: '0 4px 15px rgba(56, 189, 248, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)' }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50"></div>
+                    <div className="relative text-white/90 text-xs font-sora mb-1">POST Requests</div>
+                    <div className="relative text-white text-2xl font-sora font-bold">{analyticsData.summary?.totalPostRequests || 0}</div>
+                    <div className="relative text-white/70 text-xs font-sora">
+                      Most requested: {formatDataTypeLabel(analyticsData.summary?.topDataType?.type)}
+                      <span className="block text-white/60 text-[0.65rem] mt-1">
+                        ({analyticsData.summary?.topDataType?.count || 0})
+                      </span>
+                    </div>
                   </div>
+                  </div>
+                  
                   
                   {/* Expandable Additional Stats */}
                   <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 transition-all duration-300 overflow-hidden ${
@@ -1039,6 +1072,89 @@ export default function AdminPage() {
                     </div>
                   )}
                 </div>
+
+                {requestAnalyticsData && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-blue-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(37, 99, 235, 0.4) 100%)', boxShadow: '0 4px 20px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Data Requests</div>
+                      <div className="relative mb-2 text-white/70 text-sm font-sora">Counts per data type</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={requestAnalyticsData.dataRequestsByType}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                            <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={70} />
+                            <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                            <Tooltip contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ color: '#38bdf8', fontFamily: 'Sora' }} />
+                            <Bar dataKey="count" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-rose-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.3) 0%, rgba(225, 29, 72, 0.4) 100%)', boxShadow: '0 4px 20px rgba(244, 63, 94, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Error Reasons</div>
+                      <div className="relative mb-2 text-white/70 text-sm font-sora">Grouped by backend message</div>
+                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={requestAnalyticsData.errorsByReason}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                            <XAxis dataKey="reason" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora', fontSize: 11 }} angle={-45} textAnchor="end" height={80} />
+                            <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                            <Tooltip contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ color: '#fb7185', fontFamily: 'Sora' }} />
+                            <Bar dataKey="count" fill="#fb7185" radius={[8, 8, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {requestAnalyticsData && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    {requestAnalyticsData.successFailureOverTime && requestAnalyticsData.successFailureOverTime.length > 0 && (
+                      <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-emerald-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.4) 100%)', boxShadow: '0 4px 20px rgba(16, 185, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                        <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                        <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Success vs Failure</div>
+                        <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={requestAnalyticsData.successFailureOverTime}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                              <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora', fontSize: 12 }} />
+                              <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                              <Tooltip contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ fontFamily: 'Sora' }} />
+                              <Legend wrapperStyle={{ color: '#ffffff', fontFamily: 'Sora', marginTop: 8 }} />
+                              <Line type="monotone" dataKey="success" stroke="#34d399" strokeWidth={2} dot={{ fill: '#34d399', r: 4 }} isAnimationActive />
+                              <Line type="monotone" dataKey="failure" stroke="#fb7185" strokeWidth={2} dot={{ fill: '#fb7185', r: 4 }} isAnimationActive />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+
+                    {requestAnalyticsData.loginOverTime && requestAnalyticsData.loginOverTime.length > 0 && (
+                      <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-amber-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.4) 100%)', boxShadow: '0 4px 20px rgba(251, 191, 36, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
+                        <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
+                        <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Login Activity</div>
+                        <div className="relative text-white/70 text-sm font-sora mb-2">Success vs failure (per time bucket)</div>
+                        <div className="w-full" style={{ aspectRatio: '16/9' }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={requestAnalyticsData.loginOverTime}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
+                              <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora', fontSize: 12 }} />
+                              <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                              <Tooltip contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ fontFamily: 'Sora' }} />
+                              <Legend wrapperStyle={{ color: '#ffffff', fontFamily: 'Sora', marginTop: 8 }} />
+                              <Bar dataKey="success" stackId="login" fill="#34d399" radius={[8, 8, 0, 0]} />
+                              <Bar dataKey="failure" stackId="login" fill="#fb7185" radius={[8, 8, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Charts Row 1 */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
@@ -1259,23 +1375,6 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  {/* Error Types */}
-                  {analyticsData.charts?.errorTypes && analyticsData.charts.errorTypes.length > 0 && (
-                    <div className="relative p-4 sm:p-6 backdrop-blur rounded-3xl border border-rose-400/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.3) 0%, rgba(225, 29, 72, 0.4) 100%)', boxShadow: '0 4px 20px rgba(244, 63, 94, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' }}>
-                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-60"></div>
-                      <div className="relative text-white text-lg sm:text-xl font-sora font-bold mb-3 sm:mb-4">Error Types</div>
-                      <div className="w-full" style={{ aspectRatio: '16/9' }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={analyticsData.charts.errorTypes}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                          <Bar dataKey="count" fill="#f87171" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
-                        </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 {/* Session Metrics */}

@@ -188,6 +188,8 @@ export async function GET(request: NextRequest) {
         !event.user_id || filteredUserIds.has(event.user_id)
       );
     }
+
+    const postRequestResults = eventRows.filter(event => event.event_name === 'post_request_result');
     
     // Get user count (filtered by semester if specified)
     let userCountQuery = supabaseAdmin
@@ -266,13 +268,6 @@ export async function GET(request: NextRequest) {
     featureClicks.forEach(event => {
       const feature = (event.event_data as { feature?: string } | null)?.feature || event.event_name;
       featureUsage.set(feature, (featureUsage.get(feature) || 0) + 1);
-    });
-    
-    // Error types
-    const errorTypes = new Map<string, number>();
-    errors.forEach(event => {
-      const errorType = (event.event_data as { error_type?: string } | null)?.error_type || 'unknown';
-      errorTypes.set(errorType, (errorTypes.get(errorType) || 0) + 1);
     });
     
     // Response times (cache and API)
@@ -493,7 +488,100 @@ export async function GET(request: NextRequest) {
       }
       return null;
     };
-    
+
+    const primaryPostRequests = postRequestResults.filter(event => {
+      const eventData = event.event_data as { primary_request?: boolean } | null;
+      return eventData?.primary_request !== false;
+    });
+
+    const dataRequestsByTypeMap = new Map<string, number>();
+    const errorReasonMap = new Map<string, number>();
+    const successFailureByBucket = new Map<string, { success: number; failure: number }>();
+    const loginByBucket = new Map<string, { success: number; failure: number }>();
+    timeBuckets.forEach(bucket => {
+      successFailureByBucket.set(bucket.key, { success: 0, failure: 0 });
+      loginByBucket.set(bucket.key, { success: 0, failure: 0 });
+    });
+
+    primaryPostRequests.forEach(event => {
+      const eventData = event.event_data as {
+        success?: boolean;
+        data_type?: string;
+        action?: string;
+        error_reason?: string;
+        status_code?: number;
+      } | null;
+      const success = eventData?.success === true;
+      const dataType = typeof eventData?.data_type === 'string' ? eventData.data_type : 'unknown';
+      dataRequestsByTypeMap.set(dataType, (dataRequestsByTypeMap.get(dataType) || 0) + 1);
+
+      if (!success) {
+        const reason = typeof eventData?.error_reason === 'string' && eventData.error_reason.length > 0
+          ? eventData.error_reason
+          : typeof eventData?.status_code === 'number'
+            ? `status_${eventData.status_code}`
+            : 'unknown_error';
+        errorReasonMap.set(reason, (errorReasonMap.get(reason) || 0) + 1);
+      }
+
+      const bucketKey = event.created_at ? getBucketKey(event.created_at) : null;
+      if (bucketKey) {
+        const bucketStats = successFailureByBucket.get(bucketKey);
+        if (bucketStats) {
+          if (success) bucketStats.success += 1;
+          else bucketStats.failure += 1;
+        }
+
+        if (eventData?.action === 'login') {
+          const loginStats = loginByBucket.get(bucketKey);
+          if (loginStats) {
+            if (success) loginStats.success += 1;
+            else loginStats.failure += 1;
+          }
+        }
+      }
+    });
+
+    const dataRequestsByType = Array.from(dataRequestsByTypeMap.entries())
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const errorsByReason = Array.from(errorReasonMap.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const successFailureOverTime = timeBuckets.map(bucket => {
+      const stats = successFailureByBucket.get(bucket.key);
+      return {
+        date: bucket.label,
+        success: stats?.success ?? 0,
+        failure: stats?.failure ?? 0,
+      };
+    });
+
+    const loginEvents = primaryPostRequests.filter(event => {
+      const eventData = event.event_data as { action?: string } | null;
+      return eventData?.action === 'login';
+    });
+    const loginSuccessCount = loginEvents.filter(event => {
+      const eventData = event.event_data as { success?: boolean } | null;
+      return eventData?.success === true;
+    }).length;
+    const loginSummary = {
+      total: loginEvents.length,
+      success: loginSuccessCount,
+      failure: Math.max(0, loginEvents.length - loginSuccessCount),
+    };
+
+    const loginOverTime = timeBuckets.map(bucket => {
+      const stats = loginByBucket.get(bucket.key);
+      return {
+        date: bucket.label,
+        success: stats?.success ?? 0,
+        failure: stats?.failure ?? 0,
+      };
+    });
+
     // Site opens over time
     const siteOpensOverTime = new Map<string, number>();
     timeBuckets.forEach(bucket => {
@@ -600,6 +688,16 @@ export async function GET(request: NextRequest) {
     const avgDaysPerWeek = daysPerWeek.size > 0
       ? Array.from(daysPerWeek.values()).reduce((a, b) => a + b, 0) / daysPerWeek.size
       : 0;
+
+    const totalPostRequests = primaryPostRequests.length;
+    const topDataType = dataRequestsByType[0] ?? { type: 'unknown', count: 0 };
+    const requestAnalytics = {
+      dataRequestsByType,
+      errorsByReason,
+      successFailureOverTime,
+      loginSummary,
+      loginOverTime,
+    };
     
     return NextResponse.json({
       success: true,
@@ -618,6 +716,8 @@ export async function GET(request: NextRequest) {
           sessions: endedSessionIds.size, // Count of unique session_ids that have ended (deduplicated)
           uniqueSessions: uniqueSessions.size,
           activeSessions: activeSessions.size, // ALL currently active sessions (created but not ended, independent of time range)
+          totalPostRequests,
+          topDataType,
         },
         // Charts data
         charts: {
@@ -645,10 +745,7 @@ export async function GET(request: NextRequest) {
             feature,
             count,
           })),
-          errorTypes: Array.from(errorTypes.entries()).map(([type, count]) => ({
-            type,
-            count,
-          })),
+          errorTypes: errorsByReason,
           pageVisitsOverTime: timeBuckets.map(bucket => ({
             date: bucket.label,
             count: pageVisitsOverTime.get(bucket.key) || 0,
@@ -682,6 +779,7 @@ export async function GET(request: NextRequest) {
             count: uniqueSessionsOverTimeCount.get(bucket.key) || 0,
           })),
         },
+        requestAnalytics,
         // Metrics
         metrics: {
           avgCacheResponseTime: cacheResponseTimes.length > 0
