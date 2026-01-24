@@ -9,6 +9,7 @@ import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
+import Particles from "@/components/Particles";
 
 interface CalendarEvent {
   date: string;
@@ -25,11 +26,27 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [error, setError] = useState<string | null>(null);
-  
+
   // Track errors
   useErrorTracking(error, '/calender');
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+
+  const renderParticleLayer = () => (
+    <div className="fixed inset-0 z-10 pointer-events-none">
+      <Particles
+        particleColors={["#ffffff"]}
+        particleCount={100}
+        particleSpread={20}
+        speed={0.1}
+        particleBaseSize={200}
+        moveParticlesOnHover
+        alphaParticles={false}
+        disableRotation={false}
+        pixelRatio={typeof window !== 'undefined' ? window.devicePixelRatio : 1}
+      />
+    </div>
+  );
 
   // Get current date in DD/MM/YYYY format
   const getCurrentDateString = () => {
@@ -44,11 +61,11 @@ export default function CalendarPage() {
   const getCurrentWeekDates = () => {
     const today = new Date();
     const currentWeek = [];
-    
+
     // Get Monday of current week
     const monday = new Date(today);
     monday.setDate(today.getDate() - today.getDay() + 1);
-    
+
     // Generate all 7 days of current week
     for (let i = 0; i < 7; i++) {
       const date = new Date(monday);
@@ -58,7 +75,7 @@ export default function CalendarPage() {
       const year = date.getFullYear();
       currentWeek.push(`${day}/${month}/${year}`);
     }
-    
+
     return currentWeek;
   };
 
@@ -69,7 +86,7 @@ export default function CalendarPage() {
   // Rotate facts every 8 seconds while loading
   useEffect(() => {
     if (!loading) return;
-    
+
     const interval = setInterval(() => {
       setCurrentFact(getRandomFact());
     }, 8000);
@@ -82,37 +99,37 @@ export default function CalendarPage() {
     if (calendarData.length > 0 && scrollContainerRef) {
       const currentDateStr = getCurrentDateString();
       console.log(`[AUTO-SCROLL] Looking for current date: ${currentDateStr}`);
-      
+
       // Wait for DOM to render
       setTimeout(() => {
         // Find the element with current date
         const currentDateElement = document.querySelector(`[data-date="${currentDateStr}"]`);
-        
+
         if (currentDateElement) {
           console.log(`[AUTO-SCROLL] Found current date element:`, currentDateElement);
-          
+
           // Scroll to the current date element
           currentDateElement.scrollIntoView({
             behavior: 'smooth',
             block: 'center',
             inline: 'nearest'
           });
-          
+
           console.log(`[AUTO-SCROLL] Scrolled to current date`);
         } else {
           console.log(`[AUTO-SCROLL] Current date element not found, trying fallback`);
-          
+
           // Fallback: scroll to a reasonable position (middle of calendar)
           const scrollContainer = scrollContainerRef;
           if (scrollContainer) {
             const maxScroll = scrollContainer.scrollHeight - scrollContainer.clientHeight;
             const middlePosition = maxScroll / 2;
-            
+
             scrollContainer.scrollTo({
               top: middlePosition,
               behavior: 'smooth'
             });
-            
+
             console.log(`[AUTO-SCROLL] Scrolled to middle position: ${middlePosition}`);
           }
         }
@@ -130,7 +147,7 @@ export default function CalendarPage() {
       setError(null);
 
       const access_token = getStorageItem('access_token');
-      
+
       if (!access_token) {
         console.error('[Calendar] No access token found');
         setError('Please sign in to view calendar');
@@ -142,7 +159,7 @@ export default function CalendarPage() {
       // Remove any old calendar cache that might exist
       removeClientCache('calendar');
       console.log('[Calendar] 🗑️ Removed any existing calendar cache (calendar is always fresh)');
-      
+
       // Also check and clean unified cache if it contains calendar data
       const unifiedCache = getClientCache('unified');
       if (unifiedCache && typeof unifiedCache === 'object' && 'data' in unifiedCache) {
@@ -157,7 +174,7 @@ export default function CalendarPage() {
           }
         }
       }
-      
+
       // Fetch all data (like dashboard) to get attendance data for semester extraction
       console.log(`[Calendar] 🚀 Fetching calendar data from API (always fresh from public.calendar)`);
 
@@ -170,20 +187,20 @@ export default function CalendarPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
         });
-        
+
         // Check if response is OK and has content before parsing JSON
         if (!response.ok) {
           const errorText = await response.text().catch(() => 'Unknown error');
           throw new Error(`API request failed with status ${response.status}: ${errorText}`);
         }
-        
+
         // Check if response has content
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
           const text = await response.text();
           throw new Error(`Invalid response format. Expected JSON, got ${contentType}`);
         }
-        
+
         // Parse JSON with error handling
         let result;
         try {
@@ -195,10 +212,10 @@ export default function CalendarPage() {
         } catch (jsonError) {
           throw new Error(`Failed to parse JSON response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
         }
-        
+
         return { response, result };
       });
-      
+
       const response = apiResult.response;
       const result = apiResult.result;
 
@@ -242,45 +259,45 @@ export default function CalendarPage() {
         }
       }
       console.log('[Calendar] 📋 ========================================');
-      
+
       let calendarEvents: CalendarEvent[] | null = null;
-      
-    if (Array.isArray(result.data.calendar)) {
-      // Map JSON format to CalendarEvent interface
-      calendarEvents = result.data.calendar.map((e: any) => ({
-        date: e.date,
-        day_name: e.day_name,
-        content: e.event ?? '',
-        day_order: e.day_order,
-        month: e.month,
-        year: e.year
-      }));
-      console.log('[Calendar] ✅ Calendar data processed');
-      console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
-    } else if (result.data.calendar && typeof result.data.calendar === 'object') {
-      // Check if it's wrapped format: {success: true, data: [...]}
-      if ('success' in result.data.calendar && 'data' in result.data.calendar) {
-        const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
-        const successValue = calendarWrapper.success;
-        const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
-        if (isSuccess && Array.isArray(calendarWrapper.data)) {
-          calendarEvents = calendarWrapper.data;
-          console.log('[Calendar] ✅ Calendar data is wrapped format');
+
+      if (Array.isArray(result.data.calendar)) {
+        // Map JSON format to CalendarEvent interface
+        calendarEvents = result.data.calendar.map((e: any) => ({
+          date: e.date,
+          day_name: e.day_name,
+          content: e.event ?? '',
+          day_order: e.day_order,
+          month: e.month,
+          year: e.year
+        }));
+        console.log('[Calendar] ✅ Calendar data processed');
+        console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
+      } else if (result.data.calendar && typeof result.data.calendar === 'object') {
+        // Check if it's wrapped format: {success: true, data: [...]}
+        if ('success' in result.data.calendar && 'data' in result.data.calendar) {
+          const calendarWrapper = result.data.calendar as { success?: boolean | { data?: CalendarEvent[] }; data?: CalendarEvent[] };
+          const successValue = calendarWrapper.success;
+          const isSuccess = typeof successValue === 'boolean' ? successValue : successValue !== undefined;
+          if (isSuccess && Array.isArray(calendarWrapper.data)) {
+            calendarEvents = calendarWrapper.data;
+            console.log('[Calendar] ✅ Calendar data is wrapped format');
+            console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
+          }
+        }
+        // Check legacy nested format: {data: [...]}
+        else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
+          calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
+          console.log('[Calendar] ✅ Calendar data is legacy nested format');
           console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
         }
       }
-      // Check legacy nested format: {data: [...]}
-      else if ('data' in result.data.calendar && Array.isArray((result.data.calendar as { data?: CalendarEvent[] }).data)) {
-        calendarEvents = (result.data.calendar as { data: CalendarEvent[] }).data;
-        console.log('[Calendar] ✅ Calendar data is legacy nested format');
-        console.log('[Calendar]   - Total events:', calendarEvents?.length ?? 0);
-      }
-    }
-      
+
       if (calendarEvents && calendarEvents.length > 0) {
         // Extract semester from multiple sources with fallbacks
         let extractedSemester: number | null = null;
-        
+
         // 1. Try attendance data first - handle both direct and wrapped formats
         if (result.data.attendance && typeof result.data.attendance === 'object') {
           // Direct format: {metadata: {semester: ...}, ...}
@@ -301,7 +318,7 @@ export default function CalendarPage() {
             extractedSemester = (result.data.attendance as { semester?: number }).semester || null;
             console.log('[Calendar] Semester from attendance.semester (legacy):', extractedSemester);
           }
-        } 
+        }
         // 2. Try response metadata
         else if (result.metadata?.semester) {
           extractedSemester = result.metadata.semester;
@@ -320,16 +337,16 @@ export default function CalendarPage() {
             console.log('[Calendar] Semester from storage cache:', extractedSemester);
           }
         }
-        
+
         // Default to 1 if no semester found
         const finalSemester = extractedSemester || 1;
-        
+
         // Store semester in storage if found
         if (extractedSemester) {
           setStorageItem('user_semester', extractedSemester.toString());
           console.log('[Calendar] 💾 Stored semester in storage:', extractedSemester);
         }
-        
+
         console.log('[Calendar] 📋 Calendar events count:', calendarEvents.length);
         if (calendarEvents.length > 0) {
           console.log('[Calendar] 📋   - First event:', JSON.stringify(calendarEvents[0], null, 2).substring(0, 200));
@@ -350,7 +367,7 @@ export default function CalendarPage() {
         setCalendarData([]);
         // Don't set error, just log it so page remains visible
       }
-      
+
       // Register attendance/marks fetch for smart prefetch scheduling
       if (result.success && (result.data?.attendance?.success || result.data?.marks?.success)) {
         registerAttendanceFetch();
@@ -377,33 +394,33 @@ export default function CalendarPage() {
   };
 
   const displayEvents = convertPythonDataToCalendarEvents(calendarData);
-  
+
   // Calculate day order statistics from current date to Nov 21, 2025
   const getDayOrderStats = () => {
     const stats: { [key: number]: number } = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     const currentDateStr = getCurrentDateString();
     const endDateStr = "21/11/2025";
-    
+
     console.log(`[STATS] Counting from ${currentDateStr} to ${endDateStr}`);
-    
+
     // Parse dates for comparison
     const parseDate = (dateStr: string) => {
       const [day, month, year] = dateStr.split('/').map(Number);
       return new Date(year, month - 1, day);
     };
-    
+
     const currentDate = parseDate(currentDateStr);
     const endDate = parseDate(endDateStr);
-    
+
     displayEvents.forEach(event => {
       if (event.date && event.day_order) {
         const eventDate = parseDate(event.date);
 
         // Skip holidays and days off
         const isHoliday = event.day_order === "-" ||
-                         event.day_order === "DO -" ||
-                         event.day_order === "Holiday" ||
-                         (event.content && event.content.toLowerCase().includes('holiday'));
+          event.day_order === "DO -" ||
+          event.day_order === "Holiday" ||
+          (event.content && event.content.toLowerCase().includes('holiday'));
 
         if (isHoliday) {
           return;
@@ -419,34 +436,34 @@ export default function CalendarPage() {
         }
       }
     });
-    
+
     console.log(`[STATS] Final counts:`, stats);
     return stats;
   };
 
   const dayOrderStats = getDayOrderStats();
-  
+
   const currentWeekDates = getCurrentWeekDates();
   console.log(`Current week dates:`, currentWeekDates);
   console.log(`Today is: ${getCurrentDateString()}`);
-  
+
   // Check if any current week dates exist in calendar data
   const currentWeekInCalendar = displayEvents.filter(event => currentWeekDates.includes(event.date));
   console.log(`Current week events in calendar:`, currentWeekInCalendar.length);
   if (currentWeekInCalendar.length > 0) {
     console.log(`Found current week events:`, currentWeekInCalendar.map(e => e.date));
   }
-  
+
   // Sort events chronologically by date (DD/MM/YYYY format)
   const sortedEvents = displayEvents.sort((a, b) => {
     if (!a.date || !b.date) return 0;
-    
+
     // Parse dates from DD/MM/YYYY format
     const parseDate = (dateStr: string) => {
       const [day, month, year] = dateStr.split('/').map(Number);
       return new Date(year, month - 1, day);
     };
-    
+
     return parseDate(a.date).getTime() - parseDate(b.date).getTime();
   });
 
@@ -473,7 +490,7 @@ export default function CalendarPage() {
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
         <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
         <div className="flex gap-3 sm:gap-4">
-          <button 
+          <button
             onClick={() => fetchUnifiedData()}
             className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm sm:text-base"
           >
@@ -495,63 +512,64 @@ export default function CalendarPage() {
 
   return (
     <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-8">
+      {renderParticleLayer()}
       {/* Home Icon */}
-      <Link 
+      <Link
         href="/dashboard"
         className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
         aria-label="Go to Dashboard"
       >
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          fill="none" 
-          viewBox="0 0 24 24" 
-          strokeWidth={2} 
-          stroke="currentColor" 
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+          stroke="currentColor"
           className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
         </svg>
       </Link>
-      
+
       <div className="flex flex-col items-center gap-4">
         <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
         <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
-          Today&apos;s Date: {getCurrentDateString()} 
+          Today&apos;s Date: {getCurrentDateString()}
         </div>
       </div>
 
-        <div className="relative p-3 sm:p-4 md:p-4.5 lg:p-5 z-10 w-[95vw] sm:w-[92vw] md:w-[90vw] lg:w-[90vw] h-[65vh] sm:h-[68vh] md:h-[69vh] lg:h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center overflow-y-auto">
-          <div 
-            ref={setScrollContainerRef}
-            className="relative overflow-y-auto p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-[90vw] sm:w-[85vw] md:w-[83vw] lg:w-[80vw] h-[55vh] sm:h-[58vh] md:h-[59vh] lg:h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-2 sm:gap-2.5 md:gap-3 lg:gap-3 justify-start items-center"
-          >
-            {sortedEvents.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-4 h-full">
-                <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
-                  No calendar data available
-                </div>
-                <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
-                  Calendar data will be loaded from the server
-                </div>
+      <div className="relative p-3 sm:p-4 md:p-4.5 lg:p-5 z-10 w-[95vw] sm:w-[92vw] md:w-[90vw] lg:w-[90vw] h-[65vh] sm:h-[68vh] md:h-[69vh] lg:h-[70vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center overflow-y-auto">
+        <div
+          ref={setScrollContainerRef}
+          className="relative overflow-y-auto p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-[90vw] sm:w-[85vw] md:w-[83vw] lg:w-[80vw] h-[55vh] sm:h-[58vh] md:h-[59vh] lg:h-[60vh] backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-2 sm:gap-2.5 md:gap-3 lg:gap-3 justify-start items-center"
+        >
+          {sortedEvents.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-4 h-full">
+              <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
+                No calendar data available
               </div>
-            ) : (
-              sortedEvents.map((event, index) => {
+              <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
+                Calendar data will be loaded from the server
+              </div>
+            </div>
+          ) : (
+            sortedEvents.map((event, index) => {
               // Check if it's a holiday based on DO value being "-", "DO -", or "Holiday", or content includes "holiday"
               const isHoliday = event.day_order === "-" || event.day_order === "DO -" || event.day_order === "Holiday" || (event.content && event.content.toLowerCase().includes('holiday'));
-              
+
               // Check if it's the current date
               const currentDateStr = getCurrentDateString();
               const isCurrentDate = event.date === currentDateStr;
-              
+
               // Debug logging for current date detection
               if (isCurrentDate) {
                 console.log(`Current date event found: ${event.date}`);
               }
-              
+
               // Determine background color and text color
               let bgColor = 'bg-white/10';
               let textColor = 'text-white';
-              
+
               if (isCurrentDate) {
                 bgColor = 'bg-white';
                 textColor = 'text-black';
@@ -559,12 +577,12 @@ export default function CalendarPage() {
                 bgColor = 'bg-green-500/80';
                 textColor = 'text-white';
               }
-              
+
               const hoverColor = isCurrentDate ? 'bg-gray-100' : (isHoliday ? 'bg-green-500' : 'bg-white/20');
               const doText = isHoliday ? 'Holiday' : event.day_order;
-              
+
               return (
-                <div 
+                <div
                   key={index}
                   data-date={event.date}
                   className={`relative p-2.5 sm:p-2.5 md:p-3 lg:p-3 z-10 w-[85vw] sm:w-[80vw] md:w-[78vw] lg:w-[76vw] h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-between items-center hover:${hoverColor} transition-colors`}
@@ -576,56 +594,56 @@ export default function CalendarPage() {
                   <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[75px] lg:min-w-[80px] text-right`}>{doText}</p>
                 </div>
               );
-              })
-            )}
-          </div>
+            })
+          )}
         </div>
-        
-        {/* Day Order Statistics */}
-        <div className="w-[95vw] sm:w-[92vw] md:w-[91vw] lg:w-[90vw] bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-5.5 lg:p-6 items-center justify-center gap-3 sm:gap-4 md:gap-4.5 lg:gap-5">
-          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2 text-center">
-            Day Order Statistics
-            </div>
-          <div className="text-white/70 text-xs sm:text-sm font-sora text-center mb-3 sm:mb-4">
-            From {getCurrentDateString()} to 21/11/2025
-            </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-3 sm:gap-4">
-            {[1, 2, 3, 4, 5].map(doNumber => (
-              <div key={doNumber} className="bg-white/20 rounded-2xl p-3 sm:p-3.5 md:p-4 lg:p-4 text-center">
-                <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-1.5 sm:mb-2">
-                  DO {doNumber}
-            </div>
-                <div className="text-green-500 text-xl sm:text-2xl md:text-2xl lg:text-3xl font-sora font-bold">
-                  {dayOrderStats[doNumber]}
-            </div>
-                <div className="text-white/70 text-xs sm:text-sm font-sora">
-                  days left
-            </div>
-          </div> 
-            ))}
-          </div>
-          <div className="text-gray-200 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm"> Note: This is specifically for your course. For general course, please refer to the course calendar.</div>
+      </div>
+
+      {/* Day Order Statistics */}
+      <div className="w-[95vw] sm:w-[92vw] md:w-[91vw] lg:w-[90vw] bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-5.5 lg:p-6 items-center justify-center gap-3 sm:gap-4 md:gap-4.5 lg:gap-5">
+        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2 text-center">
+          Day Order Statistics
         </div>
+        <div className="text-white/70 text-xs sm:text-sm font-sora text-center mb-3 sm:mb-4">
+          From {getCurrentDateString()} to 21/11/2025
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-3 sm:gap-4">
+          {[1, 2, 3, 4, 5].map(doNumber => (
+            <div key={doNumber} className="bg-white/20 rounded-2xl p-3 sm:p-3.5 md:p-4 lg:p-4 text-center">
+              <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora font-bold mb-1.5 sm:mb-2">
+                DO {doNumber}
+              </div>
+              <div className="text-green-500 text-xl sm:text-2xl md:text-2xl lg:text-3xl font-sora font-bold">
+                {dayOrderStats[doNumber]}
+              </div>
+              <div className="text-white/70 text-xs sm:text-sm font-sora">
+                days left
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="text-gray-200 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm"> Note: This is specifically for your course. For general course, please refer to the course calendar.</div>
+      </div>
 
 
-        {/* Re-auth Modal */}
-        {showPasswordModal && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-            <div className="bg-gray-700 rounded-lg p-8 max-w-md w-full mx-4">
-              <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
-              <p className="text-gray-200 mb-6">
-                Your portal session has expired. Please sign in again to continue.
-              </p>
-              <NavigationButton
-                path="/auth"
-                onClick={handleReAuthenticate}
-                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
-              >
-                Sign In
-              </NavigationButton>
-            </div>
+      {/* Re-auth Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-700 rounded-lg p-8 max-w-md w-full mx-4">
+            <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
+            <p className="text-gray-200 mb-6">
+              Your portal session has expired. Please sign in again to continue.
+            </p>
+            <NavigationButton
+              path="/auth"
+              onClick={handleReAuthenticate}
+              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
+            >
+              Sign In
+            </NavigationButton>
           </div>
-        )}
+        </div>
+      )}
     </div>
   );
 }
