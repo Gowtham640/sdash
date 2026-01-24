@@ -13,7 +13,8 @@ import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { normalizeAttendanceData, normalizeMarksData } from "@/lib/dataTransformers";
-import { Calendar, BookOpen, BarChart3, Calculator, User, Settings } from 'lucide-react';
+import { Calendar, BookOpen, BarChart3, Calculator, User, Settings, Github, Linkedin } from 'lucide-react';
+import ShinyText from '@/components/ShinyText';
 import { useRouter } from "next/navigation";
 import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "@/lib/apiTypes";
 import Particles from "@/components/Particles";
@@ -1452,6 +1453,7 @@ export default function Dashboard() {
         )}
       </div>
 
+
       {/* Marks Section */}
       <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
         }`}>
@@ -1517,6 +1519,61 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* Attribution & Links */}
+      <div className="relative z-[200] flex flex-col items-center gap-2 py-6 text-white">
+        <span className="text-white/60 md:text-sm lg:text-base text-[10px] uppercase font-sora tracking-[0.3em]">Made by</span>
+        <div className="grid grid-cols-3 mt-2 text-sm font-sora font-semibold">
+          {/* Gowtham */}
+          <div className="flex flex-col items-center gap-2">
+            <ShinyText text="Gowtham " speed={2} className="text-white lg:text-xl" disabled={false} />
+            <div className="flex items-center gap-3">
+              <a
+                href="https://github.com/Gowtham640"
+                target="_blank"
+                rel="noreferrer"
+                className="text-white/80 hover:text-white"
+              >
+                <Github className="h-5 w-5" />
+              </a>
+              <a
+                href="https://www.linkedin.com/in/gowtham-ramakrishna-rayapureddi-aaa60532a/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-white/80 hover:text-white"
+              >
+                <Linkedin className="h-5 w-5" />
+              </a>
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-2">
+            <ShinyText text="&" speed={2} className="text-white " disabled={false} />
+          </div>
+          {/* Anas */}
+          <div className="flex flex-col items-center gap-2">
+            <ShinyText text="Anas" speed={2} className="text-white lg:text-xl" disabled={false} />
+            <div className="flex items-center gap-3">
+              <a
+                href="https://github.com/SyedMohammadAnas"
+                target="_blank"
+                rel="noreferrer"
+                className="text-white/80 hover:text-white"
+              >
+                <Github className="h-5 w-5" />
+              </a>
+              <a
+                href="https://www.linkedin.com/in/syed-mohammad-anas-a6a8642b7/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-white/80 hover:text-white"
+              >
+                <Linkedin className="h-5 w-5" />
+              </a>
+            </div>
+          </div>
+        </div>
+        <span className="text-white/60 md:text-sm lg:text-base text-[10px] uppercase font-sora tracking-[0.3em]">With hope that this will help you</span>
+
+      </div>
       {/* Re-auth Modal */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">

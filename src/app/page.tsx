@@ -25,7 +25,7 @@ export default function Home() {
         <div className="absolute inset-0 z-0 pointer-events-none">
           <Suspense fallback={null}>
             <LiquidEther
-              colors={[ '#FFFFFF', '#FFFFFF', '#000000' ]}
+              colors={['#FFFFFF', '#FFFFFF', '#000000']}
               mouseForce={20}
               cursorSize={100}
               isViscous={false}
@@ -47,34 +47,44 @@ export default function Home() {
 
       {/* Content - Above LiquidEther */}
       <div className="relative z-10 flex flex-col items-center justify-center gap-6 pointer-events-auto">
-        <div className="text-white text-4xl font-sora font-bold">Informed Decisions are Right decisions</div>
-        <div className="text-gray-200 text-xl font-sora font-light">Make the best decisions with the right context</div>
+        <div className="text-white text-center text-3xl font-sora font-bold">College made easy</div>
+        <div className="text-gray-200 text-sm font-sora font-light">Make the best decisions with the right context</div>
         <NavigationButton
           path="/auth"
           className="w-auto h-[4vh] bg-gray-950 rounded-2xl p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold hover:p-5.5 hover:text-lg transition-all duration-300"
         >
-          <ShinyText 
-            text="Enter" 
-            disabled={false} 
-            speed={3} 
-            className='custom-class' 
+          <ShinyText
+            text="Enter"
+            disabled={false}
+            speed={3}
+            className='custom-class'
           />
         </NavigationButton>
       </div>
 
-      {/* Arcs - Above LiquidEther but below content */}
-      <div className="absolute top-60 left-1/2 -translate-x-1/2 translate-y-1/2 z-20 pointer-events-none
-        w-[100vw] h-[120vh] rounded-[50%] border-[100px]
-        border-green-400
-        rotate-180 shadow-2xl shadow-green-400/30 overflow-hidden"
+      {/* Green arc border */}
+      <div
+        className="pointer-events-none absolute top-40 left-1/2 -translate-x-1/2 translate-y-1/2
+             w-[120vw] h-[140vh] rounded-full
+             border-[180px] border-green-400/70
+             rotate-180 shadow-2xl shadow-green-400/30
+             z-[1]"
       />
-      <div className="absolute top-40 left-1/2 -translate-x-1/2 translate-y-1/2 z-20 pointer-events-none
-        w-[100vw] h-[120vh] rounded-[50%] border-[100px]
-        border-green-400
-        rotate-180 shadow-2xl shadow-green-400/30 overflow-hidden"
-      />
-       {/* Outer glow */}
-       <div className="absolute bottom-0 left-1/2 h-[600px] w-[600px] -translate-x-1/2 translate-y-1/2 rounded-full bg-green-500/20 blur-[100px] z-20 pointer-events-none" />
+
+      {/* Green glow sphere */}
+      <div
+        className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 z-[1]"
+      >
+        <div
+          className="rounded-full"
+          style={{
+            width: "clamp(400px, 60vw, 700px)",
+            height: "clamp(400px, 60vw, 700px)",
+            background: "rgba(34, 197, 94, 0.25)",
+            filter: "blur(120px)",
+          }}
+        />
+      </div>
       {/*<div className="relative z-10 w-[20vw] h-[20vh] backdrop-blur- bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora">HEY</div>*/}
     </div>
   );
