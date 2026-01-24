@@ -125,7 +125,7 @@ export default function PwaInstallPrompt() {
             }
             return;
         }
-        window.open(`/install-instructions?browser=${browserKey}`, "_blank");
+        window.open(`/install-instructions`, "_blank");
         setIsVisible(false);
     }, [promptEvent, browserKey]);
 
@@ -139,7 +139,7 @@ export default function PwaInstallPrompt() {
     }
 
     return (
-        <div className="fixed inset-x-3 bottom-24 z-[110] rounded-2xl border border-white/20 bg-black/80 p-4 shadow-lg backdrop-blur lg:hidden">
+        <div className="fixed font-sora inset-x-3 bottom-24 z-[110] rounded-2xl border border-white/20 bg-black/80 p-4 shadow-lg backdrop-blur lg:hidden">
             <div className="flex flex-col gap-2 text-sm text-white">
                 <p className="text-base font-sora font-semibold">Install SDash</p>
                 <p className="text-xs font-sora text-white/80">Keep SDash on your home screen for faster access.</p>
