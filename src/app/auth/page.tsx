@@ -58,7 +58,7 @@ export default function AuthPage() {
             setError("Sorry all our servers are busy, retry later");
             setStage("login");
             setIsLoading(false);
-        }, 40000);
+        }, 60000);
     };
 
     useEffect(() => {
@@ -247,6 +247,13 @@ export default function AuthPage() {
         return true;
     }, [fetchUserDataSafely]);
 
+    const redirectExistingUser = useCallback(async () => {
+        await performLogin();
+        clearLoginTimeout();
+        setIsLoading(false);
+        router.push("/dashboard");
+    }, [performLogin, router]);
+
     const ensureUserBeforeCaptcha = useCallback(async () => {
         const credentials = credentialsRef.current;
         if (!credentials) {
@@ -266,10 +273,21 @@ export default function AuthPage() {
         const checkData = await checkResponse.json();
         if (!checkData.auth_exists) {
             await performLogin();
-        } else {
-            router.push("/dashboard");
+            return;
         }
-    }, [performLogin, router]);
+
+        if (checkData.public_exists) {
+            await redirectExistingUser();
+            return;
+        }
+
+        const userData = await fetchUserDataSafely();
+        if (userData) {
+            setStorageItem("user", JSON.stringify(userData));
+        } else {
+            console.warn("[Auth Page] User info missing; continuing without it.");
+        }
+    }, [performLogin, router, redirectExistingUser]);
 
     useEffect(() => {
         if (stage !== "colorSuccess" || testIndex !== MEMORY_TESTS.length - 1) {
@@ -532,12 +550,12 @@ export default function AuthPage() {
                         {(stage === "humanCheckbox" || stage === "humanVerifying" || stage === "humanSuccess") && (
                             <div className="w-full flex flex-col gap-3 items-center">
                                 <div className="text-white text-lg font-semibold text-center">Verify you are human</div>
-                                <label className="flex items-center gap-3 bg-gray-900/70 border border-white/20 rounded-2xl px-4 py-3 w-full justify-between">
+                                <label className="flex items-center gap-3 bg-green-900/60 border border-green-500/70 rounded-2xl px-4 py-3 w-full justify-between">
                                     <input
                                         type="checkbox"
                                         onChange={handleHumanCheckboxChange}
                                         disabled={stage !== "humanCheckbox"}
-                                        className="w-5 h-5 rounded border border-gray-500 accent-white bg-transparent"
+                                        className="w-5 h-5 rounded border border-green-500 accent-green-400 bg-transparent"
                                     />
                                     <span className="text-white text-sm font-sora">I confirm I am not a robot</span>
                                 </label>
@@ -550,20 +568,11 @@ export default function AuthPage() {
                             </div>
                         )}
                         {shouldShowMemoryList && (
-                            <div
-                                className="w-full bg-white/5 border border-white/20 rounded-3xl p-4 text-center relative overflow-hidden"
-                                style={{
-                                    transform: listMoved ? "translateY(-120px)" : "translateY(0)",
-                                }}
-                            >
-                                <div className="text-white text-sm font-semibold mb-2">Remember this order</div>
-                                <div className="flex justify-center gap-3">
-                                    {currentOrder.map((color) => (
-                                        <span key={color} className="uppercase text-xs tracking-widest" style={{ color }}>
-                                            {color}
-                                        </span>
-                                    ))}
-                                </div>
+                            <div className="text-white text-sm font-semibold text-center w-full">
+                                Remember this order:{" "}
+                                <span className="uppercase tracking-[0.2em] text-xs font-normal">
+                                    {currentOrder.join(" • ")}
+                                </span>
                             </div>
                         )}
                         {stage === "colorSelection" && (
