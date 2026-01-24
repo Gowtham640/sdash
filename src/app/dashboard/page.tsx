@@ -15,9 +15,11 @@ import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientC
 import { normalizeAttendanceData, normalizeMarksData } from "@/lib/dataTransformers";
 import { Calendar, BookOpen, BarChart3, Calculator, User, Settings, Github, Linkedin } from 'lucide-react';
 import ShinyText from '@/components/ShinyText';
+import PwaInstallPrompt from '@/components/PwaInstallPrompt';
 import { useRouter } from "next/navigation";
 import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "@/lib/apiTypes";
 import Particles from "@/components/Particles";
+import { trackPostRequest } from "@/lib/postAnalytics";
 
 // Import types
 interface CalendarEvent {
@@ -92,10 +94,12 @@ export default function Dashboard() {
     const dataTypes: CachePayloadType[] = ['attendance', 'marks', 'timetable'];
     for (const dataType of dataTypes) {
       try {
-        const cacheResponse = await fetch('/api/data/cache', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ access_token, data_type: dataType }),
+        const cacheResponse = await trackPostRequest('/api/data/cache', {
+          action: 'cache_fetch',
+          dataType,
+          primary: false,
+          payload: { access_token, data_type: dataType },
+          omitPayloadKeys: ['access_token'],
         });
         const cacheResult = await cacheResponse.json();
 
@@ -113,10 +117,11 @@ export default function Dashboard() {
           continue;
         }
 
-        const refreshResponse = await fetch('/api/data/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ access_token, data_type: dataType, password }),
+        const refreshResponse = await trackPostRequest('/api/data/refresh', {
+          action: 'data_refresh',
+          dataType,
+          payload: { access_token, data_type: dataType, password },
+          omitPayloadKeys: ['password', 'access_token'],
         });
         const refreshResult = await refreshResponse.json();
 
@@ -315,10 +320,11 @@ export default function Dashboard() {
         return;
       }
 
-      const response = await fetch('/api/admin/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ access_token })
+      const response = await trackPostRequest('/api/admin/check', {
+        action: 'admin_access_check',
+        dataType: 'user',
+        payload: { access_token },
+        omitPayloadKeys: ['access_token'],
       });
 
       const result = await response.json();
@@ -364,7 +370,10 @@ export default function Dashboard() {
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await trackPostRequest('/api/auth/logout', {
+        action: 'logout',
+        dataType: 'user',
+      });
     } catch (err) {
       console.error('[Dashboard] Logout failed:', err);
     } finally {
@@ -489,10 +498,11 @@ export default function Dashboard() {
             console.log(`[Dashboard] 🚀 Fetching from API ${fetchType} (attempt ${attempt}/${maxRetries})`);
             apiStartTime = Date.now();
 
-            finalResponse = await fetch('/api/data/all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(requestBody)
+            finalResponse = await trackPostRequest('/api/data/all', {
+              action: 'data_unified_fetch',
+              dataType: 'user',
+              payload: requestBody,
+              omitPayloadKeys: ['password', 'access_token'],
             });
 
             const apiDuration = Date.now() - apiStartTime;
@@ -573,10 +583,11 @@ export default function Dashboard() {
             } else {
               // Password became available - retry one more time
               console.log('[Dashboard] 🔄 Password available on final check, retrying...');
-              const retryResponse = await fetch('/api/data/all', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody)
+              const retryResponse = await trackPostRequest('/api/data/all', {
+                action: 'data_unified_fetch',
+                dataType: 'user',
+                payload: requestBody,
+                omitPayloadKeys: ['password', 'access_token'],
               });
               const retryResult = await retryResponse.json();
 
@@ -1574,6 +1585,7 @@ export default function Dashboard() {
         <span className="text-white/60 md:text-sm lg:text-base text-[10px] uppercase font-sora tracking-[0.3em]">With hope that this will help you</span>
 
       </div>
+      <PwaInstallPrompt />
       {/* Re-auth Modal */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">

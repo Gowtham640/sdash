@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
-import { initializeAnalytics, trackPageView } from '@/lib/analytics';
+import { initializeAnalytics, trackPageView, trackEvent } from '@/lib/analytics';
 // import { startKeepWarm } from '@/lib/scraperClient'; // TODO: Implement keep-warm functionality
 
 /**
@@ -27,6 +27,11 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
     // Track page view only on actual route change (not rerenders)
     // The trackPageView function has built-in deduplication, so we can call it safely
     if (pathname && pathname !== lastPathnameRef.current) {
+      const previousPath = lastPathnameRef.current;
+      trackEvent('navigation_flow', {
+        from: previousPath ?? 'unknown',
+        to: pathname,
+      });
       lastPathnameRef.current = pathname;
       trackPageView(pathname);
     }

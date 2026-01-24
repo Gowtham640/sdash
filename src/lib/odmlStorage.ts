@@ -3,6 +3,8 @@
  * Helper functions for managing ODML records
  */
 
+import { trackPostRequest } from "@/lib/postAnalytics";
+
 export interface OdmlRecord {
   id: string;
   user_id: string;
@@ -56,17 +58,21 @@ export async function saveOdmlRecord(
   subject_hours: Record<string, number>
 ): Promise<OdmlRecord | null> {
   try {
-    const response = await fetch('/api/odml', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${access_token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        period_from: period_from.toISOString().split('T')[0], // YYYY-MM-DD format
+    const response = await trackPostRequest('/api/odml', {
+      action: 'odml_save',
+      dataType: 'user',
+      payload: {
+        period_from: period_from.toISOString().split('T')[0],
         period_to: period_to.toISOString().split('T')[0],
         subject_hours
-      })
+      },
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+      },
+      omitPayloadKeys: [],
+      payloadSummary: {
+        subject_hours: Object.keys(subject_hours).length,
+      },
     });
 
     const result = await response.json();

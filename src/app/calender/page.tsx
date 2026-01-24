@@ -9,6 +9,7 @@ import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
+import { trackPostRequest } from "@/lib/postAnalytics";
 import Particles from "@/components/Particles";
 
 interface CalendarEvent {
@@ -182,10 +183,11 @@ export default function CalendarPage() {
       // Calendar is always fetched fresh from public.calendar table regardless
       const requestKey = `fetch_calendar_${access_token.substring(0, 10)}`;
       const apiResult = await deduplicateRequest(requestKey, async () => {
-        const response = await fetch('/api/data/all', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(getRequestBodyWithPassword(access_token, false))
+        const response = await trackPostRequest('/api/data/all', {
+          action: 'data_unified_fetch',
+          dataType: 'user',
+          payload: getRequestBodyWithPassword(access_token, false),
+          omitPayloadKeys: ['password', 'access_token'],
         });
 
         // Check if response is OK and has content before parsing JSON
