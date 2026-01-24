@@ -4,6 +4,8 @@
  */
 
 import { requestQueueTracker } from "@/lib/requestQueue";
+import type { CacheDataType } from "@/lib/supabaseCache";
+import { fetchUserCacheEntries } from "@/lib/userCacheReader";
 import { getStorageItem, setStorageItem, removeStorageItem } from "./browserStorage";
 
 // Get backend URL from environment variables
@@ -38,17 +40,22 @@ if (typeof window === 'undefined') {
 // Storage key for backend session cookies
 const BACKEND_COOKIES_KEY = 'backend_scraper_cookies';
 
+export type ScraperUserType = 'new' | 'old';
+
 export interface ScraperRequest {
   email: string;
   password?: string;
   force_refresh?: boolean;
   user_id?: string;
+  userId?: string;
+  requestedType?: CacheDataType;
+  userType?: ScraperUserType;
 }
 
 export interface ScraperResponse<T = unknown> {
   success: boolean;
   data?: T;
-  error?: string;
+  reason?: string;
   cached?: boolean;
   count?: number;
 }
@@ -90,6 +97,34 @@ export interface GoBackendLoginRequest {
   captcha?: string;
 }
 
+function buildBackendRequestPayload(data: ScraperRequest): Record<string, unknown> {
+  const userId = data.userId ?? data.user_id ?? '';
+  const payload: Record<string, unknown> = {
+    userId,
+    email: data.email,
+    userType: data.userType ?? 'old',
+  };
+
+  if (userId) {
+    payload.user_id = userId;
+  }
+
+  if (data.password !== undefined) {
+    payload.password = data.password;
+  }
+
+  if (data.force_refresh !== undefined) {
+    payload.force_refresh = data.force_refresh;
+    payload.forceRefresh = data.force_refresh;
+  }
+
+  if (data.requestedType) {
+    payload.dataType = data.requestedType;
+  }
+
+  return payload;
+}
+
 function buildLoginPayload(email: string, password?: string) {
   return {
     email,
@@ -111,6 +146,69 @@ export interface GoBackendUserData {
   department: string;
   section: string;
   specialization: string;
+}
+
+const ACTION_CACHE_TYPE_MAP: Record<string, CacheDataType | null> = {
+  get_attendance_data: 'attendance',
+  get_marks_data: 'marks',
+  get_timetable_data: 'timetable',
+  get_calendar_data: 'calendar',
+};
+
+function getCacheTypeForAction(action: string): CacheDataType | null {
+  return ACTION_CACHE_TYPE_MAP[action] ?? null;
+}
+
+async function determineUserType(
+  userId: string | undefined,
+  requestedType?: CacheDataType | null
+): Promise<ScraperUserType> {
+  if (!userId || !requestedType) {
+    return 'old';
+  }
+
+  try {
+    const entries = await fetchUserCacheEntries(userId, [requestedType]);
+    const entry = entries[requestedType];
+    return entry && entry.data ? 'old' : 'new';
+  } catch (error) {
+    console.error(`[ScraperClient] Failed to read cache entry for ${requestedType}:`, error);
+    return 'old';
+  }
+}
+
+export async function hydrateCacheEntry(
+  userId: string,
+  dataType: CacheDataType
+): Promise<{
+  success: boolean;
+  data: unknown | null;
+  data_type: CacheDataType;
+  expiresAt: string | null;
+  isExpired: boolean;
+}> {
+  try {
+    const entries = await fetchUserCacheEntries(userId, [dataType]);
+    const entry = entries[dataType];
+    const expiresAt = entry?.expiresAt ?? null;
+    const isExpired = expiresAt ? new Date() > new Date(expiresAt) : false;
+    return {
+      success: true,
+      data: entry?.data ?? null,
+      data_type: dataType,
+      expiresAt,
+      isExpired,
+    };
+  } catch (error) {
+    console.error(`[ScraperClient] Failed to hydrate cache entry for ${dataType}:`, error);
+    return {
+      success: false,
+      data: null,
+      data_type: dataType,
+      expiresAt: null,
+      isExpired: true,
+    };
+  }
 }
 
 /**
@@ -764,14 +862,14 @@ export async function fetchDataFromGoBackend(
 function getEndpointForAction(action: string): { method: string; path: string } | null {
   const endpointMap: Record<string, { method: string; path: string }> = {
     'validate_credentials': { method: 'POST', path: '/login' },
-    'get_attendance_data': { method: 'GET', path: '/attendance' },
-    'get_marks_data': { method: 'GET', path: '/marks' },
-    'get_timetable_data': { method: 'GET', path: '/timetable' },
-    'get_calendar_data': { method: 'GET', path: '/calendar' },
-    'get_user_data': { method: 'GET', path: '/user' },
-    'get_all_data': { method: 'GET', path: '/get' },
-    'get_static_data': { method: 'GET', path: '/get' }, // Will handle separately
-    'get_dynamic_data': { method: 'GET', path: '/get' }, // Will handle separately
+    'get_attendance_data': { method: 'POST', path: '/attendance' },
+    'get_marks_data': { method: 'POST', path: '/marks' },
+    'get_timetable_data': { method: 'POST', path: '/timetable' },
+    'get_calendar_data': { method: 'POST', path: '/calendar' },
+    'get_user_data': { method: 'POST', path: '/user' },
+    'get_all_data': { method: 'POST', path: '/get' },
+    'get_static_data': { method: 'POST', path: '/get' },
+    'get_dynamic_data': { method: 'POST', path: '/get' },
   };
 
   return endpointMap[action] || null;
@@ -798,16 +896,36 @@ export async function callBackendScraper<T = unknown>(
   console.log(`[Backend Client]   👤 Email: ${data.email}`);
   console.log(`[Backend Client]   🔑 Password: ${data.password ? "✓ Provided (" + data.password.length + " chars)" : "✗ Not provided"}`);
   console.log(`[Backend Client]   🔄 Force refresh: ${data.force_refresh || false}`);
-  console.log(`[Backend Client]   🆔 User ID: ${data.user_id || 'none'}`);
+  console.log(`[Backend Client]   🆔 User ID: ${data.user_id || data.userId || 'none'}`);
   console.log(`[Backend Client]   📊 Request ID: ${Date.now()}`);
+
+  const normalizedUserId = data.user_id ?? data.userId;
+  const targetDataType = data.requestedType ?? getCacheTypeForAction(action);
+  const resolvedUserType = await determineUserType(normalizedUserId, targetDataType);
+  const requestPayload: ScraperRequest = {
+    ...data,
+    userType: data.userType ?? resolvedUserType,
+  };
+
+  if (normalizedUserId) {
+    requestPayload.userId = normalizedUserId;
+    requestPayload.user_id = normalizedUserId;
+  }
+
+  if (targetDataType) {
+    requestPayload.requestedType = targetDataType;
+  }
+
+  console.log(`[Backend Client]   📦 Target data type: ${targetDataType || 'bulk/unknown'}`);
+  console.log(`[Backend Client]   🧭 Resolved userType: ${requestPayload.userType}`);
 
   try {
     // Handle special cases for get_static_data and get_dynamic_data
     if (action === 'get_static_data') {
       // Fetch timetable and calendar separately
       const [timetableResult, calendarResult] = await Promise.all([
-        callGoEndpoint('GET', '/timetable', data),
-        callGoEndpoint('GET', '/calendar', data),
+        callGoEndpoint('POST', '/timetable', requestPayload, controller),
+        callGoEndpoint('POST', '/calendar', requestPayload, controller),
       ]);
 
       const staticData = {
@@ -816,10 +934,10 @@ export async function callBackendScraper<T = unknown>(
           timetable: timetableResult.success ? timetableResult.data : null,
           calendar: calendarResult.success ? calendarResult.data : null,
         },
-        error: !timetableResult.success && !calendarResult.success
-          ? `Timetable: ${timetableResult.error || 'Unknown'}, Calendar: ${calendarResult.error || 'Unknown'}`
+        reason: !timetableResult.success && !calendarResult.success
+          ? `Timetable: ${timetableResult.reason || 'Unknown'}, Calendar: ${calendarResult.reason || 'Unknown'}`
           : undefined,
-      } as ScraperResponse<T>;
+      } as unknown as ScraperResponse<T>;
 
       clearTimeout(timeoutId);
       const totalDuration = Date.now() - requestStartTime;
@@ -831,8 +949,8 @@ export async function callBackendScraper<T = unknown>(
     if (action === 'get_dynamic_data') {
       // Fetch attendance and marks separately
       const [attendanceResult, marksResult] = await Promise.all([
-        callGoEndpoint('GET', '/attendance', data),
-        callGoEndpoint('GET', '/marks', data),
+        callGoEndpoint('POST', '/attendance', requestPayload, controller),
+        callGoEndpoint('POST', '/marks', requestPayload, controller),
       ]);
 
       const dynamicData = {
@@ -841,10 +959,10 @@ export async function callBackendScraper<T = unknown>(
           attendance: attendanceResult.success ? attendanceResult.data : null,
           marks: marksResult.success ? marksResult.data : null,
         },
-        error: !attendanceResult.success && !marksResult.success
-          ? `Attendance: ${attendanceResult.error || 'Unknown'}, Marks: ${marksResult.error || 'Unknown'}`
+        reason: !attendanceResult.success && !marksResult.success
+          ? `Attendance: ${attendanceResult.reason || 'Unknown'}, Marks: ${marksResult.reason || 'Unknown'}`
           : undefined,
-      } as ScraperResponse<T>;
+      } as unknown as ScraperResponse<T>;
 
       clearTimeout(timeoutId);
       const totalDuration = Date.now() - requestStartTime;
@@ -859,12 +977,12 @@ export async function callBackendScraper<T = unknown>(
       clearTimeout(timeoutId);
       return {
         success: false,
-        error: `Unknown action: ${action}`,
+        reason: `Unknown action: ${action}`,
       };
     }
 
     // Call the Go backend endpoint
-    const result = await callGoEndpoint<T>(endpoint.method, endpoint.path, data, controller);
+    const result = await callGoEndpoint<T>(endpoint.method, endpoint.path, requestPayload, controller);
     clearTimeout(timeoutId);
 
     const totalDuration = Date.now() - requestStartTime;
@@ -884,7 +1002,7 @@ export async function callBackendScraper<T = unknown>(
       console.error(`[Backend Client]   - Email: ${data.email}`);
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-      return { success: false, error: 'Request timeout after 60 seconds' };
+      return { success: false, reason: 'Request timeout after 60 seconds' };
     }
 
     console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -900,7 +1018,7 @@ export async function callBackendScraper<T = unknown>(
 
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      reason: error instanceof Error ? error.message : 'Unknown error',
     };
   } finally {
     // Unregister backend request when done (success or failure)
@@ -970,7 +1088,7 @@ async function callGoEndpoint<T = unknown>(
     }
   });
 
-  const requestBody = buildLoginPayload(data.email, data.password);
+  const requestBody = buildBackendRequestPayload(data);
 
   // Build request options
   const requestOptions: RequestInit = {
@@ -984,16 +1102,16 @@ async function callGoEndpoint<T = unknown>(
 
   // For POST requests (login), include body
   // Note: Login should use loginToGoBackend() function instead
+  console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));
+
   if (method === 'POST' && path === '/login') {
-    // This shouldn't be called directly - use loginToGoBackend() instead
     console.warn(`[Backend Client] ⚠️ Direct POST to /login - use loginToGoBackend() instead`);
     requestOptions.body = JSON.stringify(requestBody);
-    console.log(`[Backend Client] 📦 REQUEST BODY:`, JSON.stringify(requestBody, null, 2));
+    console.log(`[Backend Client] 📦 REQUEST BODY ATTACHED (${method})`);
   } else if (method !== 'GET' && method !== 'HEAD') {
     requestOptions.body = JSON.stringify(requestBody);
     console.log(`[Backend Client] 📦 REQUEST BODY ATTACHED (${method})`);
   } else {
-    // For GET/HEAD requests we do NOT attach a body
     console.log(`[Backend Client] 🚫 GET/HEAD detected: Skipping body attachment to prevent Node.js crash.`);
   }
 
@@ -1009,7 +1127,7 @@ async function callGoEndpoint<T = unknown>(
     console.error(`[Backend Client]   - Error: ${fetchError}`);
     return {
       success: false,
-      error: `Network error: ${fetchError instanceof Error ? fetchError.message : 'Failed to connect to backend'}`,
+      reason: `Network error: ${fetchError instanceof Error ? fetchError.message : 'Failed to connect to backend'}`,
     };
   }
 
@@ -1033,7 +1151,7 @@ async function callGoEndpoint<T = unknown>(
     clearBackendCookies();
     return {
       success: false,
-      error: 'Session expired. Please re-login.',
+      reason: 'Session expired. Please re-login.',
     };
   }
 
@@ -1042,7 +1160,7 @@ async function callGoEndpoint<T = unknown>(
     console.error(`[Backend Client] ❌ 429 Too Many Requests - Rate limit exceeded`);
     return {
       success: false,
-      error: 'Rate limit exceeded. Please wait 1 minute before retrying.',
+      reason: 'Rate limit exceeded. Please wait 1 minute before retrying.',
     };
   }
 
@@ -1058,13 +1176,13 @@ async function callGoEndpoint<T = unknown>(
     if (response.status === 404) {
       return {
         success: false,
-        error: `Endpoint not found: ${method} ${fullUrl}. Please verify the Go backend is running at ${backendBaseUrl} and the endpoint ${path} exists.`,
+        reason: `Endpoint not found: ${method} ${fullUrl}. Please verify the Go backend is running at ${backendBaseUrl} and the endpoint ${path} exists.`,
       };
     }
 
     return {
       success: false,
-      error: `Backend error: ${response.status} ${response.statusText}`,
+      reason: `Backend error: ${response.status} ${response.statusText}`,
     };
   }
 
@@ -1075,53 +1193,40 @@ async function callGoEndpoint<T = unknown>(
   console.log(`[Backend Client] 📊 Response parsed: ${parseDuration}ms`);
   console.log(`[Backend Client] 📦 RESPONSE BODY:`, JSON.stringify(responseData, null, 2));
 
-  // Handle different response formats
-  // Go backend might return:
-  // 1. {status, error, ...data} format (e.g., attendance: {status: 200, error: null, attendance: [...], regNumber: ...})
-  // 2. {success, data, error} format (legacy)
-  // 3. Data directly
   let result: ScraperResponse<T>;
 
   if (responseData && typeof responseData === 'object') {
-    // Check if response has Go backend format with status field
-    if ('status' in responseData) {
+    if ('success' in responseData) {
+      result = {
+        success: responseData.success !== false,
+        data: responseData.data as T,
+        reason: typeof responseData.reason === 'string' ? responseData.reason : undefined,
+        cached: responseData.cached,
+        count: responseData.count,
+      };
+    } else if ('status' in responseData) {
       const status = responseData.status as number;
       const error = responseData.error as string | null | undefined;
 
-      // If status is 200 and no error, it's successful
       if (status === 200 && !error) {
-        // The data is the response itself (minus status/error fields)
         const { status: _status, error: _error, ...dataFields } = responseData;
         result = {
           success: true,
           data: dataFields as T,
         };
       } else {
-        // Error response
         result = {
           success: false,
-          error: error || `Backend returned status ${status}`,
+          reason: error || `Backend returned status ${status}`,
         };
       }
-    }
-    // Check if response already has success/data/error structure (legacy format)
-    else if ('success' in responseData || 'data' in responseData || 'error' in responseData) {
-      result = {
-        success: responseData.success !== false,
-        data: responseData.data as T,
-        error: responseData.error,
-        cached: responseData.cached,
-        count: responseData.count,
-      };
     } else {
-      // Response is the data directly
       result = {
         success: true,
         data: responseData as T,
       };
     }
   } else {
-    // Response is not an object, wrap it
     result = {
       success: true,
       data: responseData as T,
@@ -1129,7 +1234,7 @@ async function callGoEndpoint<T = unknown>(
   }
 
   console.log(`[Backend Client]   - Success: ${result.success}`);
-  console.log(`[Backend Client]   - Error: ${result.error || "none"}`);
+  console.log(`[Backend Client]   - Reason: ${result.reason || "none"}`);
   console.log(`[Backend Client]   - Cached: ${result.cached || false}`);
 
   return result;
