@@ -175,11 +175,19 @@ export default function AuthPage() {
         setIsLoading(true);
         setShowDisclaimer(false);
         setTestIndex(0);
-        setStage("initialDelay");
-        startLoginTimeout();
+
 
         try {
-            await ensureUserBeforeCaptcha();
+            const checkData = await ensureUserBeforeCaptcha();
+            if (checkData.auth_exists && checkData.public_exists) {
+                setStage("login");
+                setIsLoading(false);
+                clearLoginTimeout();
+                router.push("/dashboard");
+                return;
+            }
+            setStage("initialDelay");
+            startLoginTimeout();
         } catch (err) {
             console.error("[Auth Page] Pre-login error:", err);
             setError(err instanceof Error ? err.message : "Login check failed.");
@@ -203,7 +211,7 @@ export default function AuthPage() {
         }
     }, []);
 
-    const performLogin = useCallback(async () => {
+    const performLogin = useCallback(async ({ skipFetchUserData = false }: { skipFetchUserData?: boolean } = {}) => {
         const credentials = credentialsRef.current;
         if (!credentials) {
             throw new Error("Credentials missing.");
@@ -236,13 +244,15 @@ export default function AuthPage() {
         const loginTimestamp = Date.now();
         setStorageItem("login_timestamp", loginTimestamp.toString());
 
-        const userData = await fetchUserDataSafely();
-        if (!userData) {
-            console.warn("[Auth Page] User info not available after login.");
-        } else {
-            const userStored = setStorageItem("user", JSON.stringify(userData));
-            if (!userStored) {
-                console.warn("[Auth Page] Failed to store user data after login.");
+        if (!skipFetchUserData) {
+            const userData = await fetchUserDataSafely();
+            if (!userData) {
+                console.warn("[Auth Page] User info not available after login.");
+            } else {
+                const userStored = setStorageItem("user", JSON.stringify(userData));
+                if (!userStored) {
+                    console.warn("[Auth Page] Failed to store user data after login.");
+                }
             }
         }
 
@@ -250,7 +260,7 @@ export default function AuthPage() {
     }, [fetchUserDataSafely]);
 
     const redirectExistingUser = useCallback(async () => {
-        await performLogin();
+        await performLogin({ skipFetchUserData: true });
         clearLoginTimeout();
         setIsLoading(false);
         router.push("/dashboard");
@@ -276,12 +286,12 @@ export default function AuthPage() {
         const checkData = await checkResponse.json();
         if (!checkData.auth_exists) {
             await performLogin();
-            return;
+            return checkData;
         }
 
         if (checkData.public_exists) {
             await redirectExistingUser();
-            return;
+            return checkData;
         }
 
         const userData = await fetchUserDataSafely();
@@ -290,7 +300,8 @@ export default function AuthPage() {
         } else {
             console.warn("[Auth Page] User info missing; continuing without it.");
         }
-    }, [performLogin, router, redirectExistingUser]);
+        return checkData;
+    }, [performLogin, router, redirectExistingUser, fetchUserDataSafely]);
 
     useEffect(() => {
         if (stage !== "colorSuccess" || testIndex !== MEMORY_TESTS.length - 1) {
