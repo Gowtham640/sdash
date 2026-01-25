@@ -1,16 +1,25 @@
 'use client';
 
+import type { ComponentProps, ComponentType } from 'react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { BookOpen, CalendarDays, ListCheck, ClipboardList, MoreHorizontal, Calculator } from 'lucide-react';
+import { BookOpen, CalendarDays, ListCheck, ClipboardList, MoreHorizontal, Calculator, Home } from 'lucide-react';
 
-const BOTTOM_ITEMS = [
-    { label: 'Attendance', href: '/attendance', icon: ListCheck },
-    { label: 'Timetable', href: '/timetable', icon: BookOpen },
-    { label: 'Marks', href: '/marks', icon: ClipboardList },
-    { label: 'Calendar', href: '/calender', icon: CalendarDays }
-];
+const DATA_NAV_ORDER = ['attendance', 'timetable', 'marks', 'calender'] as const;
+
+type NavIcon = ComponentType<ComponentProps<typeof Home>>;
+
+const NAV_ITEMS_BY_ID: Record<
+    'dashboard' | typeof DATA_NAV_ORDER[number],
+    { label: string; href: string; icon: NavIcon }
+> = {
+    dashboard: { label: 'Dashboard', href: '/dashboard', icon: Home },
+    attendance: { label: 'Attendance', href: '/attendance', icon: ListCheck },
+    timetable: { label: 'Timetable', href: '/timetable', icon: BookOpen },
+    marks: { label: 'Marks', href: '/marks', icon: ClipboardList },
+    calender: { label: 'Calendar', href: '/calender', icon: CalendarDays }
+};
 
 const ALLOWED_PATHS = [
     '/attendance',
@@ -36,6 +45,21 @@ const BottomNavigationBar = () => {
 
     if (!visible) return null;
 
+    const currentDataPageId = DATA_NAV_ORDER.find((id) => {
+        const item = NAV_ITEMS_BY_ID[id];
+        return pathname === item.href || pathname?.startsWith(`${item.href}/`);
+    });
+
+    const filteredDataOrder = DATA_NAV_ORDER.filter(
+        (id): id is typeof DATA_NAV_ORDER[number] => id !== currentDataPageId
+    );
+
+    const navSequence: Array<'dashboard' | typeof DATA_NAV_ORDER[number]> = currentDataPageId
+        ? ['dashboard', ...filteredDataOrder]
+        : [...DATA_NAV_ORDER];
+
+    const renderedItems = navSequence.map((id) => NAV_ITEMS_BY_ID[id]);
+
     return (
         <>
             {/* Dummy spacer (same height as nav) keeps page content visible above fixed bar */}
@@ -43,7 +67,7 @@ const BottomNavigationBar = () => {
             <div className="fixed bottom-0 left-0 right-0 z-[90] w-full border-t border-white/20 bg-black font-sora lg:hidden">
                 <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 text-white">
                     <div className="flex w-full items-center justify-between gap-2">
-                        {BOTTOM_ITEMS.map(item => (
+                        {renderedItems.map(item => (
                             <Link
                                 key={item.href}
                                 href={item.href}

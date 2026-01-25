@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence, type TimetableData, type CalendarEvent } from '@/lib/timetableUtils';
@@ -213,9 +213,35 @@ const loadSlotOccurrencesFromLocalStorage = (): SlotOccurrence[] => {
   return [];
 };
 
+interface AttendanceCacheSnapshot {
+  attendanceData: AttendanceData | null;
+  calendarData: CalendarEvent[];
+  slotOccurrences: SlotOccurrence[];
+  dayOrderStats: DayOrderStats | null;
+}
+
+const getInitialAttendanceCacheSnapshot = (): AttendanceCacheSnapshot => {
+  const attendanceData = getClientCache<AttendanceData>('attendance');
+  const calendarData = getClientCache<CalendarEvent[]>('calendar') ?? [];
+  const timetableCache = getClientCache<TimetableData>('timetable');
+  const slotOccurrencesFromTimetable = timetableCache ? getSlotOccurrences(timetableCache) : [];
+  const slotOccurrences =
+    slotOccurrencesFromTimetable.length > 0 ? slotOccurrencesFromTimetable : loadSlotOccurrencesFromLocalStorage();
+  const dayOrderStats =
+    calendarData.length > 0 ? getDayOrderStats(calendarData) : loadDayOrderStatsFromLocalStorage();
+
+  return {
+    attendanceData: attendanceData ?? null,
+    calendarData,
+    slotOccurrences,
+    dayOrderStats,
+  };
+};
+
 export default function AttendancePage() {
-  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialAttendanceCache = useMemo(() => getInitialAttendanceCacheSnapshot(), []);
+  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(initialAttendanceCache.attendanceData);
+  const [loading, setLoading] = useState(!initialAttendanceCache.attendanceData);
   const [error, setError] = useState<string | null>(null);
 
   // Track errors
@@ -223,11 +249,11 @@ export default function AttendancePage() {
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
-  const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
-  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
+  const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(initialAttendanceCache.dayOrderStats);
+  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>(initialAttendanceCache.slotOccurrences);
   const [subjectRemainingHours, setSubjectRemainingHours] = useState<Array<Record<string, unknown>>>([]);
   const [showPredictionModal, setShowPredictionModal] = useState(false);
-  const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
+  const [calendarData, setCalendarData] = useState<CalendarEvent[]>(initialAttendanceCache.calendarData);
   const [semester, setSemester] = useState<number>(1); // Default to semester 1
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [predictionResults, setPredictionResults] = useState<PredictionResult[]>([]);
@@ -240,21 +266,21 @@ export default function AttendancePage() {
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
-  const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(null); // Store original data
+  const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(initialAttendanceCache.attendanceData); // Store original data
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
-  const applyAttendanceDataPayload = (payload: AttendanceData) => {
+  const applyAttendanceDataPayload = (payload: AttendanceData, options?: { expiresAt?: string | null }) => {
     setAttendanceData(payload);
     setOriginalAttendanceData(payload);
     setSemester(payload.metadata?.semester || 1);
-    setClientCache('attendance', payload);
+    setClientCache('attendance', payload, { expiresAt: options?.expiresAt ?? null });
   };
 
   const fetchAttendanceDataFromSupabase = async (
     access_token: string,
     options: { maxRetries?: number; retryDelayMs?: number } = {}
-  ): Promise<{ data: AttendanceData | null; isExpired: boolean }> => {
+  ): Promise<{ data: AttendanceData | null; isExpired: boolean; expiresAt: string | null }> => {
     const { maxRetries = 1, retryDelayMs = 0 } = options;
 
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
@@ -277,7 +303,8 @@ export default function AttendancePage() {
             if (normalized) {
               return {
                 data: normalized,
-                isExpired: !!cacheResult.isExpired
+                isExpired: !!cacheResult.isExpired,
+                expiresAt: cacheResult.expiresAt ?? null,
               };
             }
           }
@@ -291,7 +318,7 @@ export default function AttendancePage() {
       }
     }
 
-    return { data: null, isExpired: false };
+    return { data: null, isExpired: false, expiresAt: null };
   };
 
   const hydrateCalendarAndTimetableFromCache = () => {
@@ -305,11 +332,14 @@ export default function AttendancePage() {
 
     if (!slotOccurrences.length) {
       const cachedTimetable = getClientCache<TimetableData>('timetable');
-      if (cachedTimetable) {
+      if (cachedTimetable && cachedTimetable.timetable && Object.keys(cachedTimetable.timetable).length > 0) {
         const occurrences = getSlotOccurrences(cachedTimetable);
         if (occurrences.length) {
           setSlotOccurrences(occurrences);
         }
+      } else if (cachedTimetable) {
+        console.warn('[Attendance] ❌ Invalid cached timetable data detected, clearing entry');
+        removeClientCache('timetable');
       }
     }
 
@@ -331,7 +361,6 @@ export default function AttendancePage() {
   };
 
   useEffect(() => {
-    hydrateCalendarAndTimetableFromCache();
     fetchUnifiedData();
   }, []);
 
@@ -634,7 +663,7 @@ export default function AttendancePage() {
       const supabaseCache = await fetchAttendanceDataFromSupabase(access_token, { maxRetries: 5, retryDelayMs: 700 });
 
       if (supabaseCache.data) {
-        applyAttendanceDataPayload(supabaseCache.data);
+        applyAttendanceDataPayload(supabaseCache.data, { expiresAt: supabaseCache.expiresAt });
         console.log('[Attendance] ✅ Updated local state with refreshed attendance data from Supabase');
       } else {
         const fallbackNormalized = result.data ? normalizeAttendanceData(result.data) : null;
@@ -688,7 +717,7 @@ export default function AttendancePage() {
           if (supabaseCache.data) {
             console.log(`[Attendance] ✅ Found Supabase cache (expired: ${supabaseCache.isExpired})`);
             cachedAttendance = supabaseCache.data;
-            applyAttendanceDataPayload(supabaseCache.data);
+            applyAttendanceDataPayload(supabaseCache.data, { expiresAt: supabaseCache.expiresAt });
             if (supabaseCache.isExpired) {
               needsBackgroundRefresh = true;
               console.log('[Attendance] ⚠️ Cache is expired, will refresh in background');
@@ -812,13 +841,18 @@ export default function AttendancePage() {
               dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
             }
 
-            // Check if it's the expected AttendanceData format
-            if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
-              attendanceDataObj = dataToProcess as AttendanceData;
-              extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || 1;
-              console.log('[Attendance] ✅ Attendance data loaded');
+            const normalizedAttendance = normalizeAttendanceData(dataToProcess);
+            if (normalizedAttendance) {
+              attendanceDataObj = normalizedAttendance;
+              extractedSemester = normalizedAttendance.metadata?.semester || extractedSemester;
+              console.log('[Attendance] ✅ Attendance data loaded via transformer');
               console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
               console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
+            } else if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
+              attendanceDataObj = dataToProcess as AttendanceData;
+              extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || extractedSemester;
+              console.log('[Attendance] ✅ Attendance data already in frontend format');
+              console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
             } else {
               console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
               console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
