@@ -56,7 +56,9 @@ export async function POST(request: NextRequest) {
             ? authUserPayload
             : Array.isArray(authUserPayload.data)
                 ? authUserPayload.data
-                : [];
+                : Array.isArray(authUserPayload.users)
+                    ? authUserPayload.users
+                    : [];
         const authUser = authUsers[0] ?? null;
 
         const { data: publicUser, error: publicError } = await supabaseAdmin
