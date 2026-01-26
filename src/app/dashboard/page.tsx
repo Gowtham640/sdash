@@ -21,18 +21,78 @@ import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "
 import Particles from "@/components/Particles";
 import { trackPostRequest } from "@/lib/postAnalytics";
 
+const DASHBOARD_CACHE_STORAGE_KEY = 'sdash_dashboard_unified_cache';
+
+type DashboardTimetableState = {
+  timetable?: Record<string, { do_name?: string; time_slots?: Record<string, unknown> }>;
+  slot_mapping?: Record<string, string>;
+} | null;
+
+interface DashboardStoragePayload {
+  attendanceData?: AttendanceData | null;
+  marksData?: MarksData | null;
+  timetableData?: DashboardTimetableState;
+  slotOccurrences?: SlotOccurrence[];
+}
+
+function loadDashboardStorageSnapshot(): DashboardStoragePayload | null {
+  const serialized = getStorageItem(DASHBOARD_CACHE_STORAGE_KEY);
+  if (!serialized) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+
+    return {
+      attendanceData: parsed.attendanceData ?? null,
+      marksData: parsed.marksData ?? null,
+      timetableData: parsed.timetableData ?? null,
+      slotOccurrences: Array.isArray(parsed.slotOccurrences) ? parsed.slotOccurrences : [],
+    };
+  } catch (error) {
+    console.warn('[Dashboard] Failed to parse stored dashboard snapshot:', error);
+    return null;
+  }
+}
+
+function persistDashboardStorageSnapshot(payload: DashboardStoragePayload): void {
+  try {
+    setStorageItem(DASHBOARD_CACHE_STORAGE_KEY, JSON.stringify(payload));
+    console.log('[Dashboard] ✅ Persisted dashboard cache to storage');
+  } catch (error) {
+    console.error('[Dashboard] ❌ Failed to persist dashboard cache to storage:', error);
+  }
+}
+
 interface DashboardCacheSnapshot {
   attendanceData: AttendanceData | null;
   marksData: MarksData | null;
-  timetableData: {
-    timetable?: TimetableData['timetable'];
-    slot_mapping?: TimetableData['slot_mapping'];
-  } | null;
+  timetableData: DashboardTimetableState;
   slotOccurrences: SlotOccurrence[];
   hasCache: boolean;
 }
 
 function getInitialDashboardCacheSnapshot(): DashboardCacheSnapshot {
+  const storedSnapshot = loadDashboardStorageSnapshot();
+  if (storedSnapshot) {
+    const { attendanceData, marksData, timetableData, slotOccurrences } = storedSnapshot;
+    return {
+      attendanceData: attendanceData ?? null,
+      marksData: marksData ?? null,
+      timetableData: timetableData ?? null,
+      slotOccurrences: slotOccurrences ?? [],
+      hasCache: Boolean(
+        attendanceData ||
+        marksData ||
+        (timetableData && (Object.keys(timetableData.timetable || {}).length || Object.keys(timetableData.slot_mapping || {}).length))
+      ),
+    };
+  }
+
   const attendanceData = getClientCache<AttendanceData>('attendance');
   const marksData = getClientCache<MarksData>('marks');
   const timetableCache = getClientCache<TimetableData>('timetable');
@@ -99,10 +159,7 @@ export default function Dashboard() {
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(initialCacheSnapshot.attendanceData);
   const [marksData, setMarksData] = useState<MarksData | null>(initialCacheSnapshot.marksData);
-  const [timetableData, setTimetableData] = useState<{
-    timetable?: Record<string, { do_name?: string; time_slots?: Record<string, unknown> }>;
-    slot_mapping?: Record<string, string>;
-  } | null>(initialCacheSnapshot.timetableData);
+  const [timetableData, setTimetableData] = useState<DashboardTimetableState>(initialCacheSnapshot.timetableData);
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>(initialCacheSnapshot.slotOccurrences);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
   const [loading, setLoading] = useState(!initialCacheSnapshot.hasCache);
@@ -247,6 +304,22 @@ export default function Dashboard() {
     return dates;
   };
 
+  const normalizeDayOrderValue = (value?: string | null) => {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed || null;
+  };
+
+  const isHolidayDayOrder = (dayOrder?: string | null) => {
+    const normalized = normalizeDayOrderValue(dayOrder);
+    if (!normalized) {
+      return false;
+    }
+    return normalized === '-' || normalized.toLowerCase().includes('holiday');
+  };
+
   // Get current day's day order
   const getCurrentDayOrder = () => {
     if (!calendarData || !Array.isArray(calendarData) || calendarData.length === 0) {
@@ -254,25 +327,32 @@ export default function Dashboard() {
     }
     const currentDate = getCurrentDateString();
     const currentEvent = calendarData.find(event => event && event.date === currentDate);
-    return currentEvent?.day_order || null;
+    return normalizeDayOrderValue(currentEvent?.day_order);
   };
 
   // Get current day's day order number
   const getCurrentDayOrderNumber = () => {
     const dayOrder = getCurrentDayOrder();
-    if (dayOrder && dayOrder.startsWith('DO ')) {
-      return parseInt(dayOrder.split(' ')[1]);
-    }
-    // Handle non-working days (day_order: "-")
-    if (dayOrder === '-') {
+    if (!dayOrder || isHolidayDayOrder(dayOrder)) {
       return null;
     }
+    if (dayOrder.startsWith('DO ')) {
+      const parsed = parseInt(dayOrder.split(' ')[1], 10);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+
     return null;
   };
 
   // Get today's timetable based on day order
   const getTodaysTimetable = () => {
     console.log('[Dashboard] 🔍 getTodaysTimetable called');
+
+    const currentDayOrder = getCurrentDayOrder();
+    if (isHolidayDayOrder(currentDayOrder)) {
+      console.log('[Dashboard] ℹ️ Today is marked as holiday - skipping timetable rendering');
+      return [];
+    }
 
     const doNumber = getCurrentDayOrderNumber();
     if (doNumber == null) {
@@ -692,6 +772,8 @@ export default function Dashboard() {
     console.log('[Dashboard] Attendance data:', result.data.attendance);
     console.log('[Dashboard] Marks data:', result.data.marks);
 
+    let occurrencesForStorage = slotOccurrences;
+
     // Process calendar data - handle both direct format and wrapped format
     console.log('[Dashboard] 📋 ========================================');
     console.log('[Dashboard] 📋 CALENDAR PROCESSING - Starting calendar data processing');
@@ -965,6 +1047,7 @@ export default function Dashboard() {
         } as TimetableData;
         const occurrences = getSlotOccurrences(timetableForUtils);
         setSlotOccurrences(occurrences);
+        occurrencesForStorage = occurrences;
         console.log('[Dashboard] ✅ Timetable data loaded:', occurrences.length);
       } catch (err) {
         console.error('[Dashboard] ❌ Error processing timetable:', err);
@@ -1047,6 +1130,15 @@ export default function Dashboard() {
       },
     };
     setClientCache('unified', cacheData);
+    const storedAttendance = normalizedAttendance ?? attendanceData;
+    const storedMarks = normalizedMarks ?? marksData;
+    const storedTimetable = timetableDataObj ?? timetableData;
+    persistDashboardStorageSnapshot({
+      attendanceData: storedAttendance,
+      marksData: storedMarks,
+      timetableData: storedTimetable,
+      slotOccurrences: occurrencesForStorage ?? [],
+    });
     console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL) - calendar excluded (always fresh)');
   };
 
@@ -1107,6 +1199,7 @@ export default function Dashboard() {
   const threeDayDates = getThreeDayDates();
   const todaysTimetable = getTodaysTimetable();
   const currentDayOrder = getCurrentDayOrder();
+  const isHolidayToday = isHolidayDayOrder(currentDayOrder);
 
   console.log('[Dashboard] 🎯 Rendering dashboard with timetable info:', {
     currentDayOrder,
@@ -1411,7 +1504,8 @@ export default function Dashboard() {
       <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
         }`}>
         <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Today&apos;s Timetable {currentDayOrder && `- ${currentDayOrder}`}
+          Today&apos;s Timetable
+          {isHolidayToday ? ' (Holiday)' : currentDayOrder ? ` - ${currentDayOrder}` : ''}
         </div>
         {todaysTimetable.length > 0 ? (
           <div className="flex flex-col gap-3 w-full">
@@ -1436,7 +1530,11 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="text-white/70 text-lg font-sora">
-            {currentDayOrder ? 'No classes today' : 'Unable to determine day order'}
+            {isHolidayToday
+              ? 'Today is marked as a holiday'
+              : currentDayOrder
+                ? 'No classes today'
+                : 'Unable to determine day order'}
           </div>
         )}
       </div>

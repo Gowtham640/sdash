@@ -58,6 +58,88 @@ function isAttendanceResponse(value: unknown): value is AttendanceResponse {
 
 
 
+function coerceAttendanceResponse(value: unknown): AttendanceResponse | null {
+
+  if (!value || typeof value !== 'object') {
+
+    return null;
+
+  }
+
+
+
+  const candidate = value as Record<string, unknown>;
+
+  if (!('entries' in candidate)) {
+
+    return null;
+
+  }
+
+
+
+  const rawEntries = candidate.entries;
+
+  let entriesArray: unknown[] | null = null;
+
+
+
+  if (Array.isArray(rawEntries)) {
+
+    entriesArray = rawEntries;
+
+  } else if (rawEntries && typeof rawEntries === 'object') {
+
+    entriesArray = Object.values(rawEntries);
+
+  }
+
+
+
+  if (!entriesArray) {
+
+    return null;
+
+  }
+
+
+
+  const normalizedEntries = entriesArray.filter((entry): entry is AttendanceEntry => {
+
+    return !!entry && typeof entry === 'object';
+
+  });
+
+
+
+  if (normalizedEntries.length === 0) {
+
+    return null;
+
+  }
+
+
+
+  return {
+
+    ...(candidate as Record<string, unknown>),
+
+    entries: normalizedEntries,
+
+    fetched_at: typeof candidate.fetched_at === 'string'
+
+      ? candidate.fetched_at
+
+      : new Date().toISOString(),
+
+    url: typeof candidate.url === 'string' ? candidate.url : '',
+
+  } as AttendanceResponse;
+
+}
+
+
+
 function isMarksData(value: unknown): value is MarksData {
 
   return typeof value === 'object' && value !== null && 'all_courses' in value && Array.isArray((value as MarksData).all_courses);
@@ -384,6 +466,11 @@ export function normalizeAttendanceData(goData: unknown): AttendanceData | null 
 
     return normalizeAttendanceResponse(goData);
 
+  }
+
+  const coercedResponse = coerceAttendanceResponse(goData);
+  if (coercedResponse) {
+    return normalizeAttendanceResponse(coercedResponse);
   }
 
 

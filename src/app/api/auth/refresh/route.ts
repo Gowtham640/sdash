@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
       { status: 200 }
     );
 
-    setSessionCookies(response, data.session, role);
+    await setSessionCookies(response, data.session, role);
     return response;
   } catch (error) {
     console.error("[API] /api/auth/refresh error:", error);

@@ -1,5 +1,3 @@
-'use server';
-
 import { NextResponse } from "next/server";
 
 export const SESSION_KEEP_ALIVE_SECONDS = 14 * 24 * 60 * 60; // 2 weeks
@@ -10,11 +8,11 @@ type SupabaseSessionPayload = {
   expires_at?: number | null;
 };
 
-export function setSessionCookies(
+export async function setSessionCookies(
   response: NextResponse,
   session: SupabaseSessionPayload,
   role: string
-): void {
+): Promise<void> {
   const isProduction = process.env.NODE_ENV === "production";
   const nowSeconds = Math.floor(Date.now() / 1000);
   const expiresAtSeconds =

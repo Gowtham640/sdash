@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (result.session) {
-      setSessionCookies(response, result.session, result.user?.role || 'public');
+      await setSessionCookies(response, result.session, result.user?.role || 'public');
     }
 
     return response;
