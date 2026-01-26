@@ -240,8 +240,19 @@ const getInitialAttendanceCacheSnapshot = (): AttendanceCacheSnapshot => {
 
 export default function AttendancePage() {
   const initialAttendanceCache = useMemo(() => getInitialAttendanceCacheSnapshot(), []);
-  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(initialAttendanceCache.attendanceData);
-  const [loading, setLoading] = useState(!initialAttendanceCache.attendanceData);
+  console.log('[Attendance][Cache] Initial cache snapshot:', {
+    hasAttendance: !!initialAttendanceCache.attendanceData,
+    slotOccurrences: initialAttendanceCache.slotOccurrences.length,
+    dayOrderStats: initialAttendanceCache.dayOrderStats,
+  });
+  const isCacheRenderable = (data: AttendanceData | null): boolean =>
+    Boolean(data && data.all_subjects && data.all_subjects.length > 0);
+  const initialRenderable = isCacheRenderable(initialAttendanceCache.attendanceData);
+  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(
+    initialRenderable ? initialAttendanceCache.attendanceData : null
+  );
+  const [cacheRenderable, setCacheRenderable] = useState(initialRenderable);
+  const [loading, setLoading] = useState(!initialRenderable);
   const [error, setError] = useState<string | null>(null);
 
   // Track errors
@@ -266,7 +277,9 @@ export default function AttendancePage() {
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
-  const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(initialAttendanceCache.attendanceData); // Store original data
+  const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(
+    initialRenderable ? initialAttendanceCache.attendanceData : null
+  ); // Store original data
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
@@ -275,16 +288,47 @@ export default function AttendancePage() {
     setOriginalAttendanceData(payload);
     setSemester(payload.metadata?.semester || 1);
     setClientCache('attendance', payload, { expiresAt: options?.expiresAt ?? null });
+    setCacheRenderable(isCacheRenderable(payload));
+    console.log('[Attendance][Cache] Applied normalized attendance payload:', {
+      subjects: payload.all_subjects?.length,
+      metadata: payload.metadata,
+      expiresAt: options?.expiresAt ?? null,
+    });
+  };
+
+  const ensureNormalizedAttendanceCache = async (
+    access_token: string,
+    options: { maxRetries?: number; retryDelayMs?: number } = {}
+  ): Promise<AttendanceCacheFetchResult> => {
+    console.log('[Attendance][Cache] Ensuring normalized attendance cache before UI render');
+    const supabaseCache = await fetchAttendanceDataFromSupabase(access_token, options);
+    console.log('[Attendance][Cache] Normalized cache response', {
+      hasData: !!supabaseCache.data,
+      isExpired: supabaseCache.isExpired,
+      source: supabaseCache.source,
+    });
+    applyAttendanceDataPayload(supabaseCache.data, { expiresAt: supabaseCache.expiresAt });
+    console.log('[Attendance][Cache] Final render source:', supabaseCache.source);
+    return supabaseCache;
+  };
+
+  type AttendanceCacheFetchResult = {
+    data: AttendanceData;
+    isExpired: boolean;
+    expiresAt: string | null;
+    source: 'cache' | 'fallback';
   };
 
   const fetchAttendanceDataFromSupabase = async (
     access_token: string,
     options: { maxRetries?: number; retryDelayMs?: number } = {}
-  ): Promise<{ data: AttendanceData | null; isExpired: boolean; expiresAt: string | null }> => {
+  ): Promise<AttendanceCacheFetchResult> => {
     const { maxRetries = 1, retryDelayMs = 0 } = options;
+    let reason: string | null = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
+        console.log(`[Attendance][API] Supabase cache fetch attempt ${attempt}/${maxRetries}`);
         const response = await trackPostRequest('/api/data/cache', {
           action: 'cache_fetch',
           dataType: 'attendance',
@@ -294,23 +338,31 @@ export default function AttendancePage() {
         });
 
         if (!response.ok) {
+          reason = `HTTP ${response.status}`;
           console.warn('[Attendance] Supabase cache request failed:', response.status, response.statusText);
         } else {
           const cacheResult = await response.json();
 
-          if (cacheResult.success && cacheResult.data) {
-            const normalized = normalizeAttendanceData(cacheResult.data);
-            if (normalized) {
-              return {
-                data: normalized,
-                isExpired: !!cacheResult.isExpired,
-                expiresAt: cacheResult.expiresAt ?? null,
-              };
-            }
+          console.log('[Attendance][API] Supabase cache response keys:', Object.keys(cacheResult || {}));
+
+          const validation = validateAttendanceCache(cacheResult);
+          if (validation.valid && validation.normalized) {
+            console.log('[Attendance][Cache] Cache hit - using normalized data');
+            return {
+              data: validation.normalized,
+              isExpired: !!cacheResult.isExpired,
+              expiresAt: cacheResult.expiresAt ?? null,
+              source: 'cache',
+            };
           }
+
+          reason = validation.reason ?? 'cache validation failed';
+          console.warn('[Attendance][Cache] Cache invalid -', reason);
+          break;
         }
       } catch (error) {
-        console.error('[Attendance] ❌ Error fetching attendance cache from Supabase:', error);
+        reason = error instanceof Error ? error.message : 'unknown error';
+        console.error('[Attendance][API] ❌ Error fetching attendance cache from Supabase:', error);
       }
 
       if (attempt < maxRetries && retryDelayMs > 0) {
@@ -318,7 +370,148 @@ export default function AttendancePage() {
       }
     }
 
-    return { data: null, isExpired: false, expiresAt: null };
+    console.log(
+      `[Attendance][Cache] Cache miss (reason: ${reason ?? 'unknown'}) — executing fallback fetch`
+    );
+
+    const fallback = await fetchAttendanceDataDirectlyFromSupabase(access_token);
+    return {
+      ...fallback,
+      source: 'fallback',
+    };
+  };
+
+  const validateAttendanceCache = (
+    cacheResult: unknown
+  ): { valid: boolean; normalized?: AttendanceData; reason?: string } => {
+    if (!cacheResult || typeof cacheResult !== 'object' || Array.isArray(cacheResult)) {
+      const reason = 'Cache response missing or malformed';
+      console.warn('[Attendance][Cache] ' + reason);
+      return { valid: false, reason };
+    }
+
+    const { success, data } = cacheResult as { success?: boolean; data?: unknown };
+
+    if (!success) {
+      const reason = 'Cache responded with success=false';
+      console.warn('[Attendance][Cache] ' + reason);
+      return { valid: false, reason };
+    }
+
+    if (!data) {
+      const reason = 'Cache returned empty data payload';
+      console.warn('[Attendance][Cache] ' + reason);
+      return { valid: false, reason };
+    }
+
+    const normalized = normalizeAttendanceData(data);
+    if (!normalized) {
+      const reason = 'Normalization failed for cached attendance payload';
+      console.warn('[Attendance][Cache] ' + reason);
+      return { valid: false, reason };
+    }
+
+    if (!normalized.all_subjects || normalized.all_subjects.length === 0) {
+      const reason = 'Normalized cache contains no subjects';
+      console.warn('[Attendance][Cache] ' + reason);
+      return { valid: false, reason };
+    }
+
+    return { valid: true, normalized };
+  };
+
+  const requireApiField = (name: string, value: unknown): unknown => {
+    if (value === undefined) {
+      const error = new Error(`[Attendance] API response missing "${name}"`);
+      console.error(error.message);
+      throw error;
+    }
+    return value;
+  };
+
+  const extractAttendancePayload = (payload: unknown): unknown | null => {
+    if (!payload) {
+      return null;
+    }
+
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      const candidate = payload as { data?: unknown };
+      if ('data' in candidate && candidate.data !== undefined) {
+        return candidate.data;
+      }
+    }
+
+    return payload;
+  };
+
+  const rebuildAttendanceCache = async (
+    access_token: string,
+    normalizedData: AttendanceData
+  ): Promise<{ expiresAt: string | null }> => {
+    const response = await trackPostRequest('/api/data/cache', {
+      action: 'cache_rebuild',
+      dataType: 'attendance',
+      primary: false,
+      payload: {
+        access_token,
+        data_type: 'attendance',
+        normalized_data: normalizedData,
+        expires_in_minutes: 10,
+      },
+      omitPayloadKeys: ['access_token'],
+      payloadSummary: { subjects: normalizedData.all_subjects.length },
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      console.error('[Attendance][Cache] Failed to rebuild normalized cache:', result.error);
+      throw new Error(result.error || 'Failed to rebuild attendance cache');
+    }
+
+    console.log(
+      `[Attendance][Cache] Rebuilt normalized attendance cache with ${normalizedData.all_subjects.length} subjects`
+    );
+
+    return { expiresAt: result.expiresAt ?? null };
+  };
+
+  const fetchAttendanceDataDirectlyFromSupabase = async (
+    access_token: string
+  ): Promise<{ data: AttendanceData; isExpired: boolean; expiresAt: string | null }> => {
+    console.log('[Attendance][Cache] Triggering direct Supabase attendance fetch (fallback)');
+    const response = await trackPostRequest('/api/data/all', {
+      action: 'attendance_direct_fetch',
+      dataType: 'attendance',
+      primary: false,
+      payload: {
+        access_token,
+        types: ['attendance'],
+      },
+      omitPayloadKeys: ['access_token'],
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      console.warn('[Attendance][Cache] Direct fetch failed:', result.error);
+      throw new Error(result.error || 'Failed to fetch attendance from Supabase directly');
+    }
+
+    const attendancePayload = extractAttendancePayload(result.data?.attendance);
+    if (!attendancePayload) {
+      throw new Error('Attendance payload missing from fallback fetch');
+    }
+
+    const normalized = normalizeAttendanceData(attendancePayload);
+    if (!normalized) {
+      throw new Error('Failed to normalize attendance payload from fallback fetch');
+    }
+
+    const rebuildResult = await rebuildAttendanceCache(access_token, normalized);
+    return {
+      data: normalized,
+      isExpired: false,
+      expiresAt: rebuildResult.expiresAt,
+    };
   };
 
   const hydrateCalendarAndTimetableFromCache = () => {
@@ -635,6 +828,15 @@ export default function AttendancePage() {
         return;
       }
 
+      await ensureNormalizedAttendanceCache(access_token, {
+        maxRetries: 3,
+        retryDelayMs: 500,
+      });
+
+      const supabaseCache = await fetchAttendanceDataFromSupabase(access_token, { maxRetries: 5, retryDelayMs: 700 });
+      applyAttendanceDataPayload(supabaseCache.data, { expiresAt: supabaseCache.expiresAt });
+      console.log('[Attendance] Refresh fetched normalized cache source:', supabaseCache.source);
+
       console.log('[Attendance] 🔄 Force refreshing attendance data...');
 
       const response = await trackPostRequest('/api/data/refresh', {
@@ -660,24 +862,11 @@ export default function AttendancePage() {
       // Update local state with the returned data
       console.log('[Attendance] ✅ Refresh completed, updating local state...');
 
-      const supabaseCache = await fetchAttendanceDataFromSupabase(access_token, { maxRetries: 5, retryDelayMs: 700 });
+      const supabaseRefreshCache = await fetchAttendanceDataFromSupabase(access_token, { maxRetries: 5, retryDelayMs: 700 });
 
-      if (supabaseCache.data) {
-        applyAttendanceDataPayload(supabaseCache.data, { expiresAt: supabaseCache.expiresAt });
-        console.log('[Attendance] ✅ Updated local state with refreshed attendance data from Supabase');
-      } else {
-        const fallbackNormalized = result.data ? normalizeAttendanceData(result.data) : null;
-        if (fallbackNormalized) {
-          applyAttendanceDataPayload(fallbackNormalized);
-          console.log('[Attendance] ✅ Applied fallback refresh data (supabase cache empty but backend returned payload)');
-        } else {
-          console.warn('[Attendance] ⚠️ No attendance data available after refresh');
-          setError('No attendance data available');
-          setLoading(false);
-          setIsRefreshing(false);
-          return;
-        }
-      }
+      applyAttendanceDataPayload(supabaseRefreshCache.data, { expiresAt: supabaseRefreshCache.expiresAt });
+      console.log('[Attendance] ✅ Updated local state with refreshed attendance data from Supabase');
+      console.log('[Attendance] Refresh fetch source:', supabaseRefreshCache.source);
 
       setLoading(false);
       setIsRefreshing(false);
@@ -703,49 +892,51 @@ export default function AttendancePage() {
         return;
       }
 
-      // Check client-side cache first (unless force refresh)
+      const supabaseCache = await ensureNormalizedAttendanceCache(access_token, {
+        maxRetries: forceRefresh ? 3 : 1,
+        retryDelayMs: forceRefresh ? 500 : 0,
+      });
+
+      if (!supabaseCache.data || !supabaseCache.data.all_subjects?.length) {
+        throw new Error('Normalized attendance cache returned empty subject list');
+      }
+
+      const supabaseSourceDescription = supabaseCache.source === 'cache' ? 'normalized cache' : 'fallback fetch';
       let cachedAttendance: AttendanceData | null = null;
-      let needsBackgroundRefresh = false;
+      let needsBackgroundRefresh = supabaseCache.isExpired;
 
       if (!forceRefresh) {
         cachedAttendance = getClientCache<AttendanceData>('attendance');
-
-        // If client cache is expired, fetch Supabase cache (even if expired)
-        if (!cachedAttendance) {
-          console.log('[Attendance] 🔍 Client cache expired/missing, fetching Supabase cache (even if expired)...');
-          const supabaseCache = await fetchAttendanceDataFromSupabase(access_token);
-          if (supabaseCache.data) {
-            console.log(`[Attendance] ✅ Found Supabase cache (expired: ${supabaseCache.isExpired})`);
-            cachedAttendance = supabaseCache.data;
-            applyAttendanceDataPayload(supabaseCache.data, { expiresAt: supabaseCache.expiresAt });
-            if (supabaseCache.isExpired) {
-              needsBackgroundRefresh = true;
-              console.log('[Attendance] ⚠️ Cache is expired, will refresh in background');
-            }
-          } else {
-            console.warn('[Attendance] ⚠️ Supabase cache could not be normalized or is unavailable');
-          }
-        } else {
-          // Use client-side cached data
+        if (cachedAttendance) {
           console.log('[Attendance] ✅ Using client-side cache for attendance');
           setAttendanceData(cachedAttendance);
           setOriginalAttendanceData(cachedAttendance);
           setSemester(cachedAttendance.metadata?.semester || 1);
+        } else {
+          cachedAttendance = supabaseCache.data;
+          console.log(`[Attendance] ⚡ Client cache empty, using ${supabaseSourceDescription}`);
         }
       } else {
-        // Force refresh: clear client cache
         removeClientCache('attendance');
         console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
+        cachedAttendance = supabaseCache.data;
+      }
+
+      if (!cachedAttendance) {
+        throw new Error('Attendance data is missing after cache validation');
       }
 
       hydrateCalendarAndTimetableFromCache();
+      const calendarNeedsFetch = calendarData.length === 0;
+      const timetableNeedsFetch = slotOccurrences.length === 0;
+      const shouldFetchUnifiedData = forceRefresh || needsBackgroundRefresh || calendarNeedsFetch || timetableNeedsFetch;
 
-      // Only fetch if cache is missing or force refresh or expired
-      if (!cachedAttendance || forceRefresh || needsBackgroundRefresh) {
+      if (shouldFetchUnifiedData) {
         console.log('[Attendance] Fetching from API...', forceRefresh ? '(force refresh)' : '(fetching fresh data)');
 
         // Use request deduplication - ensures only ONE page calls backend at a time
         const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}`;
+        console.log('[Attendance][API] Unified fetch calling /api/data/all', { forceRefresh });
         const apiResult = await deduplicateRequest(requestKey, async () => {
           const response = await trackPostRequest('/api/data/all', {
             action: 'data_unified_fetch',
@@ -760,6 +951,7 @@ export default function AttendancePage() {
 
         const response = apiResult.response;
         const result = apiResult.result;
+        console.log('[Attendance][API] Unified fetch response status:', response.status, 'payload keys:', Object.keys(result || {}));
         console.log('[Attendance] API response:', result);
 
         // Handle session expiry
@@ -772,20 +964,12 @@ export default function AttendancePage() {
         }
 
         if (!result.success) {
+          console.error('[Attendance][API] Unified fetch failed:', result.error);
           throw new Error(result.error || 'Failed to fetch data');
         }
 
-        // Process attendance data from unified endpoint
-        // Unified endpoint returns: { success: boolean, data: { attendance: AttendanceData, ... }, error?: string }
-        let attendanceDataObj: AttendanceData | null = null;
-        let extractedSemester: number = 1;
-
-        console.log('[Attendance] Processing attendance data from API response');
-        console.log('[Attendance] result.data type:', typeof result.data);
-        console.log('[Attendance] result.data keys:', result.data ? Object.keys(result.data) : 'null/undefined');
-
-        // Extract calendar data for day order stats
-        const calendarCandidate = (result.data as { calendar?: unknown })?.calendar;
+        console.log('[Attendance] Processing calendar/timetable from API response only (attendance data served via normalized cache).');
+        const calendarCandidate = requireApiField('calendar', (result.data as { calendar?: unknown })?.calendar);
         const normalizeCalendarPayload = (payload: unknown): CalendarEvent[] | null => {
           if (!payload) return null;
           if (Array.isArray(payload)) {
@@ -796,9 +980,12 @@ export default function AttendancePage() {
           }
           return null;
         };
-
         const calendarPayload = normalizeCalendarPayload(calendarCandidate);
-        if (calendarPayload && calendarPayload.length > 0) {
+        if (!calendarPayload) {
+          throw new Error('Calendar payload invalid after normalization');
+        }
+        console.log('[Attendance] ✅ Calendar data loaded from API payload:', calendarPayload.length, 'events');
+        if (calendarPayload.length > 0) {
           setCalendarData(calendarPayload);
           const stats = getDayOrderStats(calendarPayload);
           setDayOrderStats(stats);
@@ -806,7 +993,7 @@ export default function AttendancePage() {
         }
 
         // Extract timetable data for slot occurrences
-        const timetableCandidate = (result.data as { timetable?: unknown })?.timetable;
+        const timetableCandidate = requireApiField('timetable', (result.data as { timetable?: unknown })?.timetable);
         const normalizeTimetablePayload = (payload: unknown): TimetableData | null => {
           if (!payload) return null;
           if (typeof payload !== 'object' || Array.isArray(payload)) {
@@ -819,6 +1006,10 @@ export default function AttendancePage() {
         };
 
         const timetablePayload = normalizeTimetablePayload(timetableCandidate);
+        if (!timetablePayload) {
+          throw new Error('Timetable payload invalid after normalization');
+        }
+        console.log('[Attendance] ✅ Timetable data loaded from API payload');
         if (timetablePayload) {
           setClientCache('timetable', timetablePayload);
           const occurrences = getSlotOccurrences(timetablePayload);
@@ -827,67 +1018,12 @@ export default function AttendancePage() {
           }
         }
 
-        // Extract attendance from unified response: { data: { attendance: AttendanceData, ... } }
-        if (result.data && typeof result.data === 'object' && 'attendance' in result.data) {
-          const attendanceData = (result.data as { attendance?: unknown }).attendance;
-
-          if (attendanceData && typeof attendanceData === 'object') {
-            // Handle both unwrapped and wrapped data structures within attendance
-            let dataToProcess = attendanceData;
-
-            // Check if data is wrapped in an extra 'data' property (legacy format)
-            if ('data' in dataToProcess && typeof (dataToProcess as { data: unknown }).data === 'object') {
-              console.log('[Attendance] 🔄 Unwrapping nested data structure in frontend');
-              dataToProcess = (dataToProcess as { data: unknown }).data as typeof attendanceData;
-            }
-
-            const normalizedAttendance = normalizeAttendanceData(dataToProcess);
-            if (normalizedAttendance) {
-              attendanceDataObj = normalizedAttendance;
-              extractedSemester = normalizedAttendance.metadata?.semester || extractedSemester;
-              console.log('[Attendance] ✅ Attendance data loaded via transformer');
-              console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
-              console.log('[Attendance]   - summary exists:', !!attendanceDataObj.summary);
-            } else if ('all_subjects' in dataToProcess || 'summary' in dataToProcess) {
-              attendanceDataObj = dataToProcess as AttendanceData;
-              extractedSemester = (dataToProcess as { metadata?: { semester?: number } }).metadata?.semester || extractedSemester;
-              console.log('[Attendance] ✅ Attendance data already in frontend format');
-              console.log('[Attendance]   - all_subjects count:', attendanceDataObj.all_subjects?.length || 0);
-            } else {
-              console.warn('[Attendance] ⚠️ Attendance data doesn\'t match expected format');
-              console.warn('[Attendance] Available keys:', Object.keys(dataToProcess));
-            }
-          }
-        } else {
-          console.warn('[Attendance] ⚠️ result.data.attendance is not available');
-          console.warn('[Attendance] result.data structure:', result.data);
-        }
-
-        if (attendanceDataObj && (attendanceDataObj.all_subjects || attendanceDataObj.summary)) {
-          setAttendanceData(attendanceDataObj);
-          setOriginalAttendanceData(attendanceDataObj); // Store original
-          console.log('[Attendance] Loaded attendance with', attendanceDataObj.all_subjects?.length || 0, 'subjects');
-          console.log('[Attendance] Extracted semester:', extractedSemester);
-          setSemester(extractedSemester);
-
-          // Save to client cache
-          setClientCache('attendance', attendanceDataObj);
-        } else {
-          // Keep page visible even when attendance data is unavailable
-          // User can use refresh button to fetch data
-          console.warn('[Attendance] Attendance data unavailable - keeping page visible for refresh');
-          if (result && result.data) {
-            console.warn('[Attendance] Attendance data type:', typeof result.data);
-            console.warn('[Attendance] Attendance data value:', result.data);
-          }
-          setAttendanceData(null);
-          // Don't throw error, just log it so page remains visible
-        }
-
-        // Register attendance fetch for smart prefetch scheduling
-        if (result.success && attendanceDataObj) {
+        console.log('[Attendance] Attendance rendered from normalized cache; skipping raw payload analysis.');
+        if (result.success) {
           registerAttendanceFetch();
         }
+      } else {
+        console.log('[Attendance] ✅ Skipping unified fetch – cache and derived data are fresh');
       }
 
     } catch (err) {
@@ -1120,11 +1256,13 @@ export default function AttendancePage() {
 
         <div className="flex flex-col items-center justify-center gap-4 h-full">
           <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
-            No attendance data available
+            {loading ? 'Fetching fresh attendance from Supabase...' : 'No attendance data available'}
           </div>
-          <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
-            Click the refresh button above to fetch attendance data
-          </div>
+          {!loading && (
+            <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
+              Click the refresh button above to fetch attendance data
+            </div>
+          )}
         </div>
       </div>
     );
