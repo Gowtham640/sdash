@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from 'next/link';
 import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
@@ -63,17 +63,146 @@ interface CalendarEvent {
   year?: number;
 }
 
+function convertTimetableDataToTimeSlots(data: TimetableData): TimeSlot[] {
+  const timeSlots: TimeSlot[] = [];
+
+  if (!data || !data.timetable || typeof data.timetable !== 'object') {
+    console.warn('[Timetable] ⚠️ Invalid timetable data structure:', data);
+    return timeSlots;
+  }
+
+  const timeSlotKeys = data.time_slots || [
+    "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
+    "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
+  ];
+
+  timeSlotKeys.forEach(timeSlot => {
+    const timeSlotEntry: TimeSlot = {
+      time: timeSlot,
+      do1: "",
+      do2: "",
+      do3: "",
+      do4: "",
+      do5: ""
+    };
+
+    ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach((doName, index) => {
+      const doData = data.timetable && typeof data.timetable === 'object' ? (data.timetable as Record<string, unknown>)[doName] : null;
+      if (doData && typeof doData === 'object' && doData !== null) {
+        const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string; courseType?: string; online?: boolean }> };
+        if (doDataTyped.time_slots && doDataTyped.time_slots[timeSlot]) {
+          const slotInfo = doDataTyped.time_slots[timeSlot];
+          const courseTitle = slotInfo.course_title || "";
+          const courseType = slotInfo.courseType;
+          const online = slotInfo.online;
+
+          const doKey = `do${index + 1}` as keyof TimeSlot;
+          if (courseType || online !== undefined) {
+            (timeSlotEntry as unknown as Record<string, string | TimeSlotCell>)[doKey] = {
+              course: courseTitle,
+              courseType: courseType,
+              online: online
+            };
+          } else {
+            timeSlotEntry[doKey] = courseTitle;
+          }
+        }
+      }
+    });
+
+    timeSlots.push(timeSlotEntry);
+  });
+
+  return timeSlots;
+}
+
+const parseTimetableCandidate = (obj: unknown): TimetableData | null => {
+  if (!obj || typeof obj !== 'object') {
+    return null;
+  }
+
+  const candidate = obj as Partial<TimetableData>;
+  const metadata =
+    typeof candidate.metadata === 'object' && candidate.metadata !== null
+      ? (candidate.metadata as TimetableData['metadata'])
+      : {
+        generated_at: '',
+        source: '',
+        academic_year: '',
+        format: ''
+      };
+  const time_slots = Array.isArray(candidate.time_slots) ? (candidate.time_slots as string[]) : [];
+  const slot_mapping =
+    typeof candidate.slot_mapping === 'object' && candidate.slot_mapping !== null
+      ? (candidate.slot_mapping as TimetableData['slot_mapping'])
+      : {};
+  const timetable =
+    typeof candidate.timetable === 'object' && candidate.timetable !== null
+      ? (candidate.timetable as TimetableData['timetable'])
+      : {};
+
+  return {
+    metadata,
+    time_slots,
+    slot_mapping,
+    timetable
+  };
+};
+
+const resolveCachedTimetable = (value: unknown): TimetableData | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  if ('data' in candidate) {
+    const nested = parseTimetableCandidate(candidate.data);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return parseTimetableCandidate(candidate);
+};
+
+interface TimetableInitialSnapshot {
+  rawTimetableData: TimetableData | null;
+  timetableSlots: TimeSlot[];
+  slotOccurrences: SlotOccurrence[];
+  calendarData: CalendarEvent[];
+  dayOrderStats: DayOrderStats | null;
+  hasTimetableCache: boolean;
+}
+
+const getInitialTimetableSnapshot = (): TimetableInitialSnapshot => {
+  const cachedTimetable = resolveCachedTimetable(getClientCache('timetable'));
+  const calendarData = getClientCache<CalendarEvent[]>('calendar') ?? [];
+  const dayOrderStats = calendarData.length ? getDayOrderStats(calendarData) : null;
+  const timetableSlots = cachedTimetable ? convertTimetableDataToTimeSlots(cachedTimetable) : [];
+  const slotOccurrences = cachedTimetable ? getSlotOccurrences(cachedTimetable) : [];
+  return {
+    rawTimetableData: cachedTimetable,
+    timetableSlots,
+    slotOccurrences,
+    calendarData,
+    dayOrderStats,
+    hasTimetableCache: Boolean(cachedTimetable),
+  };
+};
+
 export default function TimetablePage() {
-  const [timetableData, setTimetableData] = useState<TimeSlot[]>([]);
-  const [rawTimetableData, setRawTimetableData] = useState<TimetableData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialTimetableSnapshot = useMemo(() => getInitialTimetableSnapshot(), []);
+  const [timetableData, setTimetableData] = useState<TimeSlot[]>(initialTimetableSnapshot.timetableSlots);
+  const [rawTimetableData, setRawTimetableData] = useState<TimetableData | null>(initialTimetableSnapshot.rawTimetableData);
+  const [loading, setLoading] = useState(!initialTimetableSnapshot.hasTimetableCache);
   const [error, setError] = useState<string | null>(null);
 
   // Track errors
   useErrorTracking(error, '/timetable');
-  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
-  const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
-  const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
+  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>(initialTimetableSnapshot.slotOccurrences);
+  const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(initialTimetableSnapshot.dayOrderStats);
+  const [calendarData, setCalendarData] = useState<CalendarEvent[]>(initialTimetableSnapshot.calendarData);
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -164,7 +293,9 @@ export default function TimetablePage() {
 
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
-      setLoading(true);
+      const hasDisplayCache = timetableData.length > 0 || slotOccurrences.length > 0;
+      const shouldShowLoading = forceRefresh || !hasDisplayCache;
+      setLoading(shouldShowLoading);
       setError(null);
       if (forceRefresh) {
         setIsRefreshing(true);
@@ -745,62 +876,6 @@ export default function TimetablePage() {
       };
     };
   }
-
-  const convertTimetableDataToTimeSlots = (data: TimetableData): TimeSlot[] => {
-    const timeSlots: TimeSlot[] = [];
-
-    // Check if timetable data exists
-    if (!data || !data.timetable || typeof data.timetable !== 'object') {
-      console.warn('[Timetable] ⚠️ Invalid timetable data structure:', data);
-      return timeSlots;
-    }
-
-    const timeSlotKeys = data.time_slots || [
-      "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
-      "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
-    ];
-
-    timeSlotKeys.forEach(timeSlot => {
-      const timeSlotEntry: TimeSlot = {
-        time: timeSlot,
-        do1: "",
-        do2: "",
-        do3: "",
-        do4: "",
-        do5: ""
-      };
-
-      ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach((doName, index) => {
-        // Safely access timetable data
-        const doData = data.timetable && typeof data.timetable === 'object' ? (data.timetable as Record<string, unknown>)[doName] : null;
-        if (doData && typeof doData === 'object' && doData !== null) {
-          const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string; courseType?: string; online?: boolean }> };
-          if (doDataTyped.time_slots && doDataTyped.time_slots[timeSlot]) {
-            const slotInfo = doDataTyped.time_slots[timeSlot];
-            const courseTitle = slotInfo.course_title || "";
-            const courseType = slotInfo.courseType;
-            const online = slotInfo.online;
-
-            const doKey = `do${index + 1}` as keyof TimeSlot;
-            // Store as object if we have courseType info, otherwise as string for backward compatibility
-            if (courseType || online !== undefined) {
-              (timeSlotEntry as unknown as Record<string, string | TimeSlotCell>)[doKey] = {
-                course: courseTitle,
-                courseType: courseType,
-                online: online
-              };
-            } else {
-              timeSlotEntry[doKey] = courseTitle;
-            }
-          }
-        }
-      });
-
-      timeSlots.push(timeSlotEntry);
-    });
-
-    return timeSlots;
-  };
 
   const days = ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'];
   const dayKeys = ['do1', 'do2', 'do3', 'do4', 'do5'] as const;

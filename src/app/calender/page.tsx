@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from 'next/link';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
@@ -23,8 +23,9 @@ interface CalendarEvent {
 }
 
 export default function CalendarPage() {
-  const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initialCalendarCache = useMemo(() => getClientCache<CalendarEvent[]>('calendar') ?? [], []);
+  const [calendarData, setCalendarData] = useState<CalendarEvent[]>(initialCalendarCache);
+  const [loading, setLoading] = useState(initialCalendarCache.length === 0);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [error, setError] = useState<string | null>(null);
 
@@ -144,7 +145,8 @@ export default function CalendarPage() {
 
   const fetchUnifiedData = async () => {
     try {
-      setLoading(true);
+      const shouldShowLoading = calendarData.length === 0;
+      setLoading(shouldShowLoading);
       setError(null);
 
       const access_token = getStorageItem('access_token');

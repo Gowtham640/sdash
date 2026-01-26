@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Open_Sans, Sora } from "next/font/google";
 import "./globals.css";
 import AnalyticsProvider from "@/components/AnalyticsProvider";
 import BottomNavigationBar from "@/components/BottomNavigationBar";
+import SessionRefresher from "@/components/SessionRefresher";
 
 const sans = Open_Sans({
   variable: "--font-open-sans",
@@ -49,6 +50,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${sans.variable} ${sora.variable} antialiased`}
       >
         <AnalyticsProvider>
+          <SessionRefresher />
           <div className="min-h-screen relative z-10">{children}</div>
           <BottomNavigationBar />
         </AnalyticsProvider>

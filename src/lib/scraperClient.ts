@@ -161,8 +161,13 @@ function getCacheTypeForAction(action: string): CacheDataType | null {
 
 async function determineUserType(
   userId: string | undefined,
-  requestedType?: CacheDataType | null
+  requestedType?: CacheDataType | null,
+  forceRefresh?: boolean
 ): Promise<ScraperUserType> {
+  if (forceRefresh) {
+    return 'new';
+  }
+
   if (!userId || !requestedType) {
     return 'old';
   }
@@ -901,7 +906,11 @@ export async function callBackendScraper<T = unknown>(
 
   const normalizedUserId = data.user_id ?? data.userId;
   const targetDataType = data.requestedType ?? getCacheTypeForAction(action);
-  const resolvedUserType = await determineUserType(normalizedUserId, targetDataType);
+  const resolvedUserType = await determineUserType(
+    normalizedUserId,
+    targetDataType,
+    Boolean(data.force_refresh)
+  );
   const requestPayload: ScraperRequest = {
     ...data,
     userType: data.userType ?? resolvedUserType,

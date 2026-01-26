@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import NavigationButton from "@/components/NavigationButton";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
@@ -45,9 +45,18 @@ const extractMarksPayload = (value: unknown): MarksPayload | null => {
   };
 };
 
+const getInitialMarksPayload = (): MarksPayload | null => {
+  const cached = getClientCache<MarksPayload>(MARKS_CACHE_KEY);
+  if (!cached) {
+    return null;
+  }
+  return extractMarksPayload(cached);
+};
+
 export default function MarksPage() {
-  const [marksPayload, setMarksPayload] = useState<MarksPayload | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialMarksPayload = useMemo(() => getInitialMarksPayload(), []);
+  const [marksPayload, setMarksPayload] = useState<MarksPayload | null>(initialMarksPayload);
+  const [loading, setLoading] = useState(!initialMarksPayload);
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
@@ -92,7 +101,8 @@ export default function MarksPage() {
 
   const fetchMarksData = async (forceRefresh = false) => {
     try {
-      setLoading(true);
+      const shouldShowLoading = forceRefresh || !marksPayload;
+      setLoading(shouldShowLoading);
       setError(null);
 
       const access_token = getStorageItem('access_token');

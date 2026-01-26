@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import type { SignInResponse } from "@/lib/auth/types";
+import { setSessionCookies } from "@/lib/auth/sessionCookies";
 
 // Wrap imports in try-catch to handle potential import errors
 let handleUserSignIn: ((email: string, password: string) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
@@ -118,28 +119,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (result.session) {
-      const isProduction = process.env.NODE_ENV === 'production';
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      const expiresAtSeconds = typeof result.session.expires_at === 'number' ? result.session.expires_at : null;
-      const maxAgeSeconds = expiresAtSeconds
-        ? Math.max(60, expiresAtSeconds - nowSeconds)
-        : 3600;
-
-      response.cookies.set('sdash_access_token', result.session.access_token, {
-        httpOnly: true,
-        path: '/',
-        sameSite: 'lax',
-        secure: isProduction,
-        maxAge: maxAgeSeconds,
-      });
-
-      response.cookies.set('sdash_user_role', result.user?.role || 'public', {
-        httpOnly: true,
-        path: '/',
-        sameSite: 'lax',
-        secure: isProduction,
-        maxAge: maxAgeSeconds,
-      });
+      setSessionCookies(response, result.session, result.user?.role || 'public');
     }
 
     return response;

@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
 import Link from "next/link";
 import PillNav from '../../components/PillNav';
@@ -21,6 +21,60 @@ import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "
 import Particles from "@/components/Particles";
 import { trackPostRequest } from "@/lib/postAnalytics";
 
+interface DashboardCacheSnapshot {
+  attendanceData: AttendanceData | null;
+  marksData: MarksData | null;
+  timetableData: {
+    timetable?: TimetableData['timetable'];
+    slot_mapping?: TimetableData['slot_mapping'];
+  } | null;
+  slotOccurrences: SlotOccurrence[];
+  hasCache: boolean;
+}
+
+function getInitialDashboardCacheSnapshot(): DashboardCacheSnapshot {
+  const attendanceData = getClientCache<AttendanceData>('attendance');
+  const marksData = getClientCache<MarksData>('marks');
+  const timetableCache = getClientCache<TimetableData>('timetable');
+  let timetableData = null;
+  let slotOccurrences: SlotOccurrence[] = [];
+
+  if (timetableCache) {
+    timetableData = {
+      timetable: timetableCache.timetable,
+      slot_mapping: timetableCache.slot_mapping,
+    };
+    const timetableForUtils: TimetableData = {
+      metadata: timetableCache.metadata ?? {
+        generated_at: '',
+        source: '',
+        academic_year: '',
+        format: ''
+      },
+      time_slots: timetableCache.time_slots ?? [],
+      slot_mapping: timetableCache.slot_mapping ?? {},
+      timetable: timetableCache.timetable ?? {},
+    };
+    try {
+      slotOccurrences = getSlotOccurrences(timetableForUtils);
+    } catch (error) {
+      console.error('[Dashboard] ⚠️ Failed to derive slot occurrences from cached timetable:', error);
+    }
+  }
+
+  return {
+    attendanceData: attendanceData ?? null,
+    marksData: marksData ?? null,
+    timetableData,
+    slotOccurrences,
+    hasCache: Boolean(
+      attendanceData ||
+      marksData ||
+      (timetableCache && (Object.keys(timetableCache.timetable || {}).length || Object.keys(timetableCache.slot_mapping || {}).length))
+    ),
+  };
+}
+
 // Import types
 interface CalendarEvent {
   date: string;
@@ -41,20 +95,20 @@ interface TimeSlot {
 type CachePayloadType = 'attendance' | 'marks' | 'timetable';
 
 export default function Dashboard() {
+  const initialCacheSnapshot = useMemo(() => getInitialDashboardCacheSnapshot(), []);
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
-  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
-  const [marksData, setMarksData] = useState<MarksData | null>(null);
+  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(initialCacheSnapshot.attendanceData);
+  const [marksData, setMarksData] = useState<MarksData | null>(initialCacheSnapshot.marksData);
   const [timetableData, setTimetableData] = useState<{
     timetable?: Record<string, { do_name?: string; time_slots?: Record<string, unknown> }>;
     slot_mapping?: Record<string, string>;
-  } | null>(null);
-  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
+  } | null>(initialCacheSnapshot.timetableData);
+  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>(initialCacheSnapshot.slotOccurrences);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialCacheSnapshot.hasCache);
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSkeleton, setShowSkeleton] = useState(false);
-  const [hasCache, setHasCache] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const router = useRouter();
@@ -220,54 +274,32 @@ export default function Dashboard() {
   const getTodaysTimetable = () => {
     console.log('[Dashboard] 🔍 getTodaysTimetable called');
 
-    // Ensure calendar data is loaded before computing timetable
-    if (!calendarData || !Array.isArray(calendarData) || calendarData.length === 0) {
-      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - calendar data not loaded yet');
+    const doNumber = getCurrentDayOrderNumber();
+    if (doNumber == null) {
+      console.log('[Dashboard] ℹ️ Day order unavailable or non-working day, skipping timetable');
       return [];
     }
-
-    // Find today's event
-    const currentDate = getCurrentDateString();
-    const today = calendarData.find(event => event && event.date === currentDate);
-
-    // Normalize the day order ONCE
-    const doNumber = Number(today?.day_order);
-
-    // Add guard for invalid day order
-    if (Number.isNaN(doNumber)) {
-      console.error("Invalid day order:", today?.day_order);
-      return [];
-    }
-
-    console.log('[Dashboard] 📊 Timetable data exists:', !!timetableData);
-    console.log('[Dashboard] 📊 Timetable data has timetable property:', !!timetableData?.timetable);
-    console.log('[Dashboard] 📊 Available DO keys:', timetableData?.timetable ? Object.keys(timetableData.timetable) : 'no timetable data');
 
     if (!timetableData?.timetable) {
       console.log('[Dashboard] ❌ getTodaysTimetable returning empty - missing timetable data');
       return [];
     }
 
-    // Use the correct timetable key
-    const timetableForToday = timetableData.timetable[`DO ${doNumber}`];
+    const key = `DO ${doNumber}`;
+    console.log('[Dashboard] 📊 Timetable data lookup key:', key);
+    const timetableForToday = timetableData.timetable[key];
 
-    // Add ONE definitive log
-    console.log("FINAL LOOKUP KEY:", `DO ${doNumber}`);
-    console.log("FOUND TIMETABLE:", timetableForToday);
-
-    const dayTimetable = timetableForToday;
-
-    if (!dayTimetable?.time_slots) {
-      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - no time_slots for DO', doNumber);
+    if (!timetableForToday?.time_slots) {
+      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - no time_slots for', key);
       return [];
     }
 
     // Convert to array of {time, course_title, category}
     const timeSlots: TimeSlot[] = [];
-    if (!dayTimetable || !dayTimetable.time_slots || typeof dayTimetable.time_slots !== 'object') {
+    if (!timetableForToday.time_slots || typeof timetableForToday.time_slots !== 'object') {
       return timeSlots;
     }
-    Object.entries(dayTimetable.time_slots).forEach(([time, slot]: [string, unknown]) => {
+    Object.entries(timetableForToday.time_slots).forEach(([time, slot]: [string, unknown]) => {
       const typedSlot = slot as { slot_code?: string; slot_type?: string };
       if (typedSlot?.slot_code) {
         // Find course title from slot mapping
@@ -348,8 +380,6 @@ export default function Dashboard() {
     const cachedTimetable = getClientCache('timetable');
     const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
 
-    setHasCache(hasAnyCache);
-
     if (!hasAnyCache) {
       // Wait 2 seconds before showing skeleton
       const timer = setTimeout(() => {
@@ -421,7 +451,11 @@ export default function Dashboard() {
 
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
-      setLoading(true);
+      const cacheAvailable =
+        !!getClientCache<AttendanceData>('attendance') ||
+        !!getClientCache<MarksData>('marks') ||
+        !!getClientCache<TimetableData>('timetable');
+      setLoading(forceRefresh || !cacheAvailable);
       setError(null);
 
       const access_token = getStorageItem('access_token');
@@ -454,12 +488,15 @@ export default function Dashboard() {
 
       const dataToFetch = ['calendar', 'timetable', 'attendance', 'marks'];
       const requestBody = getRequestBodyWithPassword(access_token, forceRefresh, dataToFetch);
-      if (!forceRefresh) {
-        await ensureSupabaseData({
+
+      const ensurePromise = !forceRefresh
+        ? ensureSupabaseData({
           access_token,
           password: requestBody.password,
-        });
-      }
+        }).catch(error => {
+          console.error('[Dashboard] ❌ Error ensuring Supabase data:', error);
+        })
+        : Promise.resolve();
 
       const missingCount = 3;
       const needsBackgroundRefresh = false;
@@ -620,9 +657,6 @@ export default function Dashboard() {
           if (result.data.marks) {
             setClientCache('marks', result.data.marks);
           }
-          if (result.data.timetable) {
-            setClientCache('timetable', result.data.timetable);
-          }
         }
       }
       // Register attendance/marks fetch for smart prefetch scheduling
@@ -633,6 +667,8 @@ export default function Dashboard() {
           registerAttendanceFetch();
         }
       }
+
+      await ensurePromise;
 
     } catch (err) {
       console.error('[Dashboard] Error fetching data:', err);
@@ -1025,25 +1061,7 @@ export default function Dashboard() {
 
     return (
       <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-        <PillNav
-          logo=""
-          logoAlt=""
-          items={[
-            { label: 'Attendance', href: '/attendance' },
-            { label: 'Timetable', href: '/timetable' },
-            { label: 'Marks', href: '/marks' },
-            { label: 'Calendar', href: '/calender' },
-            { label: 'SPGA Calculator', href: '/spga-calculator' },
-            ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
-          ]}
-          activeHref="/dashboard"
-          className="custom-nav"
-          ease="power2.easeOut"
-          pillColor="#000000"
-          baseColor="#ffffff"
-          hoveredPillTextColor="#000000"
-          pillTextColor="#ffffff"
-        />
+
         <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
           <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
             Welcome to your Dashboard
