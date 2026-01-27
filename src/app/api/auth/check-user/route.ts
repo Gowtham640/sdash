@@ -59,7 +59,9 @@ export async function POST(request: NextRequest) {
                 : Array.isArray(authUserPayload.users)
                     ? authUserPayload.users
                     : [];
-        const authUser = authUsers[0] ?? null;
+        const authUser =
+            authUsers.find((user: { email?: string }) => user.email === email) ??
+            null;
 
         const { data: publicUser, error: publicError } = await supabaseAdmin
             .from("users")
