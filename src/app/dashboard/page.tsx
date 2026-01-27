@@ -336,12 +336,14 @@ export default function Dashboard() {
     if (!dayOrder || isHolidayDayOrder(dayOrder)) {
       return null;
     }
-    if (dayOrder.startsWith('DO ')) {
-      const parsed = parseInt(dayOrder.split(' ')[1], 10);
-      return Number.isNaN(parsed) ? null : parsed;
+
+    const match = dayOrder.match(/\d+/);
+    if (!match) {
+      return null;
     }
 
-    return null;
+    const parsed = parseInt(match[0], 10);
+    return Number.isNaN(parsed) || parsed < 1 || parsed > 5 ? null : parsed;
   };
 
   // Get today's timetable based on day order
