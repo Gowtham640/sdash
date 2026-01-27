@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo } from "react";
 import Link from 'next/link';
-import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats, type TimetableDayOrder } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
