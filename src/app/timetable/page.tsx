@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo } from "react";
 import Link from 'next/link';
-import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats } from "@/lib/timetableUtils";
+import { getSlotOccurrences, getDayOrderStats, type SlotOccurrence, type DayOrderStats, type TimetableDayOrder } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
@@ -63,6 +63,22 @@ interface CalendarEvent {
   year?: number;
 }
 
+const normalizeDayKey = (value: string): string => value.replace(/\s+/g, '').toLowerCase();
+
+const findDayOrderEntry = (
+  timetable: TimetableData['timetable'],
+  dayName: string
+): TimetableDayOrder | null => {
+  const normalizedTarget = normalizeDayKey(dayName);
+  const directMatch = timetable[dayName];
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const normalizedEntry = Object.entries(timetable).find(([key]) => normalizeDayKey(key) === normalizedTarget);
+  return normalizedEntry ? (normalizedEntry[1] as TimetableDayOrder) : null;
+};
+
 function convertTimetableDataToTimeSlots(data: TimetableData): TimeSlot[] {
   const timeSlots: TimeSlot[] = [];
 
@@ -87,7 +103,8 @@ function convertTimetableDataToTimeSlots(data: TimetableData): TimeSlot[] {
     };
 
     ['DO 1', 'DO 2', 'DO 3', 'DO 4', 'DO 5'].forEach((doName, index) => {
-      const doData = data.timetable && typeof data.timetable === 'object' ? (data.timetable as Record<string, unknown>)[doName] : null;
+      const timetableRecord = data.timetable && typeof data.timetable === 'object' ? (data.timetable as TimetableData['timetable']) : {};
+      const doData = findDayOrderEntry(timetableRecord, doName);
       if (doData && typeof doData === 'object' && doData !== null) {
         const doDataTyped = doData as { time_slots?: Record<string, { course_title?: string; courseType?: string; online?: boolean }> };
         if (doDataTyped.time_slots && doDataTyped.time_slots[timeSlot]) {
