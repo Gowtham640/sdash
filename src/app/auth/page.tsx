@@ -46,27 +46,27 @@ export default function AuthPage() {
     const currentTest = MEMORY_TESTS[testIndex];
     const credentialsRef = useRef<{ email: string; password: string } | null>(null);
     const [serverFullNotice, setServerFullNotice] = useState<string | null>(null);
-    const clearLoginTimeout = () => {
+    const clearLoginTimeout = useCallback(() => {
         if (loginTimeoutRef.current) {
             clearTimeout(loginTimeoutRef.current);
             loginTimeoutRef.current = null;
         }
-    };
+    }, []);
 
-    const startLoginTimeout = () => {
+    const startLoginTimeout = useCallback(() => {
         clearLoginTimeout();
         loginTimeoutRef.current = setTimeout(() => {
             setError("Sorry all our servers are busy, retry later");
             setStage("login");
             setIsLoading(false);
         }, 60000);
-    };
+    }, [clearLoginTimeout]);
 
     useEffect(() => {
         return () => {
             clearLoginTimeout();
         };
-    }, []);
+    }, [clearLoginTimeout]);
 
     // Check for Private Browsing mode on mount
     useEffect(() => {
@@ -162,6 +162,20 @@ export default function AuthPage() {
         setShowDisclaimer(false);
     };
 
+    const handleBackgroundLoginFailure = useCallback(
+        (error: unknown) => {
+            console.error("[Auth Page] Background login failed:", error);
+            setError(
+                error instanceof Error
+                    ? error.message
+                    : "Sign-in failed while verifying credentials. Please try again."
+            );
+            setStage("login");
+            setIsLoading(false);
+            clearLoginTimeout();
+        },
+        [clearLoginTimeout]
+    );
 
     const handleSignIn = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -186,6 +200,7 @@ export default function AuthPage() {
                 router.push("/dashboard");
                 return;
             }
+            checkData.loginPromise?.catch(handleBackgroundLoginFailure);
             setStage("initialDelay");
             startLoginTimeout();
         } catch (err) {
@@ -266,7 +281,18 @@ export default function AuthPage() {
         router.push("/dashboard");
     }, [performLogin, router]);
 
-    const ensureUserBeforeCaptcha = useCallback(async () => {
+    type AuthCheckResponse = {
+        auth_exists: boolean;
+        public_exists: boolean;
+        user_id?: string | null;
+        error?: string;
+    };
+
+    type CaptchaCheckResult = AuthCheckResponse & {
+        loginPromise?: Promise<boolean>;
+    };
+
+    const ensureUserBeforeCaptcha = useCallback(async (): Promise<CaptchaCheckResult> => {
         const credentials = credentialsRef.current;
         if (!credentials) {
             throw new Error("Credentials missing.");
@@ -283,10 +309,13 @@ export default function AuthPage() {
             throw new Error("Failed to verify user existence.");
         }
 
-        const checkData = await checkResponse.json();
+        const checkData = (await checkResponse.json()) as AuthCheckResponse;
         if (!checkData.auth_exists) {
-            await performLogin();
-            return checkData;
+            const loginPromise = performLogin();
+            return {
+                ...checkData,
+                loginPromise,
+            };
         }
 
         if (checkData.public_exists) {
