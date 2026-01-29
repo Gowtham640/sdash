@@ -916,34 +916,6 @@ export default function TimetablePage() {
     );
   }
 
-  if (error) {
-    return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
-        <div className="w-[90vw] h-[90vh] bg-white/10 border border-white/20 rounded-3xl text-white text-3xl font-sora flex flex-col gap-10 justify-center items-center">
-          <div className="text-white text-4xl font-sora font-bold">Timetable</div>
-          <div className="text-red-400 text-2xl font-sora text-center px-4">{error}</div>
-          <div className="flex gap-4">
-            <button
-              onClick={() => fetchUnifiedData()}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Retry
-            </button>
-            {error.includes('session') && (
-              <NavigationButton
-                path="/auth"
-                onClick={handleReAuthenticate}
-                className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
-              >
-                Sign In Again
-              </NavigationButton>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Show empty state if no timetable data but no error (allows refresh button to work)
   if (!rawTimetableData || !timetableData || timetableData.length === 0) {
     return (

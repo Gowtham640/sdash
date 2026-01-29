@@ -488,32 +488,6 @@ export default function CalendarPage() {
     );
   }
 
-  if (error) {
-    return (
-      <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-8 sm:pt-9 md:pt-9 lg:pt-10 gap-10 sm:gap-12 md:gap-14 lg:gap-16">
-        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
-        <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
-        <div className="flex gap-3 sm:gap-4">
-          <button
-            onClick={() => fetchUnifiedData()}
-            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm sm:text-base"
-          >
-            Retry
-          </button>
-          {error.includes('session') && (
-            <NavigationButton
-              path="/auth"
-              onClick={handleReAuthenticate}
-              className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
-            >
-              Sign In Again
-            </NavigationButton>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="relative bg-black items-center min-h-screen flex flex-col overflow-hidden pt-10 gap-8">
       {renderParticleLayer()}
@@ -535,10 +509,20 @@ export default function CalendarPage() {
         </svg>
       </Link>
 
-      <div className="flex flex-col items-center gap-4">
-        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold"> Academic Calendar 25-26 ODD </div>
-        <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
-          Today&apos;s Date: {getCurrentDateString()}
+      <div className="flex flex-col items-center gap-3">
+        <div className="flex flex-col items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold">Academic Calendar 25-26 ODD</div>
+            <button
+              onClick={() => fetchUnifiedData()}
+              className="px-3 py-1.5 sm:px-4 sm:py-2 bg-blue-600 hover:bg-blue-700 text-white font-sora text-xs sm:text-sm rounded-full transition-colors"
+            >
+              Refresh Calendar
+            </button>
+          </div>
+          <div className="text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora">
+            Today&apos;s Date: {getCurrentDateString()}
+          </div>
         </div>
       </div>
 
