@@ -1201,7 +1201,7 @@ export default function AttendancePage() {
           }
 
           if ('timetable' in candidate || 'time_slots' in candidate) {
-            return candidate as TimetableData;
+            return candidate as unknown as TimetableData;
           }
 
           return null;
