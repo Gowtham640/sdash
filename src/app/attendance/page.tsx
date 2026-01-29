@@ -283,6 +283,7 @@ export default function AttendancePage() {
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
+  const isEnsuringCalendarRef = useRef(false);
   const applyAttendanceDataPayload = (payload: AttendanceData, options?: { expiresAt?: string | null }) => {
     setAttendanceData(payload);
     setOriginalAttendanceData(payload);
@@ -671,6 +672,46 @@ export default function AttendancePage() {
 
   // Use ref to prevent duplicate calls
   const isCalculatingRef = useRef(false);
+  const ensureUnifiedCalendarCache = async () => {
+    if (isEnsuringCalendarRef.current) {
+      return;
+    }
+
+    const access_token = getStorageItem('access_token');
+    if (!access_token) {
+      throw new Error('No access token available for calendar refresh');
+    }
+
+    isEnsuringCalendarRef.current = true;
+
+    try {
+      const requestKey = `fetch_unified_all_${access_token.substring(0, 10)}_calendar`;
+      const apiResult = await deduplicateRequest(requestKey, async () => {
+        const response = await trackPostRequest('/api/data/all', {
+          action: 'data_unified_fetch',
+          dataType: 'attendance',
+          payload: getRequestBodyWithPassword(access_token, true, ['calendar', 'timetable']),
+          omitPayloadKeys: ['password', 'access_token'],
+        });
+        const result = await response.json();
+        return { response, result };
+      });
+
+      const { response, result } = apiResult;
+
+      if (!response.ok || result.error === 'session_expired') {
+        throw new Error('Session expired while refreshing calendar cache');
+      }
+
+      if (!result.success) {
+        throw new Error(result.error || 'Unified fetch failed while refreshing calendar cache');
+      }
+
+      console.log('[Attendance] ✅ Unified fetch refreshed calendar + timetable cache');
+    } finally {
+      isEnsuringCalendarRef.current = false;
+    }
+  };
 
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
     // Prevent duplicate calls
@@ -688,6 +729,7 @@ export default function AttendancePage() {
     setIsCalculating(true);
 
     try {
+      await ensureUnifiedCalendarCache();
       const results = await calculatePredictedAttendance(
         attendanceData,
         slotOccurrences,
@@ -724,6 +766,7 @@ export default function AttendancePage() {
     setIsCalculating(true);
 
     try {
+      await ensureUnifiedCalendarCache();
       const calendarForOdml = await fetchCalendarFromSupabase();
       const results = await calculateODMLAdjustedAttendance(
         attendanceData,
