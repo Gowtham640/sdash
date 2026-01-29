@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
-import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence, type TimetableData, type CalendarEvent } from '@/lib/timetableUtils';
+import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence, type TimetableData, type CalendarEvent, type TimetableDayOrder } from '@/lib/timetableUtils';
 import { AttendancePredictionModal } from '@/components/AttendancePredictionModal';
 import { ODMLModal } from '@/components/ODMLModal';
 import { calculatePredictedAttendance, calculateODMLAdjustedAttendance, calculateSubjectHoursInDateRange, getDayOrderStatsForDateRange, type PredictionResult, type LeavePeriod } from '@/lib/attendancePrediction';
@@ -708,9 +708,157 @@ export default function AttendancePage() {
       }
 
       console.log('[Attendance] ✅ Unified fetch refreshed calendar + timetable cache');
+
+      const calendarCandidate = (result.data as { calendar?: unknown })?.calendar;
+      let calendarArray: CalendarEvent[] | null = null;
+
+      if (Array.isArray(calendarCandidate)) {
+        calendarArray = calendarCandidate as CalendarEvent[];
+      } else if (
+        calendarCandidate &&
+        typeof calendarCandidate === 'object' &&
+        'data' in (calendarCandidate as Record<string, unknown>) &&
+        Array.isArray((calendarCandidate as { data?: unknown }).data)
+      ) {
+        calendarArray = (calendarCandidate as { data?: CalendarEvent[] }).data || null;
+      }
+
+      if (calendarArray && calendarArray.length > 0) {
+        setCalendarData(calendarArray);
+        const stats = getDayOrderStats(calendarArray);
+        setDayOrderStats(stats);
+        setClientCache('calendar', calendarArray, { expiresAt: null });
+        try {
+          localStorage.setItem('sdash_dayOrderStats', JSON.stringify(stats));
+        } catch (e) {
+          console.warn('[Attendance] Failed to cache day order stats', e);
+        }
+      } else {
+        console.warn('[Attendance] Unified fetch returned empty calendar');
+      }
+
+      const timetableCandidate = (result.data as { timetable?: unknown })?.timetable;
+      let parsedTimetable: TimetableData | null = null;
+
+      if (timetableCandidate && typeof timetableCandidate === 'object') {
+        let candidate = timetableCandidate as Record<string, unknown>;
+
+        if ('schedule' in candidate && Array.isArray(candidate.schedule)) {
+          parsedTimetable = transformGoBackendTimetableToOldFormat(candidate);
+        } else {
+          if ('data' in candidate && typeof candidate.data === 'object' && candidate.data !== null) {
+            candidate = candidate.data as Record<string, unknown>;
+          }
+
+          if ('timetable' in candidate || 'time_slots' in candidate) {
+            parsedTimetable = candidate as unknown as TimetableData;
+          }
+        }
+      }
+
+      if (parsedTimetable) {
+        setClientCache('timetable', parsedTimetable, { expiresAt: null });
+        const occurrences = getSlotOccurrences(parsedTimetable);
+        setSlotOccurrences(occurrences);
+        try {
+          localStorage.setItem('sdash_slotOccurrences', JSON.stringify(occurrences));
+        } catch (e) {
+          console.warn('[Attendance] Failed to cache slot occurrences', e);
+        }
+      } else {
+        console.warn('[Attendance] Unified fetch returned empty timetable');
+      }
     } finally {
       isEnsuringCalendarRef.current = false;
     }
+  };
+
+  const transformGoBackendTimetableToOldFormat = (goData: Record<string, unknown>): TimetableData => {
+    const timeSlots = [
+      "08:00-08:50", "08:50-09:40", "09:45-10:35", "10:40-11:30", "11:35-12:25",
+      "12:30-01:20", "01:25-02:15", "02:20-03:10", "03:10-04:00", "04:00-04:50"
+    ];
+
+    const schedule = Array.isArray(goData.schedule) ? goData.schedule as Array<{ day: number; table: Array<unknown> }> : undefined;
+    if (!schedule) {
+      console.warn('[Attendance] Invalid Go backend timetable structure');
+      return {
+        metadata: {
+          generated_at: new Date().toISOString(),
+          source: 'go_backend',
+          academic_year: '',
+          format: 'go_backend'
+        },
+        time_slots: timeSlots,
+        slot_mapping: {},
+        timetable: {}
+      };
+    }
+
+    const timetable: Record<string, TimetableDayOrder> = {};
+    const slotMapping: Record<string, string> = {};
+
+    const dayToDO: Record<number, string> = {
+      1: 'DO 1',
+      2: 'DO 2',
+      3: 'DO 3',
+      4: 'DO 4',
+      5: 'DO 5'
+    };
+
+    schedule.forEach(daySchedule => {
+      const doName = dayToDO[daySchedule.day];
+      if (!doName) {
+        return;
+      }
+
+      const timeSlotsMap: Record<string, { slot_code: string; course_title: string; slot_type: string; is_alternate: boolean; courseType?: string; online?: boolean }> = {};
+
+      daySchedule.table.forEach((entry, index) => {
+        if (entry && typeof entry === 'object') {
+          const course = entry as { code?: string; name?: string; slot?: string; courseType?: string; slotType?: string; online?: boolean };
+          if (course.code && course.name && course.slot) {
+            const timeSlot = timeSlots[index] || `Slot ${index + 1}`;
+            const slotCode = course.slot;
+            const courseTitle = course.name;
+            const courseType = course.courseType || 'Theory';
+            const slotType = course.slotType || (courseType === 'Practical' ? 'Lab' : 'Theory');
+
+            timeSlotsMap[timeSlot] = {
+              slot_code: slotCode,
+              course_title: courseTitle,
+              slot_type: slotType,
+              is_alternate: false,
+              courseType,
+              online: course.online || false
+            };
+
+            if (!slotMapping[slotCode]) {
+              slotMapping[slotCode] = courseTitle;
+            }
+          }
+        }
+      });
+
+      if (Object.keys(timeSlotsMap).length > 0) {
+        timetable[doName] = {
+          do_name: doName,
+          time_slots: timeSlotsMap
+        };
+      }
+    });
+
+    return {
+      metadata: {
+        generated_at: new Date().toISOString(),
+        source: 'go_backend',
+        academic_year: '',
+        format: 'go_backend'
+      },
+      time_slots: timeSlots,
+      slot_mapping: slotMapping,
+      timetable
+    };
   };
 
   const handlePredictionCalculate = async (periods: LeavePeriod[]) => {
@@ -1042,10 +1190,21 @@ export default function AttendancePage() {
           if (typeof payload !== 'object' || Array.isArray(payload)) {
             return null;
           }
-          if ('data' in (payload as { data?: unknown }) && typeof (payload as { data?: unknown }).data === 'object' && (payload as { data?: TimetableData }).data) {
-            return (payload as { data?: TimetableData }).data || null;
+
+          let candidate = payload as Record<string, unknown>;
+          if ('data' in candidate && typeof candidate.data === 'object' && candidate.data !== null) {
+            candidate = candidate.data as Record<string, unknown>;
           }
-          return payload as TimetableData;
+
+          if ('schedule' in candidate && Array.isArray(candidate.schedule)) {
+            return transformGoBackendTimetableToOldFormat(candidate);
+          }
+
+          if ('timetable' in candidate || 'time_slots' in candidate) {
+            return candidate as unknown as TimetableData;
+          }
+
+          return null;
         };
 
         const timetablePayload = normalizeTimetablePayload(timetableCandidate);
