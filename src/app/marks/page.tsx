@@ -205,30 +205,6 @@ export default function MarksPage() {
     </div>
   );
 
-  const renderError = () => (
-    <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
-      <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold">Marks</div>
-      <div className="text-red-400 font-sora text-base sm:text-lg md:text-xl lg:text-xl text-center px-4">{error}</div>
-      <div className="flex gap-3 sm:gap-4">
-        <button
-          onClick={refreshMarksData}
-          className="bg-blue-500 hover:bg-blue-600 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
-        >
-          Retry
-        </button>
-        {error?.includes('session') && (
-          <NavigationButton
-            path="/auth"
-            onClick={handleReAuthenticate}
-            className="bg-orange-600 hover:bg-orange-700 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 rounded-lg transition-colors text-sm sm:text-base"
-          >
-            Sign In Again
-          </NavigationButton>
-        )}
-      </div>
-    </div>
-  );
-
   const renderEmpty = () => (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
       <Link
@@ -285,10 +261,6 @@ export default function MarksPage() {
 
   if (loading && !marksPayload) {
     return renderLoading();
-  }
-
-  if (error) {
-    return renderError();
   }
 
   if (!marksPayload) {
