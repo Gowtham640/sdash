@@ -19,13 +19,6 @@ import { trackPostRequest } from "@/lib/postAnalytics";
 
 const HCAPTCHA_SITE_KEY = "a41abb7e-25be-411c-b2fe-c0365fc425ba";
 const POST_CAPTCHA_DURATION_MS = 30000;
-const POST_CAPTCHA_MESSAGES = [
-  "Logging you in...",
-  "Fetching data...",
-  "Just a moment...",
-  "Preparing your session...",
-  "You're almost set...",
-];
 
 type AuthStage = "login" | "captcha" | "postCaptcha";
 
@@ -42,7 +35,7 @@ export default function AuthPage() {
   const [stage, setStage] = useState<AuthStage>("login");
   const [captchaError, setCaptchaError] = useState<string | null>(null);
   const [isCaptchaScriptReady, setIsCaptchaScriptReady] = useState(false);
-  const [postCaptchaMessageIndex, setPostCaptchaMessageIndex] = useState(0);
+  const [postCaptchaProgress, setPostCaptchaProgress] = useState(0);
 
   const router = useRouter();
   const credentialsRef = useRef<{ email: string; password: string } | null>(null);
@@ -51,9 +44,10 @@ export default function AuthPage() {
   const captchaContainerRef = useRef<HTMLDivElement | null>(null);
   const loginTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const postCaptchaDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const postCaptchaIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const postCaptchaProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const authenticationStartedRef = useRef(false);
   const captchaSolvedAtRef = useRef<number | null>(null);
+  const postCaptchaProgressStartRef = useRef<number | null>(null);
 
   const clearLoginTimeout = useCallback(() => {
     if (loginTimeoutRef.current) {
@@ -71,35 +65,49 @@ export default function AuthPage() {
     }, 60000);
   }, [clearLoginTimeout]);
 
+  const clearProgressAnimation = useCallback(() => {
+    if (postCaptchaProgressIntervalRef.current) {
+      clearInterval(postCaptchaProgressIntervalRef.current);
+      postCaptchaProgressIntervalRef.current = null;
+    }
+    postCaptchaProgressStartRef.current = null;
+  }, []);
+
+  const startProgressAnimation = useCallback(() => {
+    clearProgressAnimation();
+    postCaptchaProgressStartRef.current = Date.now();
+    setPostCaptchaProgress(0);
+    postCaptchaProgressIntervalRef.current = setInterval(() => {
+      const startTime = postCaptchaProgressStartRef.current ?? Date.now();
+      const elapsed = Date.now() - startTime;
+      let progress = 0;
+
+      if (elapsed <= 3000) {
+        progress = (elapsed / 3000) * 60;
+      } else if (elapsed < POST_CAPTCHA_DURATION_MS) {
+        const slowPhaseDuration = POST_CAPTCHA_DURATION_MS - 3000;
+        const extraElapsed = elapsed - 3000;
+        progress = 60 + (extraElapsed / slowPhaseDuration) * 40;
+      } else {
+        progress = 100;
+      }
+
+      const clamped = Math.min(100, Math.max(0, progress));
+      setPostCaptchaProgress(clamped);
+
+      if (elapsed >= POST_CAPTCHA_DURATION_MS) {
+        clearProgressAnimation();
+      }
+    }, 100);
+  }, [clearProgressAnimation]);
+
   const clearVerificationTimers = useCallback(() => {
     if (postCaptchaDelayRef.current) {
       clearTimeout(postCaptchaDelayRef.current);
       postCaptchaDelayRef.current = null;
     }
-    if (postCaptchaIntervalRef.current) {
-      clearInterval(postCaptchaIntervalRef.current);
-      postCaptchaIntervalRef.current = null;
-    }
-  }, []);
-  const stopMessageRotation = useCallback(() => {
-    if (postCaptchaIntervalRef.current) {
-      clearInterval(postCaptchaIntervalRef.current);
-      postCaptchaIntervalRef.current = null;
-    }
-  }, []);
-
-  const startMessageRotation = useCallback(() => {
-    stopMessageRotation();
-    const interval = Math.max(
-      Math.floor(POST_CAPTCHA_DURATION_MS / POST_CAPTCHA_MESSAGES.length),
-      2500
-    );
-    postCaptchaIntervalRef.current = setInterval(() => {
-      setPostCaptchaMessageIndex((prev) =>
-        prev < POST_CAPTCHA_MESSAGES.length - 1 ? prev + 1 : prev
-      );
-    }, interval);
-  }, [stopMessageRotation]);
+    clearProgressAnimation();
+  }, [clearProgressAnimation]);
 
   const hasRenderedCaptcha = useCallback(() => {
     if (typeof document === "undefined") {
@@ -110,12 +118,11 @@ export default function AuthPage() {
 
   const clearCaptchaState = useCallback(() => {
     clearVerificationTimers();
-    stopMessageRotation();
     authenticationStartedRef.current = false;
     captchaTokenRef.current = null;
     captchaSolvedAtRef.current = null;
     setCaptchaError(null);
-    setPostCaptchaMessageIndex(0);
+    setPostCaptchaProgress(0);
     if (captchaWidgetIdRef.current !== null) {
       try {
         (window as any).hcaptcha.reset(captchaWidgetIdRef.current);
@@ -136,7 +143,7 @@ export default function AuthPage() {
         // ignore reset failure
       }
     }
-  }, [clearVerificationTimers, hasRenderedCaptcha, stopMessageRotation]);
+  }, [clearVerificationTimers, hasRenderedCaptcha]);
 
   useEffect(() => {
     return () => {
@@ -160,6 +167,13 @@ export default function AuthPage() {
     }, 100);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (stage !== "postCaptcha") {
+      clearProgressAnimation();
+      setPostCaptchaProgress(0);
+    }
+  }, [stage, clearProgressAnimation]);
 
   const liquidEtherElement = useMemo(
     () => (
@@ -384,10 +398,8 @@ export default function AuthPage() {
   ]);
   const beginPostCaptchaFlow = useCallback(() => {
     clearVerificationTimers();
-    stopMessageRotation();
     setStage("postCaptcha");
-    setPostCaptchaMessageIndex(0);
-    startMessageRotation();
+    startProgressAnimation();
     startLoginTimeout();
     setIsLoading(true);
     authenticationStartedRef.current = false;
@@ -401,8 +413,7 @@ export default function AuthPage() {
     }, POST_CAPTCHA_DURATION_MS);
   }, [
     clearVerificationTimers,
-    startMessageRotation,
-    stopMessageRotation,
+    startProgressAnimation,
     startLoginTimeout,
     startAuthentication,
   ]);
@@ -466,12 +477,6 @@ export default function AuthPage() {
     handleCaptchaExpired,
     handleCaptchaError,
   ]);
-
-  useEffect(() => {
-    if (stage !== "postCaptcha") {
-      stopMessageRotation();
-    }
-  }, [stage, stopMessageRotation]);
 
 
   const handleSignIn = useCallback(
@@ -617,13 +622,19 @@ export default function AuthPage() {
         ) : stage === "postCaptcha" ? (
           <div className="w-full flex flex-col gap-4 items-center">
             <div className="text-white text-lg font-semibold text-center">Completing verification</div>
-            <div className="text-white text-sm text-center">
-              {POST_CAPTCHA_MESSAGES[postCaptchaMessageIndex]}
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <div className="w-6 h-6 border-2 border-white rounded-full border-t-transparent animate-spin" />
+            <div className="w-full flex flex-col gap-2">
+              <div className="flex justify-between text-white text-xs font-semibold">
+                <span>Verifying your response</span>
+                <span>{Math.min(100, Math.round(postCaptchaProgress))}%</span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-white/20 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-green-400 to-emerald-400 transition-[width]"
+                  style={{ width: `${Math.min(100, postCaptchaProgress)}%` }}
+                />
+              </div>
               <p className="text-white text-xs text-center text-white/70">
-                We are verifying your CAPTCHA response. This stage lasts at least 30 seconds.
+                This stage lasts at least 30 seconds before we confirm your session.
               </p>
             </div>
           </div>
