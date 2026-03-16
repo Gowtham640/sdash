@@ -455,11 +455,17 @@ export default function AuthPage() {
 
     captchaWidgetIdRef.current = hcaptcha.render(container, {
       sitekey: HCAPTCHA_SITE_KEY,
-      callback: "__hcCaptchaSuccess",
-      "expired-callback": "__hcCaptchaExpired",
-      "error-callback": "__hcCaptchaError",
+      callback: handleCaptchaSuccess,
+      expiredCallback: handleCaptchaExpired,
+      errorCallback: handleCaptchaError,
     });
-  }, [stage, isCaptchaScriptReady]);
+  }, [
+    stage,
+    isCaptchaScriptReady,
+    handleCaptchaSuccess,
+    handleCaptchaExpired,
+    handleCaptchaError,
+  ]);
 
   useEffect(() => {
     if (stage !== "postCaptcha") {
