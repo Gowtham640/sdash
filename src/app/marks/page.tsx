@@ -13,10 +13,16 @@ import { registerAttendanceFetch } from "@/lib/attendancePrefetchScheduler";
 import Particles from '@/components/Particles';
 import { trackPostRequest } from "@/lib/postAnalytics";
 
+interface Assessment {
+  max: number;
+  name: string;
+  score: number | null;
+}
+
 interface MarksEntry {
   total: number | null;
   courseCode: string;
-  assessments: any[];
+  assessments: Assessment[];
   courseTitle: string;
 }
 
@@ -60,6 +66,16 @@ export default function MarksPage() {
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+  const assessmentsFormatter = useMemo(
+    () => (value: number | null | undefined) => {
+      // Helper that formats a score while respecting null / undefined values
+      if (value === null || value === undefined) {
+        return 'Not recorded';
+      }
+      return `${value}`;
+    },
+    []
+  );
 
   const renderParticleLayer = () => (
     <div className="fixed inset-0 z-1 pointer-events-none">
@@ -268,6 +284,19 @@ export default function MarksPage() {
   }
 
   const entries = marksPayload.entries || [];
+  const formattedFetchTime = useMemo(() => {
+    if (!marksPayload?.fetched_at) {
+      return 'Timestamp unavailable';
+    }
+    const parsed = new Date(marksPayload.fetched_at);
+    if (Number.isNaN(parsed.getTime())) {
+      return 'Timestamp unavailable';
+    }
+    return parsed.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  }, [marksPayload?.fetched_at]);
 
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
@@ -314,6 +343,19 @@ export default function MarksPage() {
       </div>
 
 
+      <div className="flex flex-col items-center gap-3 text-white/60 text-sm">
+        <div>Last refreshed: {formattedFetchTime}</div>
+        {marksPayload.url && (
+          <a
+            href={marksPayload.url}
+            target="_blank"
+            rel="noreferrer"
+            className="hover:text-white transition-colors underline underline-offset-4 font-semibold"
+          >
+            View source portal
+          </a>
+        )}
+      </div>
       <div className="grid gap-4 sm:gap-5 md:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw]">
         {entries.length === 0 ? (
           <div className="text-white/70 text-center p-8 border border-white/10 rounded-2xl">
@@ -324,20 +366,41 @@ export default function MarksPage() {
             const courseTitle = entry.courseTitle?.trim() || entry.courseCode?.trim() || `Course ${index + 1}`;
             const key = `${courseTitle}-${entry.courseCode ?? index}`;
 
+            const assessments = entry.assessments || [];
             return (
-              <div key={key} className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 md:p-6 text-white font-sora flex flex-col gap-3">
-                <div className="text-lg sm:text-xl md:text-2xl font-bold">
-                  {courseTitle}
-                </div>
+              <div
+                key={key}
+                className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 md:p-6 text-white font-sora flex flex-col gap-3"
+              >
+                <div className="text-lg sm:text-xl md:text-2xl font-bold">{courseTitle}</div>
                 {entry.courseCode && (
-                  <div className="text-white/60 text-xs sm:text-sm">
-                    Course Code: {entry.courseCode}
-                  </div>
+                  <div className="text-white/60 text-xs sm:text-sm">Course Code: {entry.courseCode}</div>
                 )}
                 <div className="text-green-400 text-2xl sm:text-[2.25rem] font-semibold">
                   {entry.total !== null ? entry.total : 'No records available'}
                 </div>
                 <div className="text-white/60 text-xs uppercase tracking-wide">Total marks</div>
+                <div className="mt-4 flex flex-col gap-2">
+                  <div className="text-white/70 text-xs uppercase tracking-wide">Assessments</div>
+                  {assessments.length === 0 ? (
+                    <div className="text-white/40 text-sm">No assessments recorded yet.</div>
+                  ) : (
+                    assessments.map((assessment, assessmentIndex) => (
+                      <div
+                        key={`${key}-assessment-${assessmentIndex}`}
+                        className="flex flex-col gap-1 border-t border-white/10 pt-2 last:border-b last:border-b-white/10 last:pb-1"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-white text-sm font-semibold">{assessment.name || 'Assessment'}</div>
+                          <div className="text-white/70 text-xs uppercase tracking-wide">Max: {assessment.max}</div>
+                        </div>
+                        <div className="text-white/90 text-base">
+                          {assessmentsFormatter(assessment.score)} / {assessment.max}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             );
           })
