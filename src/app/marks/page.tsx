@@ -108,10 +108,10 @@ export default function MarksPage() {
       );
     }
 
-    const baseWidth = Math.max(assessments.length * 55, 220);
-    const chartWidth = Math.min(baseWidth, 320);
-    const chartHeight = 165;
-    const margin = 26;
+    const baseWidth = Math.max(assessments.length * 60, 160);
+    const chartWidth = Math.min(baseWidth, 260);
+    const chartHeight = 130;
+    const margin = 40;
 
     const innerWidth = chartWidth - margin * 2;
     const innerHeight = chartHeight - margin * 2;
@@ -148,8 +148,11 @@ export default function MarksPage() {
 
     return (
       <div className="w-full overflow-hidden rounded-2xl bg-black/30 backdrop-blur-sm border border-white/10">
-        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full" role="img" aria-label="Assessment performance chart">
-          <defs>
+        <svg
+          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+          className="w-full max-w-[560px] mx-auto"
+        >
+                  <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#61f0a3" stopOpacity="0.35" />
               <stop offset="100%" stopColor="#61f0a3" stopOpacity="0" />
@@ -175,19 +178,19 @@ export default function MarksPage() {
           <path
             d={linePath}
             stroke="#61f0a3"
-            strokeWidth={3}
+            strokeWidth={1}
             fill="none"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
           {points.map((point, index) => (
             <g key={`${graphId}-point-${index}`}>
-              <circle cx={point.x} cy={point.y} r={4} fill="#61f0a3" />
+              <circle cx={point.x} cy={point.y} r={2} fill="#61f0a3" />
               <text
                 x={point.x}
                 y={point.y - 10}
                 fill="#ffffffd1"
-                fontSize="10"
+                fontSize="5"
                 textAnchor="middle"
                 fontWeight="600"
               >
@@ -201,7 +204,7 @@ export default function MarksPage() {
             x={point.x}
             y={baseY + 16}
             fill="#ffffffb0"
-            fontSize="9"
+            fontSize="5"
             textAnchor="middle"
           >
             {point.label}
@@ -211,7 +214,7 @@ export default function MarksPage() {
             x={startX - 8}
             y={baseY}
             fill="#ffffff70"
-            fontSize="10"
+            fontSize="5"
             textAnchor="end"
           >
             0%
@@ -220,7 +223,7 @@ export default function MarksPage() {
             x={startX - 8}
             y={margin}
             fill="#ffffff70"
-            fontSize="10"
+            fontSize="5"
             textAnchor="end"
           >
             {Math.round(maxPercent)}%
@@ -522,7 +525,7 @@ export default function MarksPage() {
 
                 <div className="flex justify-center">{renderAssessmentGraph(normalizedAssessments, graphId)}</div>
 
-                <div className="grid gap-0 sm:gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 justify-items-center">
+                <div className="grid grid-cols-[repeat(auto-fit,100px)] gap-3 justify-center">
                   {normalizedAssessments.length === 0 ? (
                     <div className="col-span-full text-white/40 text-sm text-center">
                       No assessments recorded yet.
@@ -531,13 +534,14 @@ export default function MarksPage() {
                     normalizedAssessments.map((assessment, assessmentIndex) => (
                       <div
                         key={`${key}-assessment-${assessmentIndex}`}
-                        className="aspect-square max-w-[110px] sm:max-w-[120px] bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl  flex flex-col items-center justify-center text-center p-4 gap-1"
+                        className="aspect-square max-w-[100px] sm:max-w-[120px] bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl  flex flex-col items-center justify-center text-center p-4 gap-1"
                       >
                         <div className="text-[0.65rem] uppercase tracking-[0.4em] text-white/60">{assessment.name}</div>
                         <div className="text-2xl font-semibold text-white/90">
-                          {assessment.score !== null && assessment.score !== undefined ? assessment.score : 'Not marked'}
+                          {assessment.score !== null && assessment.score !== undefined
+                            ? `${assessment.score}/${assessment.max}`
+                            : `-/${assessment.max}`}
                         </div>
-                        <div className="text-xs text-white/50">Max {assessment.max}</div>
                       </div>
                     ))
                   )}
