@@ -19,10 +19,19 @@ import { trackPostRequest } from "@/lib/postAnalytics";
 
 const HCAPTCHA_SITE_KEY = "a41abb7e-25be-411c-b2fe-c0365fc425ba";
 const POST_CAPTCHA_DURATION_MS = 30000;
+const DEFAULT_EMAIL_DOMAIN = "@srmist.edu.in";
 
 type AuthStage = "login" | "captcha" | "postCaptcha";
 
 const LiquidEther = lazy(() => import("@/components/LiquidEther"));
+
+function appendDefaultDomain(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.includes("@") ? trimmed : `${trimmed}${DEFAULT_EMAIL_DOMAIN}`;
+}
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -483,12 +492,14 @@ export default function AuthPage() {
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setError(null);
-      if (!email || !password) {
-        setError("Both email and password are required.");
-        return;
-      }
+    const normalizedEmail = appendDefaultDomain(email);
+    if (!normalizedEmail || !password) {
+      setError("Both email and password are required.");
+      return;
+    }
 
-      credentialsRef.current = { email, password };
+    setEmail(normalizedEmail);
+    credentialsRef.current = { email: normalizedEmail, password };
       setShowDisclaimer(false);
       setStage("captcha");
       setCaptchaError(null);
