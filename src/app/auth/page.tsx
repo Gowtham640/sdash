@@ -19,6 +19,7 @@ import { trackPostRequest } from "@/lib/postAnalytics";
 
 const HCAPTCHA_SITE_KEY = "a41abb7e-25be-411c-b2fe-c0365fc425ba";
 const POST_CAPTCHA_DURATION_MS = 30000;
+const LOGIN_TO_CAPTCHA_DELAY_MS = 5000;
 
 type AuthStage = "login" | "captcha" | "postCaptcha";
 
@@ -48,6 +49,7 @@ export default function AuthPage() {
   const authenticationStartedRef = useRef(false);
   const captchaSolvedAtRef = useRef<number | null>(null);
   const postCaptchaProgressStartRef = useRef<number | null>(null);
+  const loginToCaptchaDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearLoginTimeout = useCallback(() => {
     if (loginTimeoutRef.current) {
@@ -59,7 +61,7 @@ export default function AuthPage() {
   const startLoginTimeout = useCallback(() => {
     clearLoginTimeout();
     loginTimeoutRef.current = setTimeout(() => {
-      setError("Sorry all our servers are busy, retry later");
+      setError("Sorry our servers are full, please try again");
       setStage("login");
       setIsLoading(false);
     }, 60000);
@@ -100,6 +102,13 @@ export default function AuthPage() {
       }
     }, 100);
   }, [clearProgressAnimation]);
+
+  const clearLoginToCaptchaDelay = useCallback(() => {
+    if (loginToCaptchaDelayRef.current) {
+      clearTimeout(loginToCaptchaDelayRef.current);
+      loginToCaptchaDelayRef.current = null;
+    }
+  }, []);
 
   const clearVerificationTimers = useCallback(() => {
     if (postCaptchaDelayRef.current) {
@@ -149,8 +158,9 @@ export default function AuthPage() {
     return () => {
       clearLoginTimeout();
       clearVerificationTimers();
+      clearLoginToCaptchaDelay();
     };
-  }, [clearLoginTimeout, clearVerificationTimers]);
+  }, [clearLoginTimeout, clearVerificationTimers, clearLoginToCaptchaDelay]);
 
   useEffect(() => {
     if (isPrivateBrowsing()) {
@@ -348,7 +358,8 @@ export default function AuthPage() {
     clearCaptchaState();
     setStage("login");
     setIsLoading(false);
-  }, [clearCaptchaState]);
+    clearLoginToCaptchaDelay();
+  }, [clearCaptchaState, clearLoginToCaptchaDelay]);
 
   const handleBackgroundLoginFailure = useCallback(
     (error: unknown) => {
@@ -495,10 +506,19 @@ export default function AuthPage() {
       credentialsRef.current = { email: normalizedEmail, password };
       setEmail(normalizedEmail);
       setShowDisclaimer(false);
-      setStage("captcha");
       setCaptchaError(null);
+
+      clearLoginToCaptchaDelay();
+      setIsLoading(true);
+
+      // Keep the "Signing in..." UI active for a short delay before showing CAPTCHA.
+      loginToCaptchaDelayRef.current = setTimeout(() => {
+        loginToCaptchaDelayRef.current = null;
+        setStage("captcha");
+        setIsLoading(false);
+      }, LOGIN_TO_CAPTCHA_DELAY_MS);
     },
-    [email, password]
+    [email, password, clearLoginToCaptchaDelay]
   );
 
   return (
@@ -634,7 +654,7 @@ export default function AuthPage() {
           <div className="w-full flex flex-col gap-4 items-center">
             <div className="text-white text-lg font-semibold text-center">Completing verification</div>
             <div className="w-full flex flex-col gap-2">
-              <div className="flex justify-between text-white text-xs font-semibold">
+              <div className="flex flex-col justify-between text-white text-xs font-semibold">
                 <span>Verifying your response</span>
                 <span>{Math.min(100, Math.round(postCaptchaProgress))}%</span>
               </div>
@@ -644,9 +664,7 @@ export default function AuthPage() {
                   style={{ width: `${Math.min(100, postCaptchaProgress)}%` }}
                 />
               </div>
-              <p className="text-white text-xs text-center text-white/70">
-                This stage lasts at least 30 seconds before we confirm your session.
-              </p>
+              
             </div>
           </div>
         ) : null}
