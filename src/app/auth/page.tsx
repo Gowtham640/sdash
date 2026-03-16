@@ -456,8 +456,8 @@ export default function AuthPage() {
     captchaWidgetIdRef.current = hcaptcha.render(container, {
       sitekey: HCAPTCHA_SITE_KEY,
       callback: handleCaptchaSuccess,
-      expiredCallback: handleCaptchaExpired,
-      errorCallback: handleCaptchaError,
+      "expired-callback": handleCaptchaExpired,
+      "error-callback": handleCaptchaError,
     });
   }, [
     stage,
@@ -491,46 +491,8 @@ export default function AuthPage() {
     [email, password]
   );
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const successListener = (event: Event) => {
-      const detail = (event as CustomEvent<string>).detail;
-      if (typeof detail === "string") {
-        handleCaptchaSuccess(detail);
-      }
-    };
-    const expiredListener = () => handleCaptchaExpired();
-    const errorListener = () => handleCaptchaError();
-
-    window.addEventListener("hc-captcha-success", successListener as EventListener);
-    window.addEventListener("hc-captcha-expired", expiredListener);
-    window.addEventListener("hc-captcha-error", errorListener);
-
-    return () => {
-      window.removeEventListener("hc-captcha-success", successListener as EventListener);
-      window.removeEventListener("hc-captcha-expired", expiredListener);
-      window.removeEventListener("hc-captcha-error", errorListener);
-    };
-  }, [handleCaptchaError, handleCaptchaExpired, handleCaptchaSuccess]);
-
   return (
     <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
-      <Script id="hc-captcha-callbacks" strategy="beforeInteractive">
-        {`
-          window.__hcCaptchaSuccess = function(token) {
-            window.dispatchEvent(new CustomEvent("hc-captcha-success", { detail: token }));
-          };
-          window.__hcCaptchaExpired = function() {
-            window.dispatchEvent(new Event("hc-captcha-expired"));
-          };
-          window.__hcCaptchaError = function() {
-            window.dispatchEvent(new Event("hc-captcha-error"));
-          };
-        `}
-      </Script>
       <Script
         id="hc-captcha-script"
         src="https://js.hcaptcha.com/1/api.js"
@@ -642,14 +604,11 @@ export default function AuthPage() {
           <div className="w-full flex flex-col gap-4 items-center">
             <div className="text-white text-lg font-semibold text-center">Complete the CAPTCHA</div>
             <div className="w-full flex justify-center">
-              <div
-                className="h-captcha"
+          <div
+            className="h-captcha"
             ref={captchaContainerRef}
-                data-sitekey={HCAPTCHA_SITE_KEY}
-                data-callback="__hcCaptchaSuccess"
-                data-expired-callback="__hcCaptchaExpired"
-                data-error-callback="__hcCaptchaError"
-              />
+            data-sitekey={HCAPTCHA_SITE_KEY}
+          />
             </div>
             {captchaError && (
               <div className="text-red-300 text-xs text-center">{captchaError}</div>
