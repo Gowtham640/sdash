@@ -57,6 +57,7 @@ export default function AuthPage() {
   const authenticationStartedRef = useRef(false);
   const captchaSolvedAtRef = useRef<number | null>(null);
   const postCaptchaProgressStartRef = useRef<number | null>(null);
+  const authenticationPromiseRef = useRef<Promise<void> | null>(null);
 
   const handleEmailBlur = useCallback(() => {
     setEmail((prev) => {
@@ -159,6 +160,7 @@ export default function AuthPage() {
         // ignore reset failure
       }
     }
+    authenticationPromiseRef.current = null;
   }, [clearVerificationTimers, hasRenderedCaptcha]);
 
   useEffect(() => {
@@ -380,37 +382,43 @@ export default function AuthPage() {
     [clearLoginTimeout, resetCaptchaWorkflow]
   );
 
-  const startAuthentication = useCallback(async () => {
-    if (authenticationStartedRef.current) {
-      return;
+  const startAuthentication = useCallback(() => {
+    if (authenticationPromiseRef.current) {
+      return authenticationPromiseRef.current;
     }
 
     if (!captchaTokenRef.current) {
-      setCaptchaError("CAPTCHA session expired. Please complete it again.");
+      const error = new Error("CAPTCHA session expired. Please complete it again.");
       resetCaptchaWorkflow();
-      return;
+      handleBackgroundLoginFailure(error);
+      return Promise.reject(error);
     }
 
     authenticationStartedRef.current = true;
-    try {
-      const checkData = await ensureUserBeforeCaptcha();
-      if (checkData.loginPromise) {
-        await checkData.loginPromise;
+    const promise = (async () => {
+      try {
+        const checkData = await ensureUserBeforeCaptcha();
+        if (checkData.loginPromise) {
+          await checkData.loginPromise;
+        }
+        clearLoginTimeout();
+      } catch (err) {
+        handleBackgroundLoginFailure(err);
+        throw err;
       }
-      clearLoginTimeout();
-      clearVerificationTimers();
-      setIsLoading(false);
-      router.push("/dashboard");
-    } catch (err) {
-      handleBackgroundLoginFailure(err);
-    }
+    })();
+
+    authenticationPromiseRef.current = promise.finally(() => {
+      authenticationStartedRef.current = false;
+      authenticationPromiseRef.current = null;
+    });
+
+    return authenticationPromiseRef.current;
   }, [
     ensureUserBeforeCaptcha,
     handleBackgroundLoginFailure,
     resetCaptchaWorkflow,
-    router,
     clearLoginTimeout,
-    clearVerificationTimers,
   ]);
   const beginPostCaptchaFlow = useCallback(() => {
     clearVerificationTimers();
@@ -419,19 +427,35 @@ export default function AuthPage() {
     startLoginTimeout();
     setIsLoading(true);
     authenticationStartedRef.current = false;
+
+    const authPromise = startAuthentication().catch(() => {
+      // Error handling happens inside startAuthentication via handleBackgroundLoginFailure
+    });
+
     if (postCaptchaDelayRef.current) {
       clearTimeout(postCaptchaDelayRef.current);
       postCaptchaDelayRef.current = null;
     }
-    postCaptchaDelayRef.current = setTimeout(() => {
+
+    postCaptchaDelayRef.current = setTimeout(async () => {
       postCaptchaDelayRef.current = null;
-      startAuthentication();
+      try {
+        await authPromise;
+        clearProgressAnimation();
+        clearVerificationTimers();
+        setIsLoading(false);
+        router.push("/dashboard");
+      } catch {
+        // Failure already handled
+      }
     }, POST_CAPTCHA_DURATION_MS);
   }, [
     clearVerificationTimers,
     startProgressAnimation,
     startLoginTimeout,
     startAuthentication,
+    clearProgressAnimation,
+    router,
   ]);
   const handleCaptchaSuccess = useCallback(
     (token: string) => {
