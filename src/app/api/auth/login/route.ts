@@ -4,7 +4,7 @@ import type { SignInResponse } from "@/lib/auth/types";
 import { setSessionCookies } from "@/lib/auth/sessionCookies";
 
 // Wrap imports in try-catch to handle potential import errors
-let handleUserSignIn: ((email: string, password: string) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
+let handleUserSignIn: ((email: string, password: string, captchaToken?: string | null) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
 let AuthErrorCode: Record<string, string> | undefined;
 
 try {
@@ -54,12 +54,11 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json();
-    const { email, password } = body;
-
+    const { email, password, captcha } = body;
     console.log(`[API] Sign-in request for: ${email}`);
 
     // Call authentication handler
-    const result = (await handleUserSignIn(email, password)) as SignInResponse;
+    const result = (await handleUserSignIn(email, password, captcha ?? null)) as SignInResponse;
 
     // If sign-in failed, return error response
     if (!result.session || (result as { error?: string }).error) {
