@@ -2,9 +2,10 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import type { SignInResponse } from "@/lib/auth/types";
 import { setSessionCookies } from "@/lib/auth/sessionCookies";
+import { verifyHCaptchaToken } from "@/lib/auth/hcaptcha";
 
 // Wrap imports in try-catch to handle potential import errors
-let handleUserSignIn: ((email: string, password: string) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
+let handleUserSignIn: ((email: string, password: string, captchaToken?: string | null) => Promise<{ session: { access_token: string; refresh_token: string }; user: Record<string, unknown> }>) | undefined;
 let AuthErrorCode: Record<string, string> | undefined;
 
 try {
@@ -35,6 +36,14 @@ const ErrorStatusCodeMap: Record<string, number> = {
   USER_CREATION_FAILED: 500,
 };
 
+function extractRemoteIp(request: NextRequest): string | undefined {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded && forwarded.length > 0) {
+    return forwarded.split(",")[0].trim();
+  }
+  return request.headers.get("x-real-ip") ?? undefined;
+}
+
 export async function POST(request: NextRequest) {
   console.log("[API] POST /api/auth/login received");
 
@@ -54,12 +63,58 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json();
-    const { email, password } = body;
+    const { email, password, captcha } = body;
+
+    if (!captcha || typeof captcha !== "string" || !captcha.trim()) {
+      console.warn("[API] Captcha token missing on login");
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Complete the CAPTCHA before continuing.",
+          errorCode: "HCAPTCHA_MISSING_TOKEN",
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const remoteIp = extractRemoteIp(request);
+      const verification = await verifyHCaptchaToken(captcha, remoteIp);
+      if (!verification.success) {
+        console.warn(
+          "[API] hCaptcha verification failed:",
+          verification["error-codes"]
+        );
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CAPTCHA verification failed. Please try again.",
+            errorCode: "HCAPTCHA_VERIFICATION_FAILED",
+          },
+          { status: 400 }
+        );
+      }
+    } catch (verificationError) {
+      console.error(
+        "[API] hCaptcha verification error:",
+        verificationError instanceof Error
+          ? verificationError.message
+          : String(verificationError)
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: "CAPTCHA verification unavailable. Please try again later.",
+          errorCode: "HCAPTCHA_VERIFICATION_ERROR",
+        },
+        { status: 500 }
+      );
+    }
 
     console.log(`[API] Sign-in request for: ${email}`);
 
     // Call authentication handler
-    const result = (await handleUserSignIn(email, password)) as SignInResponse;
+    const result = (await handleUserSignIn(email, password, captcha ?? null)) as SignInResponse;
 
     // If sign-in failed, return error response
     if (!result.session || (result as { error?: string }).error) {

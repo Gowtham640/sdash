@@ -18,7 +18,8 @@ import {
  */
 export async function handleUserSignIn(
   email: string,
-  password: string
+  password: string,
+  captchaToken?: string | null
 ): Promise<SignInResponse> {
   console.log(`[Auth] Sign-in attempt for: ${email}`);
 
@@ -164,7 +165,12 @@ export async function handleUserSignIn(
       // Case 2: User doesn't exist in auth.users - send login request to Go backend
       console.log(`[Auth] User not found in auth.users, routing login through Go backend: ${email}`);
 
-      const backendResult = await loginToGoBackend(email, password);
+      const backendResult = await loginToGoBackend(
+        email,
+        password,
+        undefined,
+        captchaToken ?? undefined
+      );
       const loginSuccess =
         backendResult.success !== undefined ? backendResult.success : backendResult.authenticated;
 
