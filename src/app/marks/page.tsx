@@ -13,10 +13,16 @@ import { registerAttendanceFetch } from "@/lib/attendancePrefetchScheduler";
 import Particles from '@/components/Particles';
 import { trackPostRequest } from "@/lib/postAnalytics";
 
+interface Assessment {
+  max: number;
+  name: string;
+  score: number | null;
+}
+
 interface MarksEntry {
   total: number | null;
   courseCode: string;
-  assessments: any[];
+  assessments: Assessment[];
   courseTitle: string;
 }
 
@@ -60,6 +66,169 @@ export default function MarksPage() {
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
+
+  const entries = marksPayload?.entries ?? [];
+  const formattedFetchTime = useMemo(() => {
+    if (!marksPayload?.fetched_at) {
+      return 'Timestamp unavailable';
+    }
+    const parsed = new Date(marksPayload.fetched_at);
+    if (Number.isNaN(parsed.getTime())) {
+      return 'Timestamp unavailable';
+    }
+    return parsed.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  }, [marksPayload?.fetched_at]);
+
+  const formatAssessmentPercentage = (assessment: Assessment) => {
+    const safeMax = assessment.max > 0 ? assessment.max : 1;
+    const safeScore = assessment.score ?? 0;
+    const percentage = (safeScore / safeMax) * 100;
+    return Math.min(Math.max(percentage, 0), 100);
+  };
+
+  const formatTotalValue = (value: number) => {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    if (Math.abs(value - Math.round(value)) < 0.05) {
+      return `${Math.round(value)}`;
+    }
+    return value.toFixed(1);
+  };
+
+  const renderAssessmentGraph = (assessments: Assessment[], graphId: string) => {
+    if (!assessments.length) {
+      return (
+        <div className="text-[0.65rem] text-white/60 uppercase tracking-wide text-center">
+          Awaiting assessment data to plot the performance.
+        </div>
+      );
+    }
+
+    const baseWidth = Math.max(assessments.length * 55, 220);
+    const chartWidth = Math.min(baseWidth, 320);
+    const chartHeight = 165;
+    const margin = 26;
+
+    const innerWidth = chartWidth - margin * 2;
+    const innerHeight = chartHeight - margin * 2;
+
+    const percentages = assessments.map(formatAssessmentPercentage);
+    const maxPercent = Math.max(100, ...percentages);
+
+    const computeX = (index: number) => {
+      if (assessments.length === 1) {
+        return margin + innerWidth / 2;
+      }
+      return margin + (innerWidth * index) / (assessments.length - 1);
+    };
+
+    const points = percentages.map((value, index) => {
+      const x = computeX(index);
+      const y = chartHeight - margin - (value / maxPercent) * innerHeight;
+      return { x, y, value, label: assessments[index].name };
+    });
+
+    const baseY = chartHeight - margin;
+    const startX = margin;
+    const endX = chartWidth - margin;
+
+    const linePath = [`M${startX},${baseY}`, ...points.map((point) => `L${point.x},${point.y}`)].join(' ');
+    const areaPath = [
+      `M${startX},${baseY}`,
+      ...points.map((point) => `L${point.x},${point.y}`),
+      `L${endX},${baseY}`,
+      'Z',
+    ].join(' ');
+
+    const gradientId = `assessment-gradient-${graphId}`;
+
+    return (
+      <div className="w-full overflow-hidden rounded-2xl bg-black/30 backdrop-blur-sm border border-white/10">
+        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full" role="img" aria-label="Assessment performance chart">
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#61f0a3" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#61f0a3" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <line
+            x1={startX}
+            y1={margin}
+            x2={startX}
+            y2={baseY}
+            stroke="#ffffff50"
+            strokeWidth={1}
+          />
+          <line
+            x1={startX}
+            y1={baseY}
+            x2={endX}
+            y2={baseY}
+            stroke="#ffffff50"
+            strokeWidth={1}
+          />
+          <path d={areaPath} fill={`url(#${gradientId})`} />
+          <path
+            d={linePath}
+            stroke="#61f0a3"
+            strokeWidth={3}
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {points.map((point, index) => (
+            <g key={`${graphId}-point-${index}`}>
+              <circle cx={point.x} cy={point.y} r={4} fill="#61f0a3" />
+              <text
+                x={point.x}
+                y={point.y - 10}
+                fill="#ffffffd1"
+                fontSize="10"
+                textAnchor="middle"
+                fontWeight="600"
+              >
+                {Math.round(point.value)}%
+              </text>
+            </g>
+          ))}
+          {points.map((point, index) => (
+          <text
+            key={`${graphId}-label-${index}`}
+            x={point.x}
+            y={baseY + 16}
+            fill="#ffffffb0"
+            fontSize="9"
+            textAnchor="middle"
+          >
+            {point.label}
+          </text>
+          ))}
+          <text
+            x={startX - 8}
+            y={baseY}
+            fill="#ffffff70"
+            fontSize="10"
+            textAnchor="end"
+          >
+            0%
+          </text>
+          <text
+            x={startX - 8}
+            y={margin}
+            fill="#ffffff70"
+            fontSize="10"
+            textAnchor="end"
+          >
+            {Math.round(maxPercent)}%
+          </text>
+        </svg>
+      </div>
+    );
+  };
 
   const renderParticleLayer = () => (
     <div className="fixed inset-0 z-1 pointer-events-none">
@@ -267,8 +436,6 @@ export default function MarksPage() {
     return renderEmpty();
   }
 
-  const entries = marksPayload.entries || [];
-
   return (
     <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
       {renderParticleLayer()}
@@ -314,30 +481,67 @@ export default function MarksPage() {
       </div>
 
 
+
       <div className="grid gap-4 sm:gap-5 md:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw]">
         {entries.length === 0 ? (
           <div className="text-white/70 text-center p-8 border border-white/10 rounded-2xl">
-            No marks entries found in the provided data. Tap refresh to try again.
+            No records available in the provided data. Tap refresh to try again.
           </div>
         ) : (
           entries.map((entry, index) => {
             const courseTitle = entry.courseTitle?.trim() || entry.courseCode?.trim() || `Course ${index + 1}`;
             const key = `${courseTitle}-${entry.courseCode ?? index}`;
+            const normalizedAssessments = Array.isArray(entry.assessments) ? entry.assessments : [];
+            const computedAssessmentTotal = normalizedAssessments.reduce(
+              (sum, assessment) => sum + (assessment.score ?? 0),
+              0
+            );
+            const totalValue =
+              entry.total !== null && entry.total !== undefined ? entry.total : computedAssessmentTotal;
+            const totalMarksLabel = formatTotalValue(totalValue);
+            const graphId = `${key}-graph`.replace(/[^a-zA-Z0-9-_]/g, '-');
 
             return (
-              <div key={key} className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 md:p-6 text-white font-sora flex flex-col gap-3">
-                <div className="text-lg sm:text-xl md:text-2xl font-bold">
-                  {courseTitle}
+              <div
+                key={key}
+                className="bg-white/5 border border-white/10 rounded-3xl p-3 sm:p-4 text-white font-sora flex flex-col gap-3"
+              >
+                <div className="flex flex-col items-center gap-1 text-center">
+                  <div className="text-lg sm:text-xl md:text-2xl font-bold">{courseTitle}</div>
+                  {entry.courseCode && (
+                    <div className="text-white/60 text-xs sm:text-sm uppercase tracking-[0.4em]">
+                      Course Code: {entry.courseCode}
+                    </div>
+                  )}
                 </div>
-                {entry.courseCode && (
-                  <div className="text-white/60 text-xs sm:text-sm">
-                    Course Code: {entry.courseCode}
-                  </div>
-                )}
-                <div className="text-green-400 text-2xl sm:text-[2.25rem] font-semibold">
-                  {entry.total !== null ? entry.total : 'No records available'}
+
+                <div className="text-center">
+                  <div className="text-white/60 text-xs uppercase tracking-[0.3em] mb-1">Total marks</div>
+                  <div className="text-green-400 text-3xl sm:text-[2.5rem] font-semibold">{totalMarksLabel}</div>
                 </div>
-                <div className="text-white/60 text-xs uppercase tracking-wide">Total marks</div>
+
+                <div className="flex justify-center">{renderAssessmentGraph(normalizedAssessments, graphId)}</div>
+
+                <div className="grid gap-0 sm:gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 justify-items-center">
+                  {normalizedAssessments.length === 0 ? (
+                    <div className="col-span-full text-white/40 text-sm text-center">
+                      No assessments recorded yet.
+                    </div>
+                  ) : (
+                    normalizedAssessments.map((assessment, assessmentIndex) => (
+                      <div
+                        key={`${key}-assessment-${assessmentIndex}`}
+                        className="aspect-square max-w-[110px] sm:max-w-[120px] bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl  flex flex-col items-center justify-center text-center p-4 gap-1"
+                      >
+                        <div className="text-[0.65rem] uppercase tracking-[0.4em] text-white/60">{assessment.name}</div>
+                        <div className="text-2xl font-semibold text-white/90">
+                          {assessment.score !== null && assessment.score !== undefined ? assessment.score : 'Not marked'}
+                        </div>
+                        <div className="text-xs text-white/50">Max {assessment.max}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             );
           })
