@@ -493,6 +493,7 @@ export default function AuthPage() {
         ? cleanedEmail
         : `${cleanedEmail}@srmist.edu.in`;
       credentialsRef.current = { email: normalizedEmail, password };
+      setEmail(normalizedEmail);
       setShowDisclaimer(false);
       setStage("captcha");
       setCaptchaError(null);
@@ -561,7 +562,8 @@ export default function AuthPage() {
             <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-bold">Sign In</div>
             <form onSubmit={handleSignIn} className="w-full flex flex-col gap-4">
               <input
-                type="email"
+                type="text"
+                inputMode="email"
                 placeholder="Email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -613,16 +615,16 @@ export default function AuthPage() {
           <div className="w-full flex flex-col gap-4 items-center">
             <div className="text-white text-lg font-semibold text-center">Complete the CAPTCHA</div>
             <div className="w-full flex justify-center">
-            <div
-              className="h-captcha pointer-events-auto"
-              ref={captchaContainerRef}
-              style={{
-                width: "100%",
-                maxWidth: "400px",
-                minHeight: "120px",
-                touchAction: "manipulation",
-              }}
-            />
+              <div
+                className="h-captcha pointer-events-auto relative z-[30]"
+                ref={captchaContainerRef}
+                style={{
+                  width: "100%",
+                  maxWidth: "400px",
+                  minHeight: "140px",
+                  touchAction: "manipulation",
+                }}
+              />
             </div>
             {captchaError && (
               <div className="text-red-300 text-xs text-center">{captchaError}</div>
