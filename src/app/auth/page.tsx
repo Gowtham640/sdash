@@ -25,7 +25,7 @@ type AuthStage = "login" | "captcha" | "postCaptcha";
 
 const LiquidEther = lazy(() => import("@/components/LiquidEther"));
 
-function appendDefaultDomain(value: string): string {
+function normalizeEmailValue(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
@@ -57,6 +57,13 @@ export default function AuthPage() {
   const authenticationStartedRef = useRef(false);
   const captchaSolvedAtRef = useRef<number | null>(null);
   const postCaptchaProgressStartRef = useRef<number | null>(null);
+
+  const handleEmailBlur = useCallback(() => {
+    setEmail((prev) => {
+      const normalized = normalizeEmailValue(prev);
+      return normalized || prev;
+    });
+  }, []);
 
   const clearLoginTimeout = useCallback(() => {
     if (loginTimeoutRef.current) {
@@ -492,14 +499,16 @@ export default function AuthPage() {
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setError(null);
-    const normalizedEmail = appendDefaultDomain(email);
-    if (!normalizedEmail || !password) {
-      setError("Both email and password are required.");
-      return;
-    }
+      const normalizedEmail = normalizeEmailValue(email);
+      if (!normalizedEmail || !password) {
+        setError("Both email and password are required.");
+        return;
+      }
 
-    setEmail(normalizedEmail);
-    credentialsRef.current = { email: normalizedEmail, password };
+      if (normalizedEmail !== email) {
+        setEmail(normalizedEmail);
+      }
+      credentialsRef.current = { email: normalizedEmail, password };
       setShowDisclaimer(false);
       setStage("captcha");
       setCaptchaError(null);
@@ -568,10 +577,13 @@ export default function AuthPage() {
             <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-bold">Sign In</div>
             <form onSubmit={handleSignIn} className="w-full flex flex-col gap-4">
               <input
-                type="email"
+                type="text"
+                inputMode="email"
+                autoComplete="email"
                 placeholder="Email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={handleEmailBlur}
                 disabled={isLoading}
                 required
                 className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
@@ -620,11 +632,11 @@ export default function AuthPage() {
           <div className="w-full flex flex-col gap-4 items-center">
             <div className="text-white text-lg font-semibold text-center">Complete the CAPTCHA</div>
             <div className="w-full flex justify-center">
-          <div
-            className="h-captcha"
-            ref={captchaContainerRef}
-            data-sitekey={HCAPTCHA_SITE_KEY}
-          />
+              <div
+                className="h-captcha pointer-events-auto z-30 relative"
+                ref={captchaContainerRef}
+                data-sitekey={HCAPTCHA_SITE_KEY}
+              />
             </div>
             {captchaError && (
               <div className="text-red-300 text-xs text-center">{captchaError}</div>
