@@ -19,19 +19,10 @@ import { trackPostRequest } from "@/lib/postAnalytics";
 
 const HCAPTCHA_SITE_KEY = "a41abb7e-25be-411c-b2fe-c0365fc425ba";
 const POST_CAPTCHA_DURATION_MS = 30000;
-const DEFAULT_EMAIL_DOMAIN = "@srmist.edu.in";
 
 type AuthStage = "login" | "captcha" | "postCaptcha";
 
 const LiquidEther = lazy(() => import("@/components/LiquidEther"));
-
-function normalizeEmailValue(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.includes("@") ? trimmed : `${trimmed}${DEFAULT_EMAIL_DOMAIN}`;
-}
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -57,14 +48,6 @@ export default function AuthPage() {
   const authenticationStartedRef = useRef(false);
   const captchaSolvedAtRef = useRef<number | null>(null);
   const postCaptchaProgressStartRef = useRef<number | null>(null);
-  const authenticationPromiseRef = useRef<Promise<void> | null>(null);
-
-  const handleEmailBlur = useCallback(() => {
-    setEmail((prev) => {
-      const normalized = normalizeEmailValue(prev);
-      return normalized || prev;
-    });
-  }, []);
 
   const clearLoginTimeout = useCallback(() => {
     if (loginTimeoutRef.current) {
@@ -160,7 +143,6 @@ export default function AuthPage() {
         // ignore reset failure
       }
     }
-    authenticationPromiseRef.current = null;
   }, [clearVerificationTimers, hasRenderedCaptcha]);
 
   useEffect(() => {
@@ -382,43 +364,37 @@ export default function AuthPage() {
     [clearLoginTimeout, resetCaptchaWorkflow]
   );
 
-  const startAuthentication = useCallback(() => {
-    if (authenticationPromiseRef.current) {
-      return authenticationPromiseRef.current;
+  const startAuthentication = useCallback(async () => {
+    if (authenticationStartedRef.current) {
+      return;
     }
 
     if (!captchaTokenRef.current) {
-      const error = new Error("CAPTCHA session expired. Please complete it again.");
+      setCaptchaError("CAPTCHA session expired. Please complete it again.");
       resetCaptchaWorkflow();
-      handleBackgroundLoginFailure(error);
-      return Promise.reject(error);
+      return;
     }
 
     authenticationStartedRef.current = true;
-    const promise = (async () => {
-      try {
-        const checkData = await ensureUserBeforeCaptcha();
-        if (checkData.loginPromise) {
-          await checkData.loginPromise;
-        }
-        clearLoginTimeout();
-      } catch (err) {
-        handleBackgroundLoginFailure(err);
-        throw err;
+    try {
+      const checkData = await ensureUserBeforeCaptcha();
+      if (checkData.loginPromise) {
+        await checkData.loginPromise;
       }
-    })();
-
-    authenticationPromiseRef.current = promise.finally(() => {
-      authenticationStartedRef.current = false;
-      authenticationPromiseRef.current = null;
-    });
-
-    return authenticationPromiseRef.current;
+      clearLoginTimeout();
+      clearVerificationTimers();
+      setIsLoading(false);
+      router.push("/dashboard");
+    } catch (err) {
+      handleBackgroundLoginFailure(err);
+    }
   }, [
     ensureUserBeforeCaptcha,
     handleBackgroundLoginFailure,
     resetCaptchaWorkflow,
+    router,
     clearLoginTimeout,
+    clearVerificationTimers,
   ]);
   const beginPostCaptchaFlow = useCallback(() => {
     clearVerificationTimers();
@@ -427,35 +403,19 @@ export default function AuthPage() {
     startLoginTimeout();
     setIsLoading(true);
     authenticationStartedRef.current = false;
-
-    const authPromise = startAuthentication().catch(() => {
-      // Error handling happens inside startAuthentication via handleBackgroundLoginFailure
-    });
-
     if (postCaptchaDelayRef.current) {
       clearTimeout(postCaptchaDelayRef.current);
       postCaptchaDelayRef.current = null;
     }
-
-    postCaptchaDelayRef.current = setTimeout(async () => {
+    postCaptchaDelayRef.current = setTimeout(() => {
       postCaptchaDelayRef.current = null;
-      try {
-        await authPromise;
-        clearProgressAnimation();
-        clearVerificationTimers();
-        setIsLoading(false);
-        router.push("/dashboard");
-      } catch {
-        // Failure already handled
-      }
+      startAuthentication();
     }, POST_CAPTCHA_DURATION_MS);
   }, [
     clearVerificationTimers,
     startProgressAnimation,
     startLoginTimeout,
     startAuthentication,
-    clearProgressAnimation,
-    router,
   ]);
   const handleCaptchaSuccess = useCallback(
     (token: string) => {
@@ -523,15 +483,15 @@ export default function AuthPage() {
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setError(null);
-      const normalizedEmail = normalizeEmailValue(email);
-      if (!normalizedEmail || !password) {
+      const cleanedEmail = email.trim();
+      if (!cleanedEmail || !password) {
         setError("Both email and password are required.");
         return;
       }
 
-      if (normalizedEmail !== email) {
-        setEmail(normalizedEmail);
-      }
+      const normalizedEmail = cleanedEmail.includes("@")
+        ? cleanedEmail
+        : `${cleanedEmail}@srmist.edu.in`;
       credentialsRef.current = { email: normalizedEmail, password };
       setShowDisclaimer(false);
       setStage("captcha");
@@ -601,13 +561,10 @@ export default function AuthPage() {
             <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-bold">Sign In</div>
             <form onSubmit={handleSignIn} className="w-full flex flex-col gap-4">
               <input
-                type="text"
-                inputMode="email"
-                autoComplete="email"
+                type="email"
                 placeholder="Email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onBlur={handleEmailBlur}
                 disabled={isLoading}
                 required
                 className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
@@ -656,11 +613,16 @@ export default function AuthPage() {
           <div className="w-full flex flex-col gap-4 items-center">
             <div className="text-white text-lg font-semibold text-center">Complete the CAPTCHA</div>
             <div className="w-full flex justify-center">
-              <div
-                className="h-captcha pointer-events-auto z-30 relative"
-                ref={captchaContainerRef}
-                data-sitekey={HCAPTCHA_SITE_KEY}
-              />
+            <div
+              className="h-captcha pointer-events-auto"
+              ref={captchaContainerRef}
+              style={{
+                width: "100%",
+                maxWidth: "400px",
+                minHeight: "120px",
+                touchAction: "manipulation",
+              }}
+            />
             </div>
             {captchaError && (
               <div className="text-red-300 text-xs text-center">{captchaError}</div>
