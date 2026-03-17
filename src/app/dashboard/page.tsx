@@ -150,6 +150,7 @@ interface TimeSlot {
   time: string;
   course_title: string;
   category: string;
+  room?: string;
 }
 
 type CachePayloadType = 'attendance' | 'marks' | 'timetable';
@@ -382,17 +383,25 @@ export default function Dashboard() {
       return timeSlots;
     }
     Object.entries(timetableForToday.time_slots).forEach(([time, slot]: [string, unknown]) => {
-      const typedSlot = slot as { slot_code?: string; slot_type?: string };
+      const typedSlot = slot as {
+        slot_code?: string;
+        slot_type?: string;
+        room?: string;
+        roomNo?: string;
+        room_number?: string;
+      };
       if (typedSlot?.slot_code) {
         // Find course title from slot mapping
         const slotCode = typedSlot.slot_code;
         const slotMapping = timetableData?.slot_mapping || {};
         const courseTitle = slotMapping[slotCode] || '';
 
+        const roomValue = (typedSlot.room || typedSlot.roomNo || typedSlot.room_number || '').toString().trim();
         timeSlots.push({
           time,
           course_title: courseTitle,
-          category: typedSlot.slot_type || ''
+          category: typedSlot.slot_type || '',
+          room: roomValue || undefined
         });
       }
     });
@@ -1523,8 +1532,11 @@ export default function Dashboard() {
                   {slot.course_title || 'No class'}
                 </div>
                 {slot.category && (
-                  <div className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                    {slot.category}
+                  <div className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora flex items-center gap-1">
+                    <span>{slot.category}</span>
+                    {slot.room && (
+                      <span className="text-white/50">• {slot.room}</span>
+                    )}
                   </div>
                 )}
               </div>

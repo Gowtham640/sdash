@@ -387,6 +387,7 @@ export default function AuthPage() {
     }
 
     authenticationStartedRef.current = true;
+    startLoginTimeout();
     try {
       const checkData = await ensureUserBeforeCaptcha();
       if (checkData.loginPromise) {
@@ -406,12 +407,12 @@ export default function AuthPage() {
     router,
     clearLoginTimeout,
     clearVerificationTimers,
+    startLoginTimeout,
   ]);
   const beginPostCaptchaFlow = useCallback(() => {
     clearVerificationTimers();
     setStage("postCaptcha");
     startProgressAnimation();
-    startLoginTimeout();
     setIsLoading(true);
     authenticationStartedRef.current = false;
     if (postCaptchaDelayRef.current) {
@@ -425,7 +426,6 @@ export default function AuthPage() {
   }, [
     clearVerificationTimers,
     startProgressAnimation,
-    startLoginTimeout,
     startAuthentication,
   ]);
   const handleCaptchaSuccess = useCallback(

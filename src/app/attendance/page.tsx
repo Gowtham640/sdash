@@ -276,10 +276,13 @@ export default function AttendancePage() {
   const [isOdmlMode, setIsOdmlMode] = useState(false);
   const [currentFact, setCurrentFact] = useState(getRandomFact());
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
   const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(
     initialRenderable ? initialAttendanceCache.attendanceData : null
   ); // Store original data
+  const showOdmlAppliedRef = useRef(showOdmlApplied);
+  const clampAttendance = (value: number) => Math.max(0, Math.min(100, value));
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
   const isOpeningOdmlModal = useRef(false);
@@ -558,6 +561,10 @@ export default function AttendancePage() {
     fetchUnifiedData();
   }, []);
 
+  useEffect(() => {
+    showOdmlAppliedRef.current = showOdmlApplied;
+  }, [showOdmlApplied]);
+
   // Load and apply saved ODML when attendance data is available
   useEffect(() => {
     const loadSavedOdml = async () => {
@@ -573,10 +580,11 @@ export default function AttendancePage() {
       try {
         const savedRecords = await fetchOdmlRecords(access_token);
         setSavedOdmlRecords(savedRecords);
+        const currentShowOdmlApplied = showOdmlAppliedRef.current;
 
-        if (savedRecords.length > 0 && showOdmlApplied) {
+        if (savedRecords.length > 0 && currentShowOdmlApplied) {
           applySavedOdml(savedRecords);
-        } else if (savedRecords.length === 0 && showOdmlApplied && isOdmlMode) {
+        } else if (savedRecords.length === 0 && currentShowOdmlApplied && isOdmlMode) {
           // No saved records but was in ODML mode, restore original
           setAttendanceData(originalAttendanceData);
           setPredictionResults([]);
@@ -593,7 +601,7 @@ export default function AttendancePage() {
 
   // Apply saved ODML to attendance data
   const applySavedOdml = (records: OdmlRecord[]) => {
-    if (!attendanceData || !originalAttendanceData) {
+    if (!attendanceData || !originalAttendanceData || records.length === 0) {
       return;
     }
 
@@ -615,12 +623,13 @@ export default function AttendancePage() {
         const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
         const adjustedPresent = currentPresent + odmlHours;
         const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
+        const clampedAttendance = clampAttendance(adjustedAttendance);
 
         return {
           ...subject,
           hours_absent: adjustedAbsent.toString(),
-          attendance: adjustedAttendance.toFixed(2),
-          attendance_percentage: adjustedAttendance.toFixed(2)
+          attendance: clampedAttendance.toFixed(2),
+          attendance_percentage: clampedAttendance.toFixed(2)
         };
       })
     };
@@ -638,11 +647,12 @@ export default function AttendancePage() {
       const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
       const adjustedPresent = currentPresent + odmlHours;
       const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
+      const clampedPredictedAttendance = clampAttendance(adjustedAttendance);
 
       return {
         subject,
         currentAttendance,
-        predictedAttendance: adjustedAttendance,
+        predictedAttendance: clampedPredictedAttendance,
         totalHoursTillEndDate: 0,
         presentHoursTillStartDate: adjustedPresent,
         absentHoursDuringLeave: adjustedAbsent,
@@ -955,6 +965,10 @@ export default function AttendancePage() {
         // Reload saved ODML records
         const savedRecords = await fetchOdmlRecords(access_token);
         setSavedOdmlRecords(savedRecords);
+        if (savedRecords.length > 0) {
+          applySavedOdml(savedRecords);
+          setShowOdmlApplied(true);
+        }
       }
 
       setPredictionResults(results);
@@ -970,35 +984,70 @@ export default function AttendancePage() {
   };
 
   const handleCancelPrediction = () => {
+    setShowOdmlApplied(false);
     setIsPredictionMode(false);
     setIsOdmlMode(false);
     setPredictionResults([]);
     setLeavePeriods([]);
     setOdmlPeriods([]);
+    setShowODMLModal(false);
     // Restore original attendance data
     if (originalAttendanceData) {
       setAttendanceData(originalAttendanceData);
     }
   };
 
-  // Toggle ODML view
-  const toggleOdmlView = () => {
-    const newShowOdmlApplied = !showOdmlApplied;
-    setShowOdmlApplied(newShowOdmlApplied);
-
-    if (newShowOdmlApplied) {
-      // Show with ODML
-      if (savedOdmlRecords.length > 0 && originalAttendanceData) {
-        applySavedOdml(savedOdmlRecords);
-      }
-    } else {
-      // Show without ODML
-      if (originalAttendanceData) {
-        setAttendanceData(originalAttendanceData);
-        setPredictionResults([]);
-        setIsOdmlMode(false);
-      }
+  const formatOdmlDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
     }
+    return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  const handleDeleteOdmlRecord = async (recordId: string) => {
+    const access_token = getStorageItem('access_token');
+    if (!access_token) {
+      console.warn('[Attendance] Cannot delete OD/ML record without access token');
+      return;
+    }
+
+    setDeletingRecordId(recordId);
+    try {
+      const success = await deleteOdmlRecord(access_token, recordId);
+      if (!success) {
+        return;
+      }
+
+      const updatedRecords = await fetchOdmlRecords(access_token);
+      setSavedOdmlRecords(updatedRecords);
+
+      if (updatedRecords.length > 0 && showOdmlApplied) {
+        applySavedOdml(updatedRecords);
+      } else if (updatedRecords.length === 0) {
+        setShowOdmlApplied(false);
+        if (originalAttendanceData) {
+          setAttendanceData(originalAttendanceData);
+          setPredictionResults([]);
+          setIsOdmlMode(false);
+        }
+      }
+    } catch (error) {
+      console.error('[Attendance] Failed to delete OD/ML record:', error);
+    } finally {
+      setDeletingRecordId(null);
+    }
+  };
+
+  const handleActivateOdmlPrediction = () => {
+    if (isOdmlMode || savedOdmlRecords.length === 0) {
+      return;
+    }
+
+    setShowOdmlApplied(true);
+    applySavedOdml(savedOdmlRecords);
+    setIsOdmlMode(true);
+    setIsPredictionMode(false);
   };
 
   const handleReAuthenticate = () => {
@@ -1551,6 +1600,7 @@ export default function AttendancePage() {
                 className="text-white"
               />
             </button>
+  
           </div>
         ) : (
           <div className="flex gap-4 items-center">
@@ -1574,24 +1624,51 @@ export default function AttendancePage() {
 
       {/* ODML Banner */}
       {savedOdmlRecords.length > 0 && (
-        <div className="w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] bg-green-500/20 border border-green-500/50 rounded-3xl p-4 sm:p-5 md:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">📋</span>
-            <div className="flex flex-col">
-              <div className="text-white font-sora text-base sm:text-lg md:text-xl font-bold">
-                {showOdmlApplied ? 'Attendance shown with OD/ML applied' : 'Showing attendance without OD/ML'}
-              </div>
-              <div className="text-green-300/80 font-sora text-xs sm:text-sm mt-1">
-                {savedOdmlRecords.length} OD/ML period{savedOdmlRecords.length !== 1 ? 's' : ''} saved
-              </div>
+        <div className="w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] bg-green-500/20 border border-green-500/50 rounded-3xl p-4 sm:p-5 md:p-6 flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-row gap-2">
+            <div className="text-white font-sora text-xs md:text-lg lg:text-lg font-normal lg:font-bold">
+              {showOdmlApplied ? 'Attendance shown with OD/ML applied' : 'Showing attendance without OD/ML'}
+            </div>
+            {savedOdmlRecords.length > 0 && (
+              <button
+                onClick={handleActivateOdmlPrediction}
+                className="bg-white/20 border w-1/2 lg:w-1/4 border-white/40 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 text-xs sm:text-sm md:text-base lg:text-base"
+              >
+                Use saved OD/ML
+              </button>
+            )}
+            </div>
+            <div className="text-green-300/80 font-sora text-xs md:text-lg lg:text-[15px] lg:font-normal font-thin">
+              {savedOdmlRecords.length} OD/ML period{savedOdmlRecords.length !== 1 ? 's' : ''} saved
             </div>
           </div>
-          <button
-            onClick={toggleOdmlView}
-            className="bg-white/10 hover:bg-white/20 border border-white/30 text-white font-sora px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 rounded-2xl transition-all duration-200 text-sm sm:text-base"
-          >
-            {showOdmlApplied ? 'Show without OD/ML' : 'Show with OD/ML'}
-          </button>
+          <details className="bg-white/5 border border-white/20 rounded-2xl p-3 text-sm text-white/80 font-sora">
+            <summary className="cursor-pointer font-semibold text-xs md:text-lg lg:text-lg">
+              OD/ML Records ({savedOdmlRecords.length})
+            </summary>
+            <div className="mt-3 flex flex-col gap-2 max-h-48 overflow-y-auto">
+              {savedOdmlRecords.map(record => (
+                <div
+                  key={record.id}
+                  className="flex items-center justify-between gap-3 rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-[11px] sm:text-xs"
+                >
+                  <div>
+                    <div className="font-sora text-white">
+                      {formatOdmlDate(record.period_from)} → {formatOdmlDate(record.period_to)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteOdmlRecord(record.id)}
+                    disabled={deletingRecordId === record.id}
+                    className="flex-shrink-0 rounded-xl bg-red-500/80 hover:bg-red-600 disabled:bg-red-500/40 transition-colors px-3 py-1 text-[10px] uppercase tracking-[0.2em]"
+                  >
+                    {deletingRecordId === record.id ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </details>
         </div>
       )}
 

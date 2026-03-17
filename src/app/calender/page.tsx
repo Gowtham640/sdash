@@ -610,7 +610,7 @@ export default function CalendarPage() {
             </div>
           ))}
         </div>
-        <div className="text-gray-200 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm"> Note: This is specifically for your course. For general course, please refer to the course calendar.</div>
+        <div className="text-gray-200 font-sora font-light text-[10px] sm:text-xs md:text-sm lg:text-sm mt-4"> Note: This is specifically for your course. For general course, please refer to the course calendar.</div>
       </div>
 
 
