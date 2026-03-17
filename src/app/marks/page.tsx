@@ -534,10 +534,10 @@ export default function MarksPage() {
                     normalizedAssessments.map((assessment, assessmentIndex) => (
                       <div
                         key={`${key}-assessment-${assessmentIndex}`}
-                        className="aspect-square max-w-[100px] sm:max-w-[120px] bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl  flex flex-col items-center justify-center text-center p-4 gap-1"
+                        className="aspect-square max-w-[100px] sm:max-w-[120px] bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl  flex flex-col items-center justify-center text-center px-2 py-1 gap-1"
                       >
                         <div className="text-[0.65rem] uppercase tracking-[0.4em] text-white/60">{assessment.name}</div>
-                        <div className="text-2xl font-semibold text-white/90">
+                        <div className="text-lg font-semibold text-white/90">
                           {assessment.score !== null && assessment.score !== undefined
                             ? `${assessment.score}/${assessment.max}`
                             : `-/${assessment.max}`}

@@ -55,6 +55,8 @@ const normalizeCategory = (cat: string): string => {
   return normalized;
 };
 
+const clampAttendance = (value: number) => Math.max(0, Math.min(100, value));
+
 const formatDateKey = (date: Date) => {
   const day = date.getDate().toString().padStart(2, '0');
   const month = (date.getMonth() + 1).toString().padStart(2, '0');
@@ -297,11 +299,12 @@ export const calculateODMLAdjustedAttendance = async (
     const adjustedPresent = currentPresent + totalOdmlReductionHours;
     const adjustedConducted = currentConducted;
     const adjustedAttendance = adjustedConducted > 0 ? (adjustedPresent / adjustedConducted) * 100 : 0;
+    const clampedAttendance = clampAttendance(adjustedAttendance);
 
     results.push({
       subject,
       currentAttendance,
-      predictedAttendance: adjustedAttendance,
+      predictedAttendance: clampedAttendance,
       totalHoursTillEndDate: 0,
       presentHoursTillStartDate: adjustedPresent,
       absentHoursDuringLeave: adjustedAbsent,
@@ -460,6 +463,7 @@ export const calculatePredictedAttendance = async (
 
     // Predicted attendance percentage
     const predictedAttendance = predictedConducted > 0 ? (predictedPresent / predictedConducted) * 100 : 0;
+    const clampedPredictedAttendance = clampAttendance(predictedAttendance);
 
     console.log(`[DEBUG] ${subject.course_title} (${subject.category}):`);
     console.log(`  Current: Conducted=${currentConducted}, Absent=${currentAbsent}, Present=${currentPresent}`);
@@ -469,7 +473,7 @@ export const calculatePredictedAttendance = async (
     results.push({
       subject,
       currentAttendance,
-      predictedAttendance,
+      predictedAttendance: clampedPredictedAttendance,
       totalHoursTillEndDate,
       presentHoursTillStartDate: totalPresentHours, // Future present hours only
       absentHoursDuringLeave: totalAbsentHours,     // Future absent hours only
