@@ -600,7 +600,14 @@ export default function AuthPage() {
       try {
         const checkData = await checkUserExistence();
 
-        if (checkData.auth_exists) {
+        if (checkData.auth_exists && checkData.public_exists) {
+          console.log("[Auth Page] Existing user path (no captcha).");
+          await redirectExistingUser();
+          return;
+        }
+
+        if (checkData.auth_exists && !checkData.public_exists) {
+          console.log("[Auth Page] Partial user path (no captcha).");
           clearLoginTimeout();
           await performLogin();
           setIsLoading(false);
@@ -608,6 +615,7 @@ export default function AuthPage() {
           return;
         }
 
+        console.log("[Auth Page] Onboarding user path (captcha required).");
         // Keep the "Signing in..." UI active for a short delay before showing CAPTCHA.
         loginToCaptchaDelayRef.current = setTimeout(() => {
           loginToCaptchaDelayRef.current = null;
@@ -615,17 +623,28 @@ export default function AuthPage() {
           setIsLoading(false);
         }, LOGIN_TO_CAPTCHA_DELAY_MS);
       } catch (err) {
-        clearLoginToCaptchaDelay();
-        setIsLoading(false);
-        setStage("login");
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to continue sign-in. Please try again."
-        );
+        // If pre-check fails, do not block sign-in. Fallback to direct login.
+        try {
+          clearLoginTimeout();
+          await performLogin();
+          setIsLoading(false);
+          router.push("/dashboard");
+          return;
+        } catch (fallbackErr) {
+          clearLoginToCaptchaDelay();
+          setIsLoading(false);
+          setStage("login");
+          setError(
+            fallbackErr instanceof Error
+              ? fallbackErr.message
+              : err instanceof Error
+                ? err.message
+                : "Unable to continue sign-in. Please try again."
+          );
+        }
       }
     },
-    [email, password, clearLoginTimeout, clearLoginToCaptchaDelay, checkUserExistence, performLogin, router]
+    [email, password, clearLoginTimeout, clearLoginToCaptchaDelay, checkUserExistence, performLogin, redirectExistingUser, router]
   );
 
   const transition = {
