@@ -127,7 +127,7 @@ export default function PwaInstallPrompt() {
         }
         window.open(`/install-instructions`, "_blank");
         setIsVisible(false);
-    }, [promptEvent, browserKey]);
+    }, [promptEvent]);
 
     const handleDismiss = useCallback(() => {
         localStorage.setItem(DISMISS_FLAG_KEY, "dismissed");

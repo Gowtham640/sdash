@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
 import Link from "next/link";
 import Image from "next/image";
@@ -170,6 +170,7 @@ export default function Dashboard() {
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const fetchUnifiedDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
   const router = useRouter();
 
   // Track errors
@@ -453,6 +454,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    fetchUnifiedDataRef.current = fetchUnifiedData;
+  });
+
+  useEffect(() => {
     const snap = getInitialDashboardCacheSnapshot();
     setAttendanceData(snap.attendanceData);
     setMarksData(snap.marksData);
@@ -460,7 +465,7 @@ export default function Dashboard() {
     setSlotOccurrences(snap.slotOccurrences);
     setLoading(!snap.hasCache);
     checkAdminStatus();
-    fetchUnifiedData();
+    void fetchUnifiedDataRef.current?.();
   }, []);
 
   const checkAdminStatus = async () => {

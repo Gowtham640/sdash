@@ -78,7 +78,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
     const newPeriod: LeavePeriod = {
       from: currentDateRange.from,
       to: currentDateRange.to,
-      id: `odml_${Date.now()}`
+      id: `odml_${currentDateRange.from.getTime()}_${currentDateRange.to.getTime()}_${odmlPeriods.length}`
     };
 
     const allPeriods = [...odmlPeriods, newPeriod];

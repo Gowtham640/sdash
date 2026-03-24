@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Link from 'next/link';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
@@ -85,6 +85,7 @@ export default function CalendarPage() {
   useErrorTracking(error, '/calender');
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const fetchUnifiedDataRef = useRef<(() => Promise<void>) | null>(null);
   /** List (grouped) vs month grid — academic-compass style */
   const [calendarUiMode, setCalendarUiMode] = useState<"list" | "month">("month");
   /** First day of the month shown in month view */
@@ -125,7 +126,11 @@ export default function CalendarPage() {
   };
 
   useEffect(() => {
-    fetchUnifiedData();
+    fetchUnifiedDataRef.current = fetchUnifiedData;
+  });
+
+  useEffect(() => {
+    void fetchUnifiedDataRef.current?.();
   }, []);
 
   // Rotate facts every 8 seconds while loading

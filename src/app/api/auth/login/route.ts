@@ -8,7 +8,6 @@ let handleUserSignIn: ((email: string, password: string, captchaToken?: string |
 let AuthErrorCode: Record<string, string> | undefined;
 
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const authModule = require("@/lib/auth");
   handleUserSignIn = authModule.handleUserSignIn;
   AuthErrorCode = authModule.AuthErrorCode;

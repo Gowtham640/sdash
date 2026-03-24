@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence, type TimetableData, type CalendarEvent, type TimetableDayOrder } from '@/lib/timetableUtils';
@@ -287,6 +287,7 @@ export default function AttendancePage() {
     initialRenderable ? initialAttendanceCache.attendanceData : null
   ); // Store original data
   const showOdmlAppliedRef = useRef(showOdmlApplied);
+  const fetchUnifiedDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
   const clampAttendance = (value: number) => Math.max(0, Math.min(100, value));
   // Refs to prevent duplicate button clicks
   const isOpeningPredictionModal = useRef(false);
@@ -563,7 +564,11 @@ export default function AttendancePage() {
   };
 
   useEffect(() => {
-    fetchUnifiedData();
+    fetchUnifiedDataRef.current = fetchUnifiedData;
+  });
+
+  useEffect(() => {
+    void fetchUnifiedDataRef.current?.();
   }, []);
 
   useEffect(() => {
@@ -1356,7 +1361,7 @@ export default function AttendancePage() {
   };
 
   // Calculate predicted margin: simply subtract absent hours during leave from current margin
-  const getPredictedMargin = (
+  const getPredictedMargin = useCallback((
     subject: AttendanceSubject,
     prediction: PredictionResult,
     requiredMargin: { type: string; value: number; text: string }
@@ -1392,7 +1397,7 @@ export default function AttendancePage() {
         text: `${newMargin} hours`
       };
     }
-  };
+  }, [isOdmlMode]);
 
   const attendanceChipStats = useMemo(() => {
     const list = attendanceData?.all_subjects?.filter(Boolean) ?? [];
@@ -1474,7 +1479,7 @@ export default function AttendancePage() {
 
       return a.subject.course_title.localeCompare(b.subject.course_title);
     });
-  }, [attendanceData, isPredictionMode, isOdmlMode, predictionResults]);
+  }, [attendanceData, isPredictionMode, isOdmlMode, predictionResults, getPredictedMargin]);
 
   const subjectDisplayRows = useMemo(() => {
     return sortedAttendanceSubjects.map(({ subject, originalIndex }) => {
@@ -1530,7 +1535,7 @@ export default function AttendancePage() {
         marginValueClass,
       };
     });
-  }, [sortedAttendanceSubjects, isPredictionMode, isOdmlMode, predictionResults]);
+  }, [sortedAttendanceSubjects, isPredictionMode, isOdmlMode, predictionResults, getPredictedMargin]);
 
   const criticalSubjectRows = useMemo(
     () => subjectDisplayRows.filter((row) => row.marginLabel === "Required" && row.marginValue > 0),

@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { Home, Clock, BarChart3, Award, CalendarDays, Calculator } from "lucide-react";
 import { motion } from "framer-motion";
-import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
+import { useMemo, useEffect, useRef, useCallback, useSyncExternalStore, type CSSProperties } from "react";
 import { LiquidGlass, type LiquidGlassRef } from "@specy/liquid-glass-react";
 
 const tabs = [
@@ -20,11 +20,12 @@ export const PillNav = () => {
   const router = useRouter();
   const activeIndex = tabs.findIndex((t) => pathname === t.path || pathname?.startsWith(`${t.path}/`));
 
-  // LiquidGlass uses WebGL — only mount after client to avoid SSR/hydration issues
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  // LiquidGlass uses WebGL — mount only on client without effect-driven setState
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
   // Re-capture background when route changes (paint cache uses page behind the bar)
   useEffect(() => {

@@ -236,6 +236,26 @@ export default function AuthPage() {
     loginPromise?: Promise<boolean>;
   };
 
+  const checkUserExistence = useCallback(async (): Promise<AuthCheckResponse> => {
+    const credentials = credentialsRef.current;
+    if (!credentials) {
+      throw new Error("Credentials missing.");
+    }
+
+    const checkResponse = await trackPostRequest("/api/auth/check-user", {
+      action: "auth_check_user",
+      dataType: "user",
+      payload: { email: credentials.email },
+      omitPayloadKeys: ["password"],
+    });
+
+    if (!checkResponse.ok) {
+      throw new Error("Failed to verify user existence.");
+    }
+
+    return (await checkResponse.json()) as AuthCheckResponse;
+  }, []);
+
   const fetchUserDataSafely = useCallback(async () => {
     try {
       const userResponse = await fetch("/user");
@@ -326,23 +346,7 @@ export default function AuthPage() {
   }, [performLogin, router, clearLoginTimeout]);
 
   const ensureUserBeforeCaptcha = useCallback(async (): Promise<CaptchaCheckResult> => {
-    const credentials = credentialsRef.current;
-    if (!credentials) {
-      throw new Error("Credentials missing.");
-    }
-
-    const checkResponse = await trackPostRequest("/api/auth/check-user", {
-      action: "auth_check_user",
-      dataType: "user",
-      payload: { email: credentials.email },
-      omitPayloadKeys: ["password"],
-    });
-
-    if (!checkResponse.ok) {
-      throw new Error("Failed to verify user existence.");
-    }
-
-    const checkData = (await checkResponse.json()) as AuthCheckResponse;
+    const checkData = await checkUserExistence();
     if (!checkData.auth_exists) {
       const loginPromise = performLogin();
       return {
@@ -363,7 +367,7 @@ export default function AuthPage() {
       console.warn("[Auth Page] User info missing; continuing without it.");
     }
     return checkData;
-  }, [performLogin, redirectExistingUser, fetchUserDataSafely]);
+  }, [checkUserExistence, performLogin, redirectExistingUser, fetchUserDataSafely]);
 
 
 
@@ -572,7 +576,7 @@ export default function AuthPage() {
 
 
   const handleSignIn = useCallback(
-    (e: FormEvent<HTMLFormElement>) => {
+    async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setError(null);
       const cleanedEmail = email.trim();
@@ -588,18 +592,40 @@ export default function AuthPage() {
       setEmail(normalizedEmail);
       setShowDisclaimer(false);
       setCaptchaError(null);
+      setStage("login");
 
       clearLoginToCaptchaDelay();
       setIsLoading(true);
 
-      // Keep the "Signing in..." UI active for a short delay before showing CAPTCHA.
-      loginToCaptchaDelayRef.current = setTimeout(() => {
-        loginToCaptchaDelayRef.current = null;
-        setStage("captcha");
+      try {
+        const checkData = await checkUserExistence();
+
+        if (checkData.auth_exists) {
+          clearLoginTimeout();
+          await performLogin();
+          setIsLoading(false);
+          router.push("/dashboard");
+          return;
+        }
+
+        // Keep the "Signing in..." UI active for a short delay before showing CAPTCHA.
+        loginToCaptchaDelayRef.current = setTimeout(() => {
+          loginToCaptchaDelayRef.current = null;
+          setStage("captcha");
+          setIsLoading(false);
+        }, LOGIN_TO_CAPTCHA_DELAY_MS);
+      } catch (err) {
+        clearLoginToCaptchaDelay();
         setIsLoading(false);
-      }, LOGIN_TO_CAPTCHA_DELAY_MS);
+        setStage("login");
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to continue sign-in. Please try again."
+        );
+      }
     },
-    [email, password, clearLoginToCaptchaDelay]
+    [email, password, clearLoginTimeout, clearLoginToCaptchaDelay, checkUserExistence, performLogin, router]
   );
 
   const transition = {

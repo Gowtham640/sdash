@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import Link from 'next/link';
 import {
   getSlotOccurrences,
@@ -336,6 +336,7 @@ export default function TimetablePage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [currentFact, setCurrentFact] = useState<string>("");
+  const fetchUnifiedDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
   /** Active day order tab for compass-style slot list */
   const [activeDayOrder, setActiveDayOrder] = useState<string>("DO 1");
   const [hasUserSelectedDayOrder, setHasUserSelectedDayOrder] = useState(false);
@@ -354,7 +355,11 @@ export default function TimetablePage() {
   }, [mounted]);
 
   useEffect(() => {
-    fetchUnifiedData();
+    fetchUnifiedDataRef.current = fetchUnifiedData;
+  });
+
+  useEffect(() => {
+    void fetchUnifiedDataRef.current?.();
   }, []);
 
   const todayDayOrderNumber = useMemo(() => {
@@ -1068,7 +1073,7 @@ export default function TimetablePage() {
     };
   }
 
-  const slotTimeToMinutes = (timeStr: string): number | null => {
+  const slotTimeToMinutes = useCallback((timeStr: string): number | null => {
     const [h, m] = timeStr.split(":");
     const hours = Number(h);
     const minutes = Number(m);
@@ -1077,16 +1082,16 @@ export default function TimetablePage() {
     // Portal time uses 12-hour-ish slots; the original project converts hours < 8 to PM.
     const normalizedHours = hours < 8 && hours !== 0 ? hours + 12 : hours;
     return normalizedHours * 60 + minutes;
-  };
+  }, []);
 
-  const parseSlotRangeToMinutes = (range: string): { start: number; end: number } | null => {
+  const parseSlotRangeToMinutes = useCallback((range: string): { start: number; end: number } | null => {
     const [startStr, endStr] = range.split("-");
     if (!startStr || !endStr) return null;
     const start = slotTimeToMinutes(startStr.trim());
     const end = slotTimeToMinutes(endStr.trim());
     if (start == null || end == null) return null;
     return { start, end };
-  };
+  }, [slotTimeToMinutes]);
 
   const slotsForActiveDo = useMemo(() => {
     if (!timetableData.length) {
@@ -1134,7 +1139,7 @@ export default function TimetablePage() {
         slotEndMinutes: minutes?.end ?? null,
       };
     });
-  }, [timetableData, rawTimetableData, activeDayOrder]);
+  }, [timetableData, rawTimetableData, activeDayOrder, parseSlotRangeToMinutes]);
 
   const nowMinutes = now
     ? now.getHours() * 60 + now.getMinutes()

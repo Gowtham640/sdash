@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
@@ -72,8 +72,9 @@ export default function MarksPage() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(DEFAULT_RANDOM_FACT);
   const [marksViewMode, setMarksViewMode] = useState<'cards' | 'list'>('cards');
+  const fetchMarksDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
 
-  const entries = marksPayload?.entries ?? [];
+  const entries = useMemo(() => marksPayload?.entries ?? [], [marksPayload?.entries]);
 
   const marksSummary = useMemo(() => {
     if (!entries.length) {
@@ -352,7 +353,11 @@ export default function MarksPage() {
   useErrorTracking(error, '/marks');
 
   useEffect(() => {
-    fetchMarksData();
+    fetchMarksDataRef.current = fetchMarksData;
+  });
+
+  useEffect(() => {
+    void fetchMarksDataRef.current?.();
   }, []);
 
   useEffect(() => {

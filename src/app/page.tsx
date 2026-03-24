@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { motion } from "framer-motion";
 
 export default function Home() {
@@ -14,13 +15,13 @@ export default function Home() {
       >
         <div className="flex items-center justify-center gap-2 mb-8">
           <div className="w-8 h-8 bg-transparent rounded-[8px] flex items-center justify-center overflow-hidden">
-            <img
+            <Image
               src="/sdashTransparentLogo.png"
               alt="SDash logo"
               className="w-30 h-20 object-contain"
               width={70}
               height={70}
-              loading="eager"
+              priority
             />
           </div>
           <span className="font-sora font-bold text-[32px] text-sdash-text-primary tracking-tight">SDash</span>
