@@ -11,12 +11,10 @@ import { markSaturdaysAsHolidays } from '@/lib/calendarHolidays';
 import { Calendar } from '@/components/ui/calendar';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
-import ShinyText from '../../components/ShinyText';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
-import { getRandomFact } from "@/lib/randomFacts";
+import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
-import NavigationButton from "@/components/NavigationButton";
 import { trackFeatureClick } from "@/lib/analytics";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
@@ -28,7 +26,12 @@ import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
 import { isDataFresh } from '@/lib/dataExpiry';
 import type { AttendanceData, AttendanceSubject } from '@/lib/apiTypes';
-import Particles from '@/components/Particles';
+import TopAppBar from '@/components/sdash/TopAppBar';
+import PillNav from '@/components/sdash/PillNav';
+import GlassCard from '@/components/sdash/GlassCard';
+import StatChip from '@/components/sdash/StatChip';
+import SwipeableCards from '@/components/sdash/SwipeableCards';
+import BottomSheet from '@/components/sdash/BottomSheet';
 
 interface AttendanceApiResponse {
   success: boolean;
@@ -259,7 +262,8 @@ export default function AttendancePage() {
   useErrorTracking(error, '/attendance');
   const [cacheInfo, setCacheInfo] = useState<{ cached: boolean; age: number } | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
+  /** Index in all_subjects for BottomSheet detail (academic-compass style) */
+  const [detailSubjectIndex, setDetailSubjectIndex] = useState<number | null>(null);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(initialAttendanceCache.dayOrderStats);
   const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>(initialAttendanceCache.slotOccurrences);
   const [subjectRemainingHours, setSubjectRemainingHours] = useState<Array<Record<string, unknown>>>([]);
@@ -274,9 +278,10 @@ export default function AttendancePage() {
   const [showODMLModal, setShowODMLModal] = useState(false);
   const [odmlPeriods, setOdmlPeriods] = useState<LeavePeriod[]>([]);
   const [isOdmlMode, setIsOdmlMode] = useState(false);
-  const [currentFact, setCurrentFact] = useState(getRandomFact());
+  const [currentFact, setCurrentFact] = useState(DEFAULT_RANDOM_FACT);
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
+  const [attendanceViewMode, setAttendanceViewMode] = useState<'cards' | 'list'>('cards');
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
   const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(
     initialRenderable ? initialAttendanceCache.attendanceData : null
@@ -672,6 +677,7 @@ export default function AttendancePage() {
   // Rotate facts every 8 seconds while loading
   useEffect(() => {
     if (!loading) return;
+    setCurrentFact(getRandomFact());
 
     const interval = setInterval(() => {
       setCurrentFact(getRandomFact());
@@ -1056,6 +1062,7 @@ export default function AttendancePage() {
 
   const refreshAttendanceData = async () => {
     try {
+      setIsRefreshing(true);
       setLoading(true);
       setError(null);
 
@@ -1107,14 +1114,12 @@ export default function AttendancePage() {
       applyAttendanceDataPayload(supabaseRefreshCache.data, { expiresAt: supabaseRefreshCache.expiresAt });
       console.log('[Attendance] ✅ Updated local state with refreshed attendance data from Supabase');
       console.log('[Attendance] Refresh fetch source:', supabaseRefreshCache.source);
-
-      setLoading(false);
-      setIsRefreshing(false);
-      return;
     } catch (err) {
       console.error('[Attendance] Error refreshing data:', err);
       setError(err instanceof Error ? err.message : 'Failed to refresh attendance data');
+    } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -1389,106 +1394,373 @@ export default function AttendancePage() {
     }
   };
 
-
-  const toggleExpanded = (subjectCode: string) => {
-    const newExpanded = new Set(expandedSubjects);
-    if (newExpanded.has(subjectCode)) {
-      newExpanded.delete(subjectCode);
-    } else {
-      newExpanded.add(subjectCode);
+  const attendanceChipStats = useMemo(() => {
+    const list = attendanceData?.all_subjects?.filter(Boolean) ?? [];
+    if (!list.length) {
+      return { avg: 0, below75: 0, count: 0 };
     }
-    setExpandedSubjects(newExpanded);
+    let sum = 0;
+    let below = 0;
+    list.forEach((sub) => {
+      const prediction =
+        isPredictionMode || isOdmlMode
+          ? predictionResults.find(
+              (p) =>
+                p.subject.subject_code === sub.subject_code &&
+                p.subject.category === sub.category
+            )
+          : null;
+      const pct = prediction
+        ? prediction.predictedAttendance
+        : getAttendancePercentage(sub.attendance);
+      sum += pct;
+      if (pct < 75) {
+        below++;
+      }
+    });
+    return {
+      avg: Math.round(sum / list.length),
+      below75: below,
+      count: list.length,
+    };
+  }, [attendanceData, isPredictionMode, isOdmlMode, predictionResults]);
+
+  const sortedAttendanceSubjects = useMemo(() => {
+    if (!attendanceData?.all_subjects?.length) {
+      return [];
+    }
+
+    const withIndex = attendanceData.all_subjects
+      .map((subject, originalIndex) => ({ subject, originalIndex }))
+      .filter((item): item is { subject: AttendanceSubject; originalIndex: number } => Boolean(item.subject));
+
+    return withIndex.sort((a, b) => {
+      const aPrediction = (isPredictionMode || isOdmlMode)
+        ? predictionResults.find(
+            (p) =>
+              p.subject.subject_code === a.subject.subject_code &&
+              p.subject.category === a.subject.category
+          )
+        : null;
+      const bPrediction = (isPredictionMode || isOdmlMode)
+        ? predictionResults.find(
+            (p) =>
+              p.subject.subject_code === b.subject.subject_code &&
+              p.subject.category === b.subject.category
+          )
+        : null;
+
+      const aRequiredMargin = calculateRequiredMargin(a.subject);
+      const bRequiredMargin = calculateRequiredMargin(b.subject);
+      const aPredictedMargin = aPrediction ? getPredictedMargin(a.subject, aPrediction, aRequiredMargin) : null;
+      const bPredictedMargin = bPrediction ? getPredictedMargin(b.subject, bPrediction, bRequiredMargin) : null;
+
+      const aMarginMeta = aPredictedMargin ?? aRequiredMargin;
+      const bMarginMeta = bPredictedMargin ?? bRequiredMargin;
+
+      if (aMarginMeta.type !== bMarginMeta.type) {
+        return aMarginMeta.type === 'required' ? -1 : 1;
+      }
+
+      if (aMarginMeta.type === 'required' && bMarginMeta.type === 'required' && aMarginMeta.value !== bMarginMeta.value) {
+        return bMarginMeta.value - aMarginMeta.value;
+      }
+
+      const aPct = Math.round(aPrediction ? aPrediction.predictedAttendance : getAttendancePercentage(a.subject.attendance));
+      const bPct = Math.round(bPrediction ? bPrediction.predictedAttendance : getAttendancePercentage(b.subject.attendance));
+      if (aPct !== bPct) {
+        return aPct - bPct;
+      }
+
+      return a.subject.course_title.localeCompare(b.subject.course_title);
+    });
+  }, [attendanceData, isPredictionMode, isOdmlMode, predictionResults]);
+
+  const subjectDisplayRows = useMemo(() => {
+    return sortedAttendanceSubjects.map(({ subject, originalIndex }) => {
+      const prediction = (isPredictionMode || isOdmlMode)
+        ? predictionResults.find(
+            (p) =>
+              p.subject.subject_code === subject.subject_code &&
+              p.subject.category === subject.category
+          )
+        : null;
+
+      const attendancePercentage = prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance);
+      const currentAttendance = prediction ? prediction.currentAttendance : getAttendancePercentage(subject.attendance);
+      const requiredMargin = calculateRequiredMargin(subject);
+      const predictedMargin = prediction ? getPredictedMargin(subject, prediction, requiredMargin) : null;
+      const displayedPct = Math.round(attendancePercentage);
+
+      const baseConducted = parseInt(String(subject.hours_conducted), 10) || 0;
+      const baseAbsent = parseInt(String(subject.hours_absent), 10) || 0;
+      const basePresent = Math.max(0, baseConducted - baseAbsent);
+
+      const displayConducted = prediction
+        ? (isOdmlMode ? baseConducted : baseConducted + prediction.totalHoursTillEndDate)
+        : baseConducted;
+      const displayAbsent = prediction
+        ? (isOdmlMode ? prediction.absentHoursDuringLeave : baseAbsent + prediction.absentHoursDuringLeave)
+        : baseAbsent;
+      const displayPresent = prediction
+        ? (isOdmlMode
+            ? prediction.presentHoursTillStartDate
+            : (baseConducted + prediction.totalHoursTillEndDate) - (baseAbsent + prediction.absentHoursDuringLeave))
+        : basePresent;
+
+      const marginLabel = predictedMargin
+        ? (predictedMargin.type === "required" ? "Required" : "Margin")
+        : (requiredMargin.type === "required" ? "Required" : "Margin");
+      const marginValue = predictedMargin ? predictedMargin.value : requiredMargin.value;
+      const marginValueClass = (predictedMargin ? predictedMargin.type : requiredMargin.type) === "required"
+        ? "text-red-500"
+        : "text-green-500";
+
+      return {
+        subject,
+        originalIndex,
+        prediction,
+        displayedPct,
+        currentAttendance,
+        displayPresent,
+        displayAbsent,
+        displayConducted,
+        marginLabel,
+        marginValue,
+        marginValueClass,
+      };
+    });
+  }, [sortedAttendanceSubjects, isPredictionMode, isOdmlMode, predictionResults]);
+
+  const criticalSubjectRows = useMemo(
+    () => subjectDisplayRows.filter((row) => row.marginLabel === "Required" && row.marginValue > 0),
+    [subjectDisplayRows]
+  );
+  const nonCriticalSubjectRows = useMemo(
+    () => subjectDisplayRows.filter((row) => !(row.marginLabel === "Required" && row.marginValue > 0)),
+    [subjectDisplayRows]
+  );
+
+  const renderListSubjectCard = ({
+    subject,
+    originalIndex,
+    displayedPct,
+    displayPresent,
+    displayAbsent,
+    displayConducted,
+    marginLabel,
+    marginValue,
+    marginValueClass,
+  }: (typeof subjectDisplayRows)[number]): React.ReactNode => (
+    <GlassCard
+      key={`${subject.subject_code}-${originalIndex}`}
+      subjectCategory={subject.category}
+      className="w-full p-4"
+    >
+      <button
+        type="button"
+        onClick={() => setDetailSubjectIndex(originalIndex)}
+        className="w-full text-left"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <p className="font-sora font-semibold text-base text-sdash-text-primary leading-snug">
+            {subject.course_title}
+          </p>
+          <p className={`font-sora text-2xl font-bold shrink-0 ${displayedPct < 75 ? "text-sdash-danger" : "text-sdash-success"}`}>
+            {displayedPct}%
+          </p>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div className="inline-flex items-center gap-2 rounded-full bg-sdash-surface-1 border border-white/[0.08] px-1 py-1">
+            <span
+              className="inline-flex items-center rounded-full bg-sdash-surface-2 border border-white/[0.08] overflow-hidden"
+              title="Present | Absent"
+            >
+              <span className="stat-number text-sm text-sdash-text-primary !text-green-500 px-2 py-0.5">{displayPresent}</span>
+              <span className="w-px h-4 bg-white/[0.14]" />
+              <span className="stat-number text-sm text-sdash-text-primary !text-red-500 px-2 py-0.5">{displayAbsent}</span>
+            </span>
+            <span className="stat-number text-sm text-sdash-text-primary mr-2" title="Conducted">
+              {displayConducted}
+            </span>
+          </div>
+          <p className="text-sm font-sora text-sdash-text-primary shrink-0">
+            {marginLabel}: <span className={marginValueClass}>{marginValue}</span>
+          </p>
+        </div>
+      </button>
+    </GlassCard>
+  );
+
+  const renderAttendanceDetailSheet = (): React.ReactNode => {
+    if (detailSubjectIndex === null || !attendanceData?.all_subjects?.[detailSubjectIndex]) {
+      return null;
+    }
+    const subject = attendanceData.all_subjects[detailSubjectIndex];
+    const prediction =
+      isPredictionMode || isOdmlMode
+        ? predictionResults.find(
+            (p) =>
+              p.subject.subject_code === subject.subject_code &&
+              p.subject.category === subject.category
+          )
+        : null;
+    const pieChartData = createPieChartData(subject);
+    const attendancePercentage = prediction
+      ? prediction.predictedAttendance
+      : getAttendancePercentage(subject.attendance);
+
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h2 className="text-lg font-sora font-semibold text-sdash-text-primary">{subject.course_title}</h2>
+          <p className="text-md text-sdash-text-secondary mt-1">{subject.subject_code}</p>
+          <p className="text-md text-sdash-text-muted font-sora mt-1">
+            {subject.faculty_name} · {subject.category} · Slot {subject.slot} · Room {subject.room}
+          </p>
+        </div>
+
+        <div className="relative mx-auto h-[220px] w-[220px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={pieChartData || []}
+                cx="50%"
+                cy="50%"
+                innerRadius="55%"
+                outerRadius="85%"
+                paddingAngle={5}
+                dataKey="value"
+              >
+                {(pieChartData || []).map((entry, cellIndex) => (
+                  <Cell key={`sheet-pie-${cellIndex}`} fill={entry.color} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="text-center">
+              <div className="font-sora text-2xl font-bold text-sdash-text-primary">
+                {attendancePercentage.toFixed(1)}%
+              </div>
+              <div className="font-sora text-xs text-sdash-text-muted">
+                {prediction ? (isOdmlMode ? "OD/ML adjusted" : "Predicted") : "Attendance"}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <GlassCard className="border border-white/[0.08] p-4">
+          <p className="mb-2 font-sora text-base font-semibold text-sdash-text-primary">Hours remaining</p>
+          <div className="font-sora text-xl font-bold text-sdash-accent">
+            {prediction ? (
+              (() => {
+                const futureHours = prediction.totalHoursTillEndDate;
+                const findSlotData = (
+                  courseTitle: string,
+                  category: string,
+                  occ: SlotOccurrence[]
+                ): SlotOccurrence | null => {
+                  const normalizeCategory = (cat: string): string => {
+                    const normalized = cat.toLowerCase().trim();
+                    if (normalized.includes("lab")) return "practical";
+                    if (normalized.includes("practical")) return "practical";
+                    if (normalized.includes("theory")) return "theory";
+                    return normalized;
+                  };
+                  let slotData = occ.find(
+                    (occurrence) =>
+                      occurrence.courseTitle.toLowerCase().trim() === courseTitle.toLowerCase().trim() &&
+                      normalizeCategory(occurrence.category) === normalizeCategory(category)
+                  );
+                  if (!slotData) {
+                    const subjectTitle = courseTitle.toLowerCase().trim();
+                    const subjectCategory = normalizeCategory(category);
+                    const hasBothVersions = occ.some(
+                      (o) =>
+                        o.courseTitle.toLowerCase().trim() === subjectTitle &&
+                        normalizeCategory(o.category) !== subjectCategory
+                    );
+                    if (hasBothVersions) {
+                      slotData = occ.find(
+                        (occurrence) =>
+                          occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
+                          normalizeCategory(occurrence.category) === subjectCategory
+                      );
+                    }
+                  }
+                  return slotData || null;
+                };
+                const slotData = findSlotData(subject.course_title, subject.category, slotOccurrences);
+                if (!slotData || !dayOrderStats) {
+                  return <span className="text-sdash-danger">0 hours (no timetable data)</span>;
+                }
+                let originalRemainingHours = 0;
+                if (slotData.dayOrderHours && typeof slotData.dayOrderHours === "object") {
+                  Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
+                    const doNumber = parseInt(dayOrder, 10);
+                    const dayCount = dayOrderStats[doNumber] || 0;
+                    originalRemainingHours += dayCount * hoursPerDay;
+                  });
+                }
+                const newRemainingHours = originalRemainingHours - futureHours;
+                if (newRemainingHours <= 0) {
+                  return <span className="text-sdash-warning">0 hours (completed)</span>;
+                }
+                return <span>{newRemainingHours} hours</span>;
+              })()
+            ) : (
+              <RemainingHoursDisplay
+                courseTitle={subject.course_title}
+                category={subject.category}
+                dayOrderStats={dayOrderStats}
+                slotOccurrences={slotOccurrences}
+              />
+            )}
+          </div>
+        </GlassCard>
+      </div>
+    );
   };
+
 
   if (loading) {
     return (
-      <div className="relative bg-black items-center min-h-screen flex flex-col justify-center overflow-hidden gap-6 sm:gap-8 md:gap-9 lg:gap-9">
-        <div className="text-white font-sora text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-bold justify-center items-center">Attendance</div>
-        <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl">Loading attendance data...</div>
-        <div className="max-w-2xl px-6">
-          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-4 text-center">
-            Meanwhile, here are some interesting facts:
+      <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col">
+        <TopAppBar title="Attendance" showBack onRefresh={() => void refreshAttendanceData()} isRefreshing={loading || isRefreshing} />
+        <main className="flex flex-col justify-center flex-1 gap-6 px-4 py-8">
+          <div className="text-sdash-text-primary font-sora text-xl font-bold text-center">Loading attendance data...</div>
+          <div className="max-w-2xl mx-auto w-full">
+            <div className="text-sdash-text-primary text-base font-sora font-bold mb-4 text-center">
+              Meanwhile, here are some interesting facts:
+            </div>
+            <div className="text-sdash-text-secondary text-sm font-sora text-center italic">
+              {currentFact}
+            </div>
           </div>
-          <div className="text-gray-300 text-sm sm:text-base md:text-lg lg:text-xl font-sora text-center italic">
-            {currentFact}
-          </div>
-        </div>
+        </main>
+        <PillNav />
       </div>
     );
   }
 
-  // Show empty state if no attendance data but no error (allows refresh button to work)
-  const renderParticleLayer = () => (
-    <div className="fixed inset-0 z-0 pointer-events-none">
-      <Particles
-        particleColors={["#ffffff"]}
-        particleCount={100}
-        particleSpread={20}
-        speed={0.1}
-        particleBaseSize={200}
-        moveParticlesOnHover
-        alphaParticles={false}
-        disableRotation={false}
-        pixelRatio={typeof window !== 'undefined' ? window.devicePixelRatio : 1}
-      />
-    </div>
-  );
-
   if (!attendanceData) {
     return (
-      <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-        {renderParticleLayer()}
-        <Link
-          href="/dashboard"
-          className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
-          aria-label="Go to Dashboard"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-            stroke="currentColor"
-            className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-          </svg>
-        </Link>
-
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
-            <button
-              onClick={refreshAttendanceData}
-              disabled={loading}
-              className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label="Refresh attendance data"
-              title="Refresh attendance data"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-                className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center gap-4 h-full">
-          <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center">
-            {loading ? 'Fetching fresh attendance from Supabase...' : 'No attendance data available'}
-          </div>
-          {!loading && (
-            <div className="text-gray-400 text-sm sm:text-base md:text-lg font-sora text-center">
-              Click the refresh button above to fetch attendance data
+      <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col overflow-y-auto">
+        <TopAppBar title="Attendance" showBack onRefresh={() => void refreshAttendanceData()} isRefreshing={loading || isRefreshing} />
+        <main className="flex flex-col items-center flex-1 gap-8 px-4 py-8">
+          <div className="flex flex-col items-center justify-center gap-4">
+            <div className="text-sdash-text-primary text-base sm:text-lg md:text-xl font-sora text-center">
+              {loading ? 'Fetching fresh attendance from Supabase...' : 'No attendance data available'}
             </div>
-          )}
-        </div>
+            {!loading && (
+              <div className="text-sdash-text-secondary text-sm sm:text-base font-sora text-center">
+                Use the refresh button in the header to fetch attendance data
+              </div>
+            )}
+          </div>
+        </main>
+        <PillNav />
       </div>
     );
   }
@@ -1502,129 +1774,46 @@ export default function AttendancePage() {
   });
 
   return (
-    <div className="relative bg-black min-h-screen flex flex-col justify-start items-center overflow-y-auto py-8 gap-8">
-      {renderParticleLayer()}
-      {/* Home Icon */}
-      <Link
-        href="/dashboard"
-        className="absolute top-4 left-4 text-white hover:text-white/80 transition-colors z-50"
-        aria-label="Go to Dashboard"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={2}
-          stroke="currentColor"
-          className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-        </svg>
-      </Link>
+    <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col justify-start overflow-y-auto">
+      <TopAppBar title="Attendance" showBack onRefresh={() => void refreshAttendanceData()} isRefreshing={loading || isRefreshing} />
 
-      <div className="flex flex-col items-center gap-4">
-        <div className="flex items-center gap-3 sm:gap-4">
-          <div className="text-white font-sora text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-bold">Attendance</div>
+      <main className="w-full max-w-lg mx-auto flex flex-col py-3 px-4">
+      {/* View switch + summary chips */}
+      <div className="flex items-center justify-between gap-3 -mx-4 px-4">
+        <div className="flex gap-3 overflow-x-auto hide-scrollbar">
+          <StatChip>
+            <span className="stat-number text-[13px] text-red-500">{attendanceChipStats.below75}</span>
+            <span className="text-[13px] text-sdash-text-secondary whitespace-nowrap">below 75%</span>
+          </StatChip>
+        </div>
+        <div className="inline-flex items-center rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 p-1">
           <button
-            onClick={refreshAttendanceData}
-            disabled={loading}
-            className="text-white hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Refresh attendance data"
-            title="Refresh attendance data"
+            type="button"
+            onClick={() => setAttendanceViewMode('cards')}
+            className={`rounded-[5px] px-3 py-1.5 text-sm font-sora transition-colors ${              attendanceViewMode === 'cards'
+                ? 'bg-sdash-accent text-sdash-text-primary'
+                : 'text-sdash-text-secondary'
+            }`}
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-              className={`w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 lg:w-8 lg:h-8 ${loading ? 'animate-spin' : ''}`}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-            </svg>
+            Cards
+          </button>
+          <button
+            type="button"
+            onClick={() => setAttendanceViewMode('list')}
+            className={`rounded-[5px] px-3 py-1.5 text-sm font-sora transition-colors ${
+              attendanceViewMode === 'list'
+                ? 'bg-sdash-accent text-sdash-text-primary'
+                : 'text-sdash-text-secondary'
+            }`}
+          >
+            List
           </button>
         </div>
       </div>
 
-      {/* Prediction Controls */}
-      <div className="flex gap-4 items-center">
-        {!isPredictionMode && !isOdmlMode ? (
-          <div className="flex gap-4 items-center">
-            <button
-              onClick={() => {
-                // Prevent duplicate clicks
-                if (isOpeningPredictionModal.current) {
-                  return;
-                }
-                isOpeningPredictionModal.current = true;
-
-                trackFeatureClick('predict_attendance', '/attendance');
-                setShowPredictionModal(true);
-
-                // Reset after a short delay
-                setTimeout(() => {
-                  isOpeningPredictionModal.current = false;
-                }, 500);
-              }}
-              className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
-            >
-              <ShinyText
-                text="Predict Attendance"
-                disabled={false}
-                speed={3}
-                className="text-white"
-              />
-            </button>
-            <button
-              onClick={() => {
-                // Prevent duplicate clicks
-                if (isOpeningOdmlModal.current) {
-                  return;
-                }
-                isOpeningOdmlModal.current = true;
-
-                trackFeatureClick('predict_odml', '/attendance');
-                setShowODMLModal(true);
-
-                // Reset after a short delay
-                setTimeout(() => {
-                  isOpeningOdmlModal.current = false;
-                }, 500);
-              }}
-              className="bg-white/10 border border-gray-400 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
-            >
-              <ShinyText
-                text="Add OD/ML"
-                disabled={false}
-                speed={3}
-                className="text-white"
-              />
-            </button>
-  
-          </div>
-        ) : (
-          <div className="flex gap-4 items-center">
-            <div className="text-white font-sora px-3 py-1.5 sm:px-4 sm:py-2 md:px-4 md:py-2 lg:px-4 lg:py-2 bg-green-500/20 border border-green-500/50 rounded-2xl text-xs sm:text-sm md:text-base lg:text-base">
-              <ShinyText
-                text={isPredictionMode ? 'Prediction Mode Active' : 'OD/ML Mode Active'}
-                disabled={false}
-                speed={3}
-                className="text-white"
-              />
-            </div>
-            <button
-              onClick={handleCancelPrediction}
-              className="bg-red-600 hover:bg-red-700 text-white font-sora px-4 py-1.5 sm:px-5 sm:py-2 md:px-6 md:py-2 lg:px-6 lg:py-2 rounded-2xl transition-colors duration-200 flex items-center gap-1 sm:gap-2 text-xs sm:text-sm md:text-base lg:text-base"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-      </div>
-
       {/* ODML Banner */}
       {savedOdmlRecords.length > 0 && (
-        <div className="w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] bg-green-500/20 border border-green-500/50 rounded-3xl p-4 sm:p-5 md:p-6 flex flex-col gap-4">
+        <GlassCard className="w-full border border-sdash-success/30 bg-sdash-success/5 p-4 sm:p-5 flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex flex-row gap-2">
             <div className="text-white font-sora text-xs md:text-lg lg:text-lg font-normal lg:font-bold">
@@ -1669,377 +1858,113 @@ export default function AttendancePage() {
               ))}
             </div>
           </details>
-        </div>
+        </GlassCard>
       )}
 
-      {/* Individual Subject Cards */}
-      <div className="flex flex-col gap-4 sm:gap-5 md:gap-6 lg:gap-6 w-[95vw] sm:w-[90vw] md:w-[85vw] lg:w-[80vw] items-center">
+      {/* Subject cards — swipeable glass (compass-style); full stats in BottomSheet */}
+      <div className="w-full mt-3 flex flex-col items-stretch">
         {attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
-          attendanceData.all_subjects.map((subject, index) => {
-            if (!subject) return null; // Skip null subjects
-            // Get prediction data if in prediction mode or OD/ML mode
-            const prediction = (isPredictionMode || isOdmlMode) ? predictionResults.find(p =>
-              p.subject.subject_code === subject.subject_code &&
-              p.subject.category === subject.category
-            ) : null;
-
-            const pieChartData = createPieChartData(subject);
-            const attendancePercentage = prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance);
-            const currentAttendance = prediction ? prediction.currentAttendance : getAttendancePercentage(subject.attendance);
-            const requiredMargin = calculateRequiredMargin(subject);
-            const predictedMargin = prediction ? getPredictedMargin(subject, prediction, requiredMargin) : null;
-            const isExpanded = expandedSubjects.has(subject.subject_code);
-
-            // Debug: Log attendance subject data
-            console.log(`[Attendance] Subject: ${subject.course_title} (${subject.category})`);
-
-            // Debug: Log prediction matching
-            if (prediction) {
-              console.log(`[DEBUG] Found prediction for ${subject.course_title} (${subject.category}):`, {
-                predictedAttendance: prediction.predictedAttendance,
-                totalHoursTillEndDate: prediction.totalHoursTillEndDate,
-                absentHoursDuringLeave: prediction.absentHoursDuringLeave
-              });
-            } else if (isPredictionMode || isOdmlMode) {
-              console.warn(`[DEBUG] No prediction found for ${subject.course_title} (${subject.category})`);
-            }
-
-            return (
-              <div key={`${subject.subject_code}-${index}`} className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-lg lg:text-lg font-sora overflow-hidden flex flex-col">
-                {/* Main Card Content */}
-                <div
-                  className="flex flex-row flex-wrap items-center justify-between p-3 sm:p-4 md:p-5 lg:p-6 gap-4 min-h-[300px]"
-                >
-                  {/* Left Side - Subject Info (data block for each subject) */}
-                  <div className="flex flex-col justify-start items-start gap-4 flex-1 w-full sm:w-auto">
-                    <div>
-                      <div className="text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold max-w-[400px] leading-tight">
-                        {subject.course_title}
-                      </div>
-                      <div className="text-gray-400 text-xs sm:text-sm font-sora mt-1">
-                        {subject.subject_code}
-                      </div>
-                      <div className="text-gray-500 text-xs sm:text-sm font-sora">
-                        {subject.faculty_name}
-                      </div>
-                      <div className="text-gray-600 text-[10px] sm:text-xs font-sora mt-1">
-                        {subject.category} • Slot: {subject.slot} • Room: {subject.room}
-                      </div>
-                    </div>
-                    <div className="flex flex-col justify-center items-start gap-3">
-                      <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
-                        <span className="text-blue-400 text-xs sm:text-sm font-sora">Total: </span>
-                        {prediction ?
-                          (isOdmlMode ?
-                            `${subject.hours_conducted} hours` : // OD/ML: total stays same
-                            `${parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate} hours` // Prediction: add future hours
-                          ) :
-                          `${subject.hours_conducted} hours`
-                        }
-                        {prediction && !isOdmlMode && (
-                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                            Current: {subject.hours_conducted} + {prediction.totalHoursTillEndDate}
-                          </div>
-                        )}
-                        {prediction && isOdmlMode && (
-                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                            Current: {subject.hours_conducted} (unchanged)
-                          </div>
-                        )}
-                      </div>
-                      <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
-                        <span className="text-red-400 text-xs sm:text-sm font-sora">Absent: </span>
-                        {prediction ?
-                          (isOdmlMode ?
-                            `${prediction.absentHoursDuringLeave} hours` : // OD/ML: show adjusted absent
-                            `${parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave} hours` // Prediction: add future absent
-                          ) :
-                          `${subject.hours_absent} hours`
-                        }
-                        {prediction && !isOdmlMode && (
-                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                            Current: {subject.hours_absent} + {prediction.absentHoursDuringLeave}
-                          </div>
-                        )}
-                        {prediction && isOdmlMode && (
-                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                            Current: {subject.hours_absent} - {prediction.odmlReductionHours}
-                          </div>
-                        )}
-                      </div>
-                      <div className="bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-xs sm:text-sm font-sora p-2 sm:p-3">
-                        <span className="text-green-400 text-xs sm:text-sm font-sora">Present: </span>
-                        {prediction ?
-                          (isOdmlMode ?
-                            `${prediction.presentHoursTillStartDate} hours` : // OD/ML: show adjusted present
-                            `${(parseInt(subject.hours_conducted) + prediction.totalHoursTillEndDate) - (parseInt(subject.hours_absent) + prediction.absentHoursDuringLeave)} hours` // Prediction: calculate total present
-                          ) :
-                          `${calculatePresentHours(subject.hours_conducted, subject.hours_absent)} hours`
-                        }
-                        {prediction && !isOdmlMode && (
-                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                            Current: {calculatePresentHours(subject.hours_conducted, subject.hours_absent)} + {prediction.presentHoursTillStartDate}
-                          </div>
-                        )}
-                        {prediction && isOdmlMode && (
-                          <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                            Current: {calculatePresentHours(subject.hours_conducted, subject.hours_absent)} + {prediction.odmlReductionHours}
-                          </div>
-                        )}
-                      </div>
-                      <div className={`bg-white/10 border w-full sm:w-[200px] border-white/20 rounded-3xl text-white text-sm sm:text-base md:text-lg lg:text-lg font-sora p-2 sm:p-3 ${predictedMargin ?
-                        (predictedMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10') :
-                        (requiredMargin.type === 'required' ? 'border-red-400/50 bg-red-500/10' : 'border-green-400/50 bg-green-500/10')
-                        }`}>
-                        {predictedMargin ?
-                          <>
-                            <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${predictedMargin.type === 'required' ? 'text-red-400' : 'text-green-400'
-                              }`}>
-                              {predictedMargin.type === 'required' ? 'Required: ' : 'Margin: '}
-                            </span>
-                            {predictedMargin.text}
-                            <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                              Current: {requiredMargin.text}
-                            </div>
-                          </> :
-                          <>
-                            <span className={`text-sm sm:text-base md:text-lg lg:text-lg font-semibold font-sora ${requiredMargin.type === 'required' ? 'text-red-400' : 'text-green-400'
-                              }`}>
-                              {requiredMargin.type === 'required' ? 'Required: ' : 'Margin: '}
-                            </span>
-                            {requiredMargin.text}
-                          </>
-                        }
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Side - Pie Chart (attendance donut visual) */}
-                  <div className="flex flex-col items-center justify-center w-[170px] sm:w-[220px] md:w-[340px] lg:w-80 xl:w-80 h-[170px] sm:h-[220px] md:h-[340px] lg:h-80 xl:h-80">
-                    {(() => {
-                      console.log('[PIE CHART DEBUG] Subject:', subject.subject_code);
-                      console.log('[PIE CHART DEBUG] pieChartData:', pieChartData);
-                      console.log('[PIE CHART DEBUG] pieChartData type:', typeof pieChartData);
-                      console.log('[PIE CHART DEBUG] pieChartData length:', pieChartData?.length);
-                      console.log('[PIE CHART DEBUG] pieChartData values:', pieChartData?.map(e => ({ name: e.name, value: e.value, color: e.color })));
-                      console.log('[PIE CHART DEBUG] hours_conducted:', subject.hours_conducted);
-                      console.log('[PIE CHART DEBUG] hours_absent:', subject.hours_absent);
-                      return null;
-                    })()}
-                    <div
-                      className="relative w-full h-full flex items-center justify-center"
-                      style={{ minWidth: '150px', minHeight: '150px' }}
-                      ref={(el) => {
-                        if (el) {
-                          const rect = el.getBoundingClientRect();
-                          const computed = window.getComputedStyle(el);
-                          console.log('[PIE CHART DEBUG] Container actual dimensions:', {
-                            width: rect.width,
-                            height: rect.height,
-                            clientWidth: el.clientWidth,
-                            clientHeight: el.clientHeight,
-                            computedWidth: computed.width,
-                            computedHeight: computed.height,
-                            display: computed.display,
-                            position: computed.position
-                          });
-                        }
-                      }}
-                    >
-                      <ResponsiveContainer width="100%" height="100%">
-                        {(() => {
-                          console.log('[PIE CHART DEBUG] ResponsiveContainer rendering with data:', pieChartData || []);
-                          console.log('[PIE CHART DEBUG] Data sum:', pieChartData?.reduce((sum, e) => sum + (e.value || 0), 0));
-                          return (
-                            <PieChart>
-                              <Pie
-                                data={pieChartData || []}
-                                cx="50%"
-                                cy="50%"
-                                innerRadius="55%"
-                                outerRadius="85%"
-                                paddingAngle={5}
-                                dataKey="value"
-                              >
-                                {(pieChartData || []).map((entry, index) => {
-                                  console.log(`[PIE CHART DEBUG] Rendering Cell ${index}:`, entry);
-                                  return <Cell key={`cell-${index}`} fill={entry.color} />;
-                                })}
-                              </Pie>
-                            </PieChart>
-                          );
-                        })()}
-                      </ResponsiveContainer>
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="text-center">
-                          <div className="text-white font-sora text-md sm:text-2xl md:text-3xl lg:text-3xl font-bold">
-                            {attendancePercentage.toFixed(1)}%
-                          </div>
-                          <div className="text-gray-400 font-sora text-[7px] sm:text-sm">
-                            {prediction ? (isOdmlMode ? 'OD/ML Adjusted' : 'Predicted') : 'Attendance'}
-                          </div>
-                          {prediction && (
-                            <div className="text-gray-500 font-sora text-[10px] sm:text-xs mt-1">
-                              Current: {currentAttendance.toFixed(1)}%
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Expand Button */}
-                <div className="flex justify-center pb-4">
-                  <button
-                    onClick={() => toggleExpanded(subject.subject_code)}
-                    className="bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg px-4 py-2 text-white font-sora text-sm transition-colors"
+          attendanceViewMode === 'cards' ? (
+            <SwipeableCards>
+              {subjectDisplayRows.map(
+                ({
+                  subject,
+                  originalIndex,
+                  prediction,
+                  displayedPct,
+                  currentAttendance,
+                  displayPresent,
+                  displayAbsent,
+                  displayConducted,
+                  marginLabel,
+                  marginValue,
+                  marginValueClass,
+                }) => (
+                  <GlassCard
+                    key={`${subject.subject_code}-${originalIndex}`}
+                    subjectCategory={subject.category}
+                    className="p-3 flex flex-col gap-4 w-full"
                   >
-                    {isExpanded ? '▼ Less Details' : '▶ More Details'}
-                  </button>
-                </div>
-
-                {/* Expanded Content */}
-                {isExpanded && (
-                  <div className="px-4 sm:px-5 md:px-6 lg:px-6 pb-4 sm:pb-5 md:pb-6 lg:pb-6 border-t border-white/20 pt-3 sm:pt-4 md:pt-4 lg:pt-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 md:gap-6 lg:gap-6">
-                      {/* Hours Remaining */}
-                      <div className="bg-white/10 border border-white/20 rounded-3xl p-3 sm:p-4">
-                        <div className="text-white font-sora text-base sm:text-lg font-bold mb-2 sm:mb-3">Hours Remaining</div>
-                        <div className="text-blue-400 font-sora text-xl sm:text-2xl font-bold">
-                          {prediction ?
-                            (() => {
-                              // SIMPLE CALCULATION: Calculate actual remaining hours after prediction
-                              const futureHours = prediction.totalHoursTillEndDate;
-
-                              // Calculate original remaining hours using the same logic as RemainingHoursDisplay
-                              const findSlotData = (courseTitle: string, category: string, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
-                                const normalizeCategory = (cat: string): string => {
-                                  const normalized = cat.toLowerCase().trim();
-                                  if (normalized.includes('lab')) return 'practical';
-                                  if (normalized.includes('practical')) return 'practical';
-                                  if (normalized.includes('theory')) return 'theory';
-                                  return normalized;
-                                };
-
-                                let slotData = slotOccurrences.find(occurrence =>
-                                  occurrence.courseTitle.toLowerCase().trim() === courseTitle.toLowerCase().trim() &&
-                                  normalizeCategory(occurrence.category) === normalizeCategory(category)
-                                );
-
-                                if (!slotData) {
-                                  const subjectTitle = courseTitle.toLowerCase().trim();
-                                  const subjectCategory = normalizeCategory(category);
-
-                                  const hasBothVersions = slotOccurrences.some(occ =>
-                                    occ.courseTitle.toLowerCase().trim() === subjectTitle &&
-                                    normalizeCategory(occ.category) !== subjectCategory
-                                  );
-
-                                  if (hasBothVersions) {
-                                    slotData = slotOccurrences.find(occurrence =>
-                                      occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
-                                      normalizeCategory(occurrence.category) === subjectCategory
-                                    );
-                                  }
-                                }
-
-                                return slotData || null;
-                              };
-
-                              const slotData = findSlotData(subject.course_title, subject.category, slotOccurrences);
-
-                              if (!slotData || !dayOrderStats) {
-                                console.log(`[Attendance] Prediction - No timetable data for ${subject.course_title}`);
-                                return <span className="text-red-400">0 hours (no timetable data)</span>;
-                              }
-
-                              // Calculate original remaining hours
-                              let originalRemainingHours = 0;
-                              if (slotData && slotData.dayOrderHours && typeof slotData.dayOrderHours === 'object') {
-                                Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
-                                  const doNumber = parseInt(dayOrder);
-                                  const dayCount = dayOrderStats[doNumber] || 0;
-                                  originalRemainingHours += dayCount * hoursPerDay;
-                                });
-                              }
-
-                              // Calculate new remaining hours: original - future hours being added
-                              const newRemainingHours = originalRemainingHours - futureHours;
-
-                              console.log(`[Attendance] Prediction - Remaining hours calculation for ${subject.course_title}:`);
-                              console.log(`[Attendance] Prediction - Original remaining: ${originalRemainingHours}`);
-                              console.log(`[Attendance] Prediction - Future hours being added: ${futureHours}`);
-                              console.log(`[Attendance] Prediction - New remaining: ${newRemainingHours}`);
-
-                              if (newRemainingHours <= 0) {
-                                return <span className="text-yellow-400">0 hours (completed)</span>;
-                              }
-
-                              return <span className="text-blue-400">{newRemainingHours} hours</span>;
-                            })() :
-                            <RemainingHoursDisplay
-                              courseTitle={subject.course_title}
-                              category={subject.category}
-                              dayOrderStats={dayOrderStats}
-                              slotOccurrences={slotOccurrences}
-                            />
-                          }
-                        </div>
-
-                      </div>
-
-                      {/* Absent Days */}
-                      {/*
-                      <div className="bg-white/10 border border-white/20 rounded-3xl p-3 sm:p-4">
-                        <div className="text-white font-sora text-base sm:text-lg font-bold mb-2 sm:mb-3">Absent Days</div>
-                        <div className="text-gray-400 font-sora text-xs sm:text-sm">
-                          Absent days list will be displayed here
-                        </div>
-                      </div>
-                      */}
+                    <div>
+                      <p className="font-sora font-semibold text-lg text-sdash-text-primary leading-snug">
+                        {subject.course_title}
+                      </p>
+                      <p className="text-md text-sdash-text-secondary mt-1">{subject.subject_code}</p>
+                      <p className="text-md text-sdash-text-muted mt-1 font-sora">
+                        {subject.faculty_name} · {subject.category} · Slot {subject.slot} · Room {subject.room}
+                      </p>
                     </div>
+                    <div className="flex items-baseline gap-2">
+                      <span className={`display-stat ${displayedPct < 75 ? "text-sdash-danger" : "text-sdash-success"}`}>
+                        {displayedPct}%
+                      </span>
+                    </div>
+                    {prediction && (
+                      <p className="text-xl font-sora text-sdash-text-primary shrink-0">
+                        Current: {Math.round(currentAttendance)}%
+                      </p>
+                    )}
+                    <div className="mt-1 flex items-center justify-between gap-3">
+                      <div className="inline-flex items-center gap-2 rounded-full bg-sdash-surface-1 border border-white/[0.08] px-1 py-1">
+                        <span
+                          className="inline-flex items-center rounded-full bg-sdash-surface-2 border border-white/[0.08] overflow-hidden"
+                          title="Present | Absent"
+                        >
+                          <span className="stat-number text-md text-sdash-text-primary !text-green-500 px-2 py-0.5">{displayPresent}</span>
+                          <span className="w-px h-4 bg-white/[0.14]" />
+                          <span className="stat-number text-md text-sdash-text-primary !text-red-500 px-2 py-0.5">{displayAbsent}</span>
+                        </span>
+                        <span className="stat-number text-md text-sdash-text-primary mr-2" title="Conducted">
+                          {displayConducted}
+                        </span>
+                      </div>
+                      <p className="text-xl font-sora text-sdash-text-primary shrink-0">
+                        {marginLabel}: <span className={marginValueClass}>{marginValue}</span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDetailSubjectIndex(originalIndex)}
+                      className="w-full rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-sm font-sora text-sdash-text-primary touch-target"
+                    >
+                      Full details
+                    </button>
+                  </GlassCard>
+                )
+              )}
+            </SwipeableCards>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {criticalSubjectRows.length > 0 && (
+                <div className="rounded-2xl border-2 border-dashed border-red-500/30 bg-transparent p-2">
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-500 text-lg font-bold text-red-500">
+                      !
+                    </span>
+                    <p className="font-sora text-md font-semibold uppercase tracking-wide text-red-500">
+                      Critical subjects
+                    </p>
                   </div>
-                )}
-              </div>
-            );
-          })
-        ) : (
-          <div className="text-white/70 text-center p-8">
-            <p>No attendance data available. Please refresh to fetch your attendance.</p>
-          </div>
-        )}
-      </div>
-      {/* Summary Stats */}
-      {attendanceData && attendanceData.summary ? (
-        <div className="w-[95vw] sm:w-[90vw] md:w-[75vw] lg:w-[60vw] flex flex-col items-center bg-white/10 border border-white/20 rounded-3xl p-4 sm:p-5 md:p-6 lg:p-6">
-          <div className="text-white font-sora text-base sm:text-lg md:text-xl lg:text-xl mb-3 sm:mb-4">
-            {isPredictionMode ? 'Predicted Summary' : 'Overall Summary'}
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 text-white font-sora items-center justify-center">
-            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
-              <div className="text-blue-400 text-xs sm:text-sm">Total Subjects</div>
-              <div className="text-base sm:text-lg font-bold">{attendanceData.summary.total_subjects || 0}</div>
-            </div>
-            <div className="bg-white/10 border border-white/20 rounded-lg p-2 sm:p-3">
-              <div className="text-green-400 text-xs sm:text-sm">
-                {isPredictionMode ? 'Predicted Attendance' : 'Overall Attendance'}
-              </div>
-              <div className="text-lg font-bold">
-                {isPredictionMode && predictionResults && predictionResults.length > 0 ?
-                  `${(predictionResults.reduce((sum, p) => sum + (p?.predictedAttendance || 0), 0) / predictionResults.length).toFixed(1)}%` :
-                  attendanceData.summary.overall_attendance_percentage || '0%'
-                }
-              </div>
-              {isPredictionMode && predictionResults && predictionResults.length > 0 && (
-                <div className="text-[10px] sm:text-xs text-gray-400 mt-1">
-                  Current: {attendanceData.summary.overall_attendance_percentage || '0%'}
+                  <div className="flex flex-col gap-3">
+                    {criticalSubjectRows.map((row) => renderListSubjectCard(row))}
+                  </div>
                 </div>
               )}
+              {nonCriticalSubjectRows.map((row) => renderListSubjectCard(row))}
             </div>
-          </div>
-        </div>
-      ) : null}
+          )
+        ) : (
+          <GlassCard className="w-full p-2 text-center">
+            <p className="text-sm text-sdash-text-secondary font-sora">
+              No attendance data available. Refresh from the header to fetch your attendance.
+            </p>
+          </GlassCard>
+        )}
+      </div>
+
+      <BottomSheet open={detailSubjectIndex !== null} onClose={() => setDetailSubjectIndex(null)}>
+        {renderAttendanceDetailSheet()}
+      </BottomSheet>
 
       {/* Attendance Prediction Modal */}
       {attendanceData && (
@@ -2097,21 +2022,25 @@ export default function AttendancePage() {
       )}
 
 
+      </main>
+
+      <PillNav />
+
       {/* Re-auth Modal */}
       {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
-            <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
-            <p className="text-gray-300 mb-6">
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-sdash-surface-1 border border-white/[0.08] rounded-[20px] p-8 max-w-md w-full mx-4">
+            <h2 className="text-xl font-sora font-semibold text-sdash-text-primary mb-4">Session expired</h2>
+            <p className="text-sdash-text-secondary text-sm mb-6">
               Your portal session has expired. Please sign in again to continue.
             </p>
-            <NavigationButton
-              path="/auth"
+            <Link
+              href="/auth"
               onClick={handleReAuthenticate}
-              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
+              className="block w-full text-center bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full py-3 touch-target"
             >
-              Sign In
-            </NavigationButton>
+              Sign in
+            </Link>
           </div>
         </div>
       )}

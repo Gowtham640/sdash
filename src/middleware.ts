@@ -198,6 +198,8 @@ export const config = {
     "/timetable/:path*",
     "/calender",
     "/calender/:path*",
+    "/sgpa-calculator",
+    "/sgpa-calculator/:path*",
     "/admin",
     "/admin/:path*",
   ],

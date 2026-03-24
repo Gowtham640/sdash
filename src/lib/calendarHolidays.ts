@@ -9,9 +9,19 @@ interface CalendarEvent {
 }
 
 /**
+ * Inclusive last working day of the semester (DD/MM/YYYY = 06/05/2026).
+ * Used by holiday marking and calendar stats; months are 0-based in Date.
+ */
+const SEMESTER_LAST_WORKING_DAY = (() => {
+  const d = new Date(2026, 4, 6);
+  d.setHours(0, 0, 0, 0);
+  return d;
+})();
+
+/**
  * Mark holidays for students not in semester 1:
  * - Saturdays on or after 25/10/2025 are holidays
- * - All days after 10/11/2025 are holidays (last working day is 10/11/2025)
+ * - All days after the semester last working day are holidays (06/05/2026)
  * In semester 1, all days remain as normal
  */
 export function markSaturdaysAsHolidays(
@@ -24,8 +34,10 @@ export function markSaturdaysAsHolidays(
     return calendarData;
   }
   
-  // Semester 2+: Mark Saturdays on/after 25/10/2025 AND all days after 10/11/2025 as holidays
-  console.log(`[Calendar] Semester ${semester} - marking holidays (Saturdays on/after 25/10, all days after 10/11)`);
+  // Semester 2+: Mark Saturdays on/after 25/10/2025 AND all days after last working day as holidays
+  console.log(
+    `[Calendar] Semester ${semester} - marking holidays (Saturdays on/after 25/10, all days after semester end)`,
+  );
   console.log(`[Calendar] Processing ${calendarData.length} calendar events`);
   
   // Define cutoff dates
@@ -33,8 +45,7 @@ export function markSaturdaysAsHolidays(
   const saturdayCutoffDate = new Date(2025, 9, 25); // 25/10/2025 - Saturday cutoff (inclusive)
   saturdayCutoffDate.setHours(0, 0, 0, 0);
   
-  const lastWorkingDate = new Date(2025, 10, 10); // 10/11/2025 - Last working day (inclusive, so days after this are holidays)
-  lastWorkingDate.setHours(0, 0, 0, 0);
+  const lastWorkingDate = new Date(SEMESTER_LAST_WORKING_DAY.getTime());
   
   console.log(`[Calendar] Cutoff dates: Saturday cutoff = ${saturdayCutoffDate.toLocaleDateString('en-GB')}, Last working day = ${lastWorkingDate.toLocaleDateString('en-GB')}`);
   
@@ -59,10 +70,12 @@ export function markSaturdaysAsHolidays(
       
       // Mark as holiday if:
       // 1. It's a Saturday after 25/10/2025, OR
-      // 2. It's any day after 10/11/2025 (last working day)
+      // 2. It's any day after semester last working day (inclusive last day is not holiday)
       // 3. Not already marked as holiday
       if (!isHoliday && (isSaturdayAfterCutoff || isAfterLastWorkingDay)) {
-        const reason = isAfterLastWorkingDay ? 'post-cutoff (after 10/11/2025)' : 'Saturday on/after 25/10/2025';
+        const reason = isAfterLastWorkingDay
+          ? "post-cutoff (after semester last working day)"
+          : "Saturday on/after 25/10/2025";
         console.log(`[Calendar] ✓ Marking ${event.date} as holiday (${reason})`);
         holidaysMarked++;
         return {
@@ -97,3 +110,10 @@ export function isSaturday(dateStr: string): boolean {
   }
 }
 
+/**
+ * Last calendar day of the semester that counts as a working day (inclusive).
+ * Same boundary as `markSaturdaysAsHolidays` (06/05/2026).
+ */
+export function getSemesterLastWorkingDayInclusive(): Date {
+  return new Date(SEMESTER_LAST_WORKING_DAY.getTime());
+}

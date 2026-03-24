@@ -118,6 +118,8 @@ export interface MarksEntry {
   total: number | null;
   courseCode: string;
   courseTitle: string;
+  /** Course credits when returned by marks scraper/API. */
+  credit?: string;
   assessments: Array<Record<string, unknown>>;
 }
 

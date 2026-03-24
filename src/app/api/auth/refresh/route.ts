@@ -50,6 +50,8 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         expires_at: data.session.expires_at,
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
       },
       { status: 200 }
     );

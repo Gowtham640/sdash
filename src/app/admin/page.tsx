@@ -1019,19 +1019,19 @@ export default function AdminPage() {
                           <XAxis 
                             dataKey="date" 
                             stroke="#ffffff80" 
-                            tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
+                            tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }}
                             interval={2}
                           />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                           <Tooltip 
                             contentStyle={{ 
                               backgroundColor: 'rgba(0, 0, 0, 0.8)', 
                               border: '1px solid rgba(255, 255, 255, 0.2)',
                               borderRadius: '8px',
-                              fontFamily: 'Sora'
+                              fontFamily: 'var(--font-circular-std), sans-serif'
                             }}
-                            labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
-                            itemStyle={{ color: '#60a5fa', fontFamily: 'Sora' }}
+                            labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }}
+                            itemStyle={{ color: '#60a5fa', fontFamily: 'var(--font-circular-std), sans-serif' }}
                           />
                           <Line type="monotone" dataKey="count" stroke="#60a5fa" strokeWidth={2} dot={{ fill: '#60a5fa', r: 4 }} isAnimationActive={true} animationDuration={500} />
                         </LineChart>
@@ -1051,19 +1051,19 @@ export default function AdminPage() {
                           <XAxis 
                             dataKey="date" 
                             stroke="#ffffff80" 
-                            tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
+                            tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }}
                             interval={2}
                           />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                           <Tooltip 
                             contentStyle={{ 
                               backgroundColor: 'rgba(0, 0, 0, 0.8)', 
                               border: '1px solid rgba(255, 255, 255, 0.2)',
                               borderRadius: '8px',
-                              fontFamily: 'Sora'
+                              fontFamily: 'var(--font-circular-std), sans-serif'
                             }}
-                            labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
-                            itemStyle={{ color: '#34d399', fontFamily: 'Sora' }}
+                            labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }}
+                            itemStyle={{ color: '#34d399', fontFamily: 'var(--font-circular-std), sans-serif' }}
                           />
                           <Line type="monotone" dataKey="count" stroke="#34d399" strokeWidth={2} dot={{ fill: '#34d399', r: 4 }} isAnimationActive={true} animationDuration={500} />
                         </LineChart>
@@ -1083,9 +1083,9 @@ export default function AdminPage() {
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={requestAnalyticsData.dataRequestsByType}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                            <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={70} />
-                            <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                            <Tooltip contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ color: '#38bdf8', fontFamily: 'Sora' }} />
+                            <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} angle={-45} textAnchor="end" height={70} />
+                            <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                            <Tooltip contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }} itemStyle={{ color: '#38bdf8', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                             <Bar dataKey="count" fill="#38bdf8" radius={[8, 8, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
@@ -1100,9 +1100,9 @@ export default function AdminPage() {
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={requestAnalyticsData.errorsByReason}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                            <XAxis dataKey="reason" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora', fontSize: 11 }} angle={-45} textAnchor="end" height={80} />
-                            <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                            <Tooltip contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ color: '#fb7185', fontFamily: 'Sora' }} />
+                            <XAxis dataKey="reason" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif', fontSize: 11 }} angle={-45} textAnchor="end" height={80} />
+                            <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                            <Tooltip contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }} itemStyle={{ color: '#fb7185', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                             <Bar dataKey="count" fill="#fb7185" radius={[8, 8, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
@@ -1121,10 +1121,10 @@ export default function AdminPage() {
                           <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={requestAnalyticsData.successFailureOverTime}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                              <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora', fontSize: 12 }} />
-                              <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                              <Tooltip contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ fontFamily: 'Sora' }} />
-                              <Legend wrapperStyle={{ color: '#ffffff', fontFamily: 'Sora', marginTop: 8 }} />
+                              <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif', fontSize: 12 }} />
+                              <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                              <Tooltip contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }} itemStyle={{ fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                              <Legend wrapperStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif', marginTop: 8 }} />
                               <Line type="monotone" dataKey="success" stroke="#34d399" strokeWidth={2} dot={{ fill: '#34d399', r: 4 }} isAnimationActive />
                               <Line type="monotone" dataKey="failure" stroke="#fb7185" strokeWidth={2} dot={{ fill: '#fb7185', r: 4 }} isAnimationActive />
                             </LineChart>
@@ -1142,10 +1142,10 @@ export default function AdminPage() {
                           <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={requestAnalyticsData.loginOverTime}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                              <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora', fontSize: 12 }} />
-                              <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                              <Tooltip contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }} itemStyle={{ fontFamily: 'Sora' }} />
-                              <Legend wrapperStyle={{ color: '#ffffff', fontFamily: 'Sora', marginTop: 8 }} />
+                              <XAxis dataKey="date" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif', fontSize: 12 }} />
+                              <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                              <Tooltip contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.2)', borderRadius: '8px' }} labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }} itemStyle={{ fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                              <Legend wrapperStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif', marginTop: 8 }} />
                               <Bar dataKey="success" stackId="login" fill="#34d399" radius={[8, 8, 0, 0]} />
                               <Bar dataKey="failure" stackId="login" fill="#fb7185" radius={[8, 8, 0, 0]} />
                             </BarChart>
@@ -1182,8 +1182,8 @@ export default function AdminPage() {
                           };
                         })}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis dataKey="page" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <XAxis dataKey="page" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'var(--font-circular-std), sans-serif' }} angle={-45} textAnchor="end" height={80} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                           <Bar dataKey="count" fill="#60a5fa" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                         </BarChart>
                         </ResponsiveContainer>
@@ -1203,8 +1203,8 @@ export default function AdminPage() {
                           feature: item.feature.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
                         }))}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis dataKey="feature" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }} angle={-45} textAnchor="end" height={80} />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <XAxis dataKey="feature" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'var(--font-circular-std), sans-serif' }} angle={-45} textAnchor="end" height={80} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                           <Bar dataKey="count" fill="#e879f9" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                         </BarChart>
                         </ResponsiveContainer>
@@ -1247,7 +1247,7 @@ export default function AdminPage() {
                                   fill="#ffffff"
                                   textAnchor={props.textAnchor}
                                   dominantBaseline="central"
-                                  style={{ fontFamily: 'Sora', fontSize: '12px' }}
+                                  style={{ fontFamily: 'var(--font-circular-std), sans-serif', fontSize: '12px' }}
                                 >
                                   {`${browser}: ${percentage}%`}
                                 </text>
@@ -1299,7 +1299,7 @@ export default function AdminPage() {
                                   fill="#ffffff"
                                   textAnchor={props.textAnchor}
                                   dominantBaseline="central"
-                                  style={{ fontFamily: 'Sora', fontSize: '12px' }}
+                                  style={{ fontFamily: 'var(--font-circular-std), sans-serif', fontSize: '12px' }}
                                 >
                                   {`${device}: ${percentage}%`}
                                 </text>
@@ -1334,8 +1334,8 @@ export default function AdminPage() {
                         { name: 'API Requests', count: analyticsData.summary?.apiRequests || 0 },
                       ]}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                        <XAxis dataKey="name" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                        <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                        <XAxis dataKey="name" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                        <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                         <Bar dataKey="count" fill="#34d399" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500} />
                       </BarChart>
                       </ResponsiveContainer>
@@ -1354,8 +1354,8 @@ export default function AdminPage() {
                         <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={analyticsData.charts.cacheHitsByType}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" />
-                          <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
-                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'Sora' }} />
+                          <XAxis dataKey="type" stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
+                          <YAxis stroke="#ffffff80" tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }} />
                           <Bar dataKey="count" radius={[8, 8, 0, 0]} isAnimationActive={true} animationDuration={500}>
                             {analyticsData.charts.cacheHitsByType.map((entry, index) => {
                               // Different colors for each data type
@@ -1733,7 +1733,7 @@ export default function AdminPage() {
                   <XAxis 
                     dataKey="date" 
                     stroke="#ffffff80" 
-                    tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'Sora' }}
+                    tick={{ fill: '#ffffff80', fontSize: 12, fontFamily: 'var(--font-circular-std), sans-serif' }}
                     angle={-45}
                     textAnchor="end"
                     height={80}
@@ -1741,18 +1741,18 @@ export default function AdminPage() {
                   />
                   <YAxis 
                     stroke="#ffffff80" 
-                    tick={{ fill: '#ffffff80', fontFamily: 'Sora' }}
-                    label={{ value: 'Count', angle: -90, position: 'insideLeft', fill: '#ffffff80', fontFamily: 'Sora' }}
+                    tick={{ fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }}
+                    label={{ value: 'Count', angle: -90, position: 'insideLeft', fill: '#ffffff80', fontFamily: 'var(--font-circular-std), sans-serif' }}
                   />
                   <Tooltip 
                     contentStyle={{ 
                       backgroundColor: 'rgba(0, 0, 0, 0.8)', 
                       border: '1px solid rgba(255, 255, 255, 0.2)',
                       borderRadius: '8px',
-                      fontFamily: 'Sora'
+                      fontFamily: 'var(--font-circular-std), sans-serif'
                     }}
-                    labelStyle={{ color: '#ffffff', fontFamily: 'Sora' }}
-                    itemStyle={{ color: modalData.color, fontFamily: 'Sora' }}
+                    labelStyle={{ color: '#ffffff', fontFamily: 'var(--font-circular-std), sans-serif' }}
+                    itemStyle={{ color: modalData.color, fontFamily: 'var(--font-circular-std), sans-serif' }}
                   />
                   <Line 
                     type="monotone" 

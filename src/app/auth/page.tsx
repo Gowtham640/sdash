@@ -3,16 +3,15 @@
 import {
   useState,
   useEffect,
-  useMemo,
   useRef,
   useCallback,
-  lazy,
-  Suspense,
   FormEvent,
 } from "react";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Shield } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import GlassCard from "@/components/sdash/GlassCard";
 import { storePortalPassword } from "@/lib/passwordStorage";
 import { setStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
 import { trackPostRequest } from "@/lib/postAnalytics";
@@ -23,7 +22,12 @@ const LOGIN_TO_CAPTCHA_DELAY_MS = 5000;
 
 type AuthStage = "login" | "captcha" | "postCaptcha";
 
-const LiquidEther = lazy(() => import("@/components/LiquidEther"));
+/** Minimal typing for window.hcaptcha (explicit render + cleanup). */
+type HCaptchaAPI = {
+  render: (container: HTMLElement, options: Record<string, unknown>) => number;
+  remove: (id: number) => void;
+  reset: (id?: number) => void;
+};
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
@@ -31,7 +35,6 @@ export default function AuthPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [showLiquidEther, setShowLiquidEther] = useState(false);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [stage, setStage] = useState<AuthStage>("login");
   const [captchaError, setCaptchaError] = useState<string | null>(null);
@@ -172,41 +175,51 @@ export default function AuthPage() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowLiquidEther(true);
-    }, 100);
-    return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
     if (stage !== "postCaptcha") {
       clearProgressAnimation();
       setPostCaptchaProgress(0);
     }
   }, [stage, clearProgressAnimation]);
 
-  const liquidEtherElement = useMemo(
-    () => (
-      <LiquidEther
-        colors={["#FFFFFF", "#FFFFFF", "#000000"]}
-        mouseForce={20}
-        cursorSize={100}
-        isViscous={false}
-        viscous={30}
-        iterationsViscous={32}
-        iterationsPoisson={32}
-        resolution={0.5}
-        isBounce={false}
-        autoDemo={true}
-        autoSpeed={0.5}
-        autoIntensity={2.2}
-        takeoverDuration={0.25}
-        autoResumeDelay={3000}
-        autoRampDuration={0.6}
-      />
-    ),
-    []
-  );
+  /**
+   * Next.js <Script onLoad> can miss when the tag is cached, or fire before window.hcaptcha is ready.
+   * Poll until the explicit-render API exists so the widget can mount reliably.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const tryMarkReady = () => {
+      const H = (window as unknown as { hcaptcha?: HCaptchaAPI }).hcaptcha;
+      if (H?.render) {
+        setIsCaptchaScriptReady(true);
+        return true;
+      }
+      return false;
+    };
+
+    if (tryMarkReady()) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (tryMarkReady()) {
+        window.clearInterval(intervalId);
+      }
+    }, 100);
+
+    const timeoutId = window.setTimeout(() => {
+      window.clearInterval(intervalId);
+      if (!tryMarkReady()) {
+        console.warn("[Auth Page] hCaptcha API not available after wait (blocked network or script error).");
+      }
+    }, 25000);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.clearTimeout(timeoutId);
+    };
+  }, []);
 
   const handleDisclaimerComplete = useCallback(() => {
     setShowDisclaimer(false);
@@ -447,47 +460,115 @@ export default function AuthPage() {
     setCaptchaError("There was an issue verifying the CAPTCHA. Please try again.");
   }, []);
 
-  useEffect(() => {
-    if (stage !== "captcha" || !isCaptchaScriptReady) {
-      return;
-    }
+  // hCaptcha callbacks must stay stable for the render effect deps; the API reads latest handlers via refs.
+  const handleCaptchaSuccessRef = useRef(handleCaptchaSuccess);
+  const handleCaptchaExpiredRef = useRef(handleCaptchaExpired);
+  const handleCaptchaErrorRef = useRef(handleCaptchaError);
+  handleCaptchaSuccessRef.current = handleCaptchaSuccess;
+  handleCaptchaExpiredRef.current = handleCaptchaExpired;
+  handleCaptchaErrorRef.current = handleCaptchaError;
 
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const container = captchaContainerRef.current;
-    if (!container) {
-      return;
-    }
+    const getHcaptcha = () => (window as unknown as { hcaptcha?: HCaptchaAPI }).hcaptcha;
 
-    const hcaptcha = (window as any).hcaptcha;
-    if (!hcaptcha || typeof hcaptcha.render !== "function") {
-      return;
-    }
-
-    if (captchaWidgetIdRef.current !== null) {
-      try {
-        hcaptcha.reset(captchaWidgetIdRef.current);
-      } catch (resetError) {
-        console.warn("[Auth Page] Failed to reset CAPTCHA widget:", resetError);
+    // Tear down widget whenever we leave the captcha step (login, post-captcha, disclaimer, etc.)
+    if (stage !== "captcha") {
+      const hcaptcha = getHcaptcha();
+      const wid = captchaWidgetIdRef.current;
+      if (wid !== null && hcaptcha?.remove) {
+        try {
+          hcaptcha.remove(wid);
+        } catch {
+          /* ignore */
+        }
+        captchaWidgetIdRef.current = null;
       }
       return;
     }
 
-    captchaWidgetIdRef.current = hcaptcha.render(container, {
-      sitekey: HCAPTCHA_SITE_KEY,
-      callback: handleCaptchaSuccess,
-      "expired-callback": handleCaptchaExpired,
-      "error-callback": handleCaptchaError,
+    if (!isCaptchaScriptReady) {
+      return;
+    }
+
+    let cancelled = false;
+    let mountedId: number | null = null;
+    let retryTimeoutId: number | null = null;
+
+    const runRender = (attempt = 0) => {
+      if (cancelled) {
+        return;
+      }
+
+      const hcaptcha = getHcaptcha();
+      const container = captchaContainerRef.current;
+
+      if (!container) {
+        if (attempt < 30) {
+          retryTimeoutId = window.setTimeout(() => runRender(attempt + 1), 50);
+        } else {
+          console.warn("[Auth Page] CAPTCHA container ref missing after retries.");
+        }
+        return;
+      }
+
+      if (!hcaptcha?.render) {
+        if (attempt < 80) {
+          retryTimeoutId = window.setTimeout(() => runRender(attempt + 1), 100);
+        } else {
+          console.error("[Auth Page] hcaptcha.render never became available.");
+          setCaptchaError("Unable to load CAPTCHA. Check your network or disable blockers, then refresh.");
+        }
+        return;
+      }
+
+      try {
+        setCaptchaError(null);
+        mountedId = hcaptcha.render(container, {
+          sitekey: HCAPTCHA_SITE_KEY,
+          callback: (token: string) => handleCaptchaSuccessRef.current(token),
+          "expired-callback": () => handleCaptchaExpiredRef.current(),
+          "error-callback": () => handleCaptchaErrorRef.current(),
+        });
+        captchaWidgetIdRef.current = mountedId;
+      } catch (err) {
+        console.error("[Auth Page] hcaptcha.render failed:", err);
+        setCaptchaError("Unable to show CAPTCHA. Please refresh the page and try again.");
+      }
+    };
+
+    // Iframes inside transformed ancestors (e.g. Framer Motion) often fail to paint; defer two frames
+    // after layout so the widget mounts after paint. Avoid wrapping the iframe in motion/backdrop-blur.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) {
+          runRender(0);
+        }
+      });
     });
-  }, [
-    stage,
-    isCaptchaScriptReady,
-    handleCaptchaSuccess,
-    handleCaptchaExpired,
-    handleCaptchaError,
-  ]);
+
+    return () => {
+      cancelled = true;
+      if (retryTimeoutId !== null) {
+        window.clearTimeout(retryTimeoutId);
+        retryTimeoutId = null;
+      }
+      const hcaptcha = getHcaptcha();
+      if (mountedId !== null && hcaptcha?.remove) {
+        try {
+          hcaptcha.remove(mountedId);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (captchaWidgetIdRef.current === mountedId) {
+        captchaWidgetIdRef.current = null;
+      }
+    };
+  }, [stage, isCaptchaScriptReady]);
 
 
   const handleSignIn = useCallback(
@@ -521,11 +602,21 @@ export default function AuthPage() {
     [email, password, clearLoginToCaptchaDelay]
   );
 
+  const transition = {
+    initial: { opacity: 0, y: 8 },
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, y: -8 },
+    transition: { duration: 0.2, ease: "easeOut" },
+  };
+
+  const emailPreview =
+    email.includes("@") ? email : email ? `${email}@srmist.edu.in` : "";
+
   return (
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col justify-center overflow-hidden">
+    <div className="min-h-screen bg-sdash-bg flex items-center justify-center px-4 py-8">
       <Script
         id="hc-captcha-script"
-        src="https://js.hcaptcha.com/1/api.js"
+        src="https://js.hcaptcha.com/1/api.js?render=explicit"
         strategy="afterInteractive"
         async
         defer
@@ -537,137 +628,140 @@ export default function AuthPage() {
           );
         }}
       />
-      {showLiquidEther && (
-        <div className="absolute inset-0 z-0">
-          <Suspense fallback={null}>{liquidEtherElement}</Suspense>
-        </div>
-      )}
-      <div
-        className="pointer-events-none absolute top-40 left-1/2 -translate-x-1/2 translate-y-1/2
-             w-[120vw] h-[140vh] rounded-full
-             border-[180px] border-green-400/70
-             rotate-180 shadow-2xl shadow-green-400/30
-             z-[1]"
-      />
-      <div
-        className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 z-[1]"
-      >
-        <div
-          className="rounded-full"
-          style={{
-            width: "clamp(400px, 60vw, 700px)",
-            height: "clamp(400px, 60vw, 700px)",
-            background: "rgba(34, 197, 94, 0.25)",
-            filter: "blur(120px)",
-          }}
-        />
-      </div>
-      <div className="relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[80vw] md:w-[60vw] lg:w-[40vw] xl:w-[30vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-lg sm:text-xl md:text-2xl lg:text-3xl font-sora flex flex-col gap-6 sm:gap-8 md:gap-10 lg:gap-10 justify-center items-center">
-        {showDisclaimer ? (
-          <>
-            <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-bold">Important</div>
-            <p className="text-white text-base sm:text-lg md:text-base text-center">
-              Visit your Academia portal and comply with the updated password policy before logging in. Complete the necessary steps, then proceed here.
-            </p>
-            <button
-              type="button"
-              onClick={handleDisclaimerComplete}
-              className="w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-white rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm text-gray-800 font-semibold hover:bg-gray-100 active:bg-gray-200 transition-all"
-            >
-              Done
-            </button>
-          </>
-        ) : stage === "login" ? (
-          <>
-            <div className="text-white text-2xl sm:text-3xl md:text-4xl lg:text-4xl font-bold">Sign In</div>
-            <form onSubmit={handleSignIn} className="w-full flex flex-col gap-4">
-              <input
-                type="text"
-                inputMode="email"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={isLoading}
-                required
-                className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <div className="relative w-full">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isLoading}
-                  required
-                  className="active:outline-none focus:outline-none w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-gray-950/0 rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 pr-10 sm:pr-12 lg:pr-12 border border-gray-700 justify-center items-center flex font-sans text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                />
+      <div className="w-full max-w-sm">
+        <AnimatePresence mode="wait">
+          {showDisclaimer ? (
+            <motion.div key="disclaimer" {...transition}>
+              <GlassCard className="p-6">
+                <Shield size={32} className="text-sdash-text-secondary mb-4" />
+                <h1 className="heading-1 text-sdash-text-primary mb-3">Before you sign in</h1>
+                <p className="text-sm text-sdash-text-secondary mb-4 leading-relaxed">
+                  Visit your Academia portal and comply with the updated password policy before logging
+                  in. Complete the necessary steps, then proceed here.
+                </p>
+                <p className="text-sm text-sdash-text-secondary mb-6 leading-relaxed">
+                  SDash accesses your SRM portal data to display your academics. Your credentials are
+                  used only for authentication.
+                </p>
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition-colors"
-                  disabled={isLoading}
+                  onClick={handleDisclaimerComplete}
+                  className="w-full bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full py-3 touch-target hover:bg-indigo-400 transition-colors duration-150 active:scale-[0.98]"
                 >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  I understand
                 </button>
-              </div>
-              {error && (
-                <div className="w-full p-3 rounded-lg bg-red-500/20 border border-red-500/50 text-red-200 text-xs font-semibold">
-                  {error}
-                </div>
-              )}
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full h-[6vh] sm:h-[5vh] md:h-[4.5vh] lg:h-[4vh] bg-white rounded-2xl p-3 sm:p-4 md:p-5 lg:p-5 border border-gray-700 justify-center items-center flex font-sans text-sm text-gray-800 font-semibold hover:bg-gray-100 transition-all disabled:opacity-50 disabled:hover:bg-white cursor-pointer"
-              >
-                {isLoading ? (
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 border-2 border-gray-800 border-t-transparent rounded-full animate-spin" />
-                    Signing in...
+              </GlassCard>
+            </motion.div>
+          ) : stage === "login" ? (
+            <motion.div key="login" {...transition}>
+              <GlassCard className="p-6">
+                <h1 className="heading-1 text-sdash-text-primary mb-6">Sign in</h1>
+                <form onSubmit={handleSignIn} className="w-full flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs text-sdash-text-secondary mb-1.5 font-sora">Email</label>
+                    <input
+                      type="text"
+                      inputMode="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      disabled={isLoading}
+                      required
+                      placeholder="ra2211003010XXX"
+                        className={`w-full bg-sdash-surface-2 border ${
+                        error ? "border-sdash-danger" : "border-white/[0.07]"
+                        } rounded-[14px] px-4 py-3 text-base text-sdash-text-primary font-sora placeholder:text-sdash-text-muted focus:border-sdash-accent focus:outline-none transition-colors`}
+                    />
+                    {emailPreview ? (
+                      <p className="text-[11px] text-sdash-text-muted mt-1">{emailPreview}</p>
+                    ) : null}
                   </div>
-                ) : (
-                  "Next"
-                )}
-              </button>
-            </form>
-          </>
-        ) : stage === "captcha" ? (
-          <div className="w-full flex flex-col gap-4 items-center">
-            <div className="text-white text-lg font-semibold text-center">Complete the CAPTCHA</div>
-            <div className="w-full flex justify-center">
-              <div
-                className="h-captcha pointer-events-auto relative z-[30]"
-                ref={captchaContainerRef}
-                style={{
-                  width: "100%",
-                  maxWidth: "400px",
-                  minHeight: "140px",
-                  touchAction: "manipulation",
-                }}
-              />
-            </div>
-            {captchaError && (
-              <div className="text-red-300 text-xs text-center">{captchaError}</div>
-            )}
-          </div>
-        ) : stage === "postCaptcha" ? (
-          <div className="w-full flex flex-col gap-4 items-center">
-            <div className="text-white text-lg font-semibold text-center">Completing verification</div>
-            <div className="w-full flex flex-col gap-2">
-              <div className="flex flex-col justify-between text-white text-xs font-semibold">
-                <span>Verifying your response</span>
-                <span>{Math.min(100, Math.round(postCaptchaProgress))}%</span>
-              </div>
-              <div className="w-full h-2 rounded-full bg-white/20 overflow-hidden">
+                  <div>
+                    <label className="block text-xs text-sdash-text-secondary mb-1.5 font-sora">Password</label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        disabled={isLoading}
+                        required
+                        placeholder="Password"
+                        className={`w-full bg-sdash-surface-2 border ${
+                          error ? "border-sdash-danger" : "border-white/[0.07]"
+                        } rounded-[14px] px-4 py-3 pr-12 text-base text-sdash-text-primary font-sora placeholder:text-sdash-text-muted focus:border-sdash-accent focus:outline-none transition-colors`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 touch-target text-sdash-text-secondary"
+                        disabled={isLoading}
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+                  {error ? (
+                    <p className="text-xs text-sdash-danger font-sora">{error}</p>
+                  ) : null}
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full py-3 touch-target hover:bg-indigo-400 transition-colors duration-150 active:scale-[0.98] disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Signing in...
+                      </span>
+                    ) : (
+                      "Next"
+                    )}
+                  </button>
+                </form>
+              </GlassCard>
+            </motion.div>
+          ) : stage === "captcha" ? (
+            /*
+              Do NOT wrap the hCaptcha iframe in motion.div: CSS transform on ancestors breaks iframe painting.
+              Keep the widget out of backdrop-blur (GlassCard) for reliable embedding.
+            */
+            <div key="captcha" className="w-full space-y-4 transform-none">
+              <GlassCard className="p-6">
+                <h1 className="heading-1 text-sdash-text-primary mb-2 text-center">CAPTCHA</h1>
+                <p className="text-xs text-sdash-text-secondary text-center">
+                  Complete the challenge below to continue signing in.
+                </p>
+              </GlassCard>
+              <div className="rounded-[20px] border border-white/[0.1] bg-sdash-surface-2 p-4 flex justify-center overflow-visible">
                 <div
-                  className="h-full bg-gradient-to-r from-green-400 to-emerald-400 transition-[width]"
-                  style={{ width: `${Math.min(100, postCaptchaProgress)}%` }}
+                  ref={captchaContainerRef}
+                  className="h-captcha w-full max-w-[400px] min-h-[150px] pointer-events-auto relative z-10"
+                  style={{ touchAction: "manipulation" }}
                 />
               </div>
-              
+              {captchaError ? (
+                <p className="text-sdash-danger text-xs text-center">{captchaError}</p>
+              ) : null}
             </div>
-          </div>
-        ) : null}
+          ) : stage === "postCaptcha" ? (
+            <motion.div key="postCaptcha" {...transition}>
+              <GlassCard className="p-6 text-center">
+                <h1 className="heading-1 text-sdash-text-primary mb-6">Verifying</h1>
+                <div className="w-full h-1 bg-sdash-surface-2 rounded-full mb-3 overflow-hidden">
+                  <motion.div
+                    className="h-full bg-sdash-accent rounded-full"
+                    initial={{ width: "0%" }}
+                    animate={{ width: `${Math.min(100, postCaptchaProgress)}%` }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+                <p className="text-xs text-sdash-text-secondary font-sora">
+                  Completing verification <span className="stat-number">{Math.round(postCaptchaProgress)}%</span>
+                </p>
+              </GlassCard>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
     </div>
   );

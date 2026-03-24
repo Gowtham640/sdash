@@ -309,21 +309,21 @@ def mark_saturdays_as_holidays(calendar_data, semester):
     """
     Mark holidays for students not in semester 1:
     - Saturdays after 25/10/2025 are holidays (for semester != 1)
-    - All days after 10/11/2025 are holidays (last working day)
+    - All days after 06/05/2026 are holidays (last working day)
     In semester 1, all days remain as normal
     """
     if semester == 1:
         print("[CALENDAR] Semester 1 - keeping calendar as is (no modification)", file=sys.stderr)
         return calendar_data
     
-    print(f"[CALENDAR] Semester {semester} - marking holidays (Saturdays after 25/10, all days after 10/11)", file=sys.stderr)
+    print(f"[CALENDAR] Semester {semester} - marking holidays (Saturdays after 25/10, all days after semester end)", file=sys.stderr)
     
     # Import datetime for date manipulation
     from datetime import datetime, timedelta
     
     # Define cutoff dates
     saturday_cutoff_date = datetime(2025, 10, 25)  # 25/10/2025 - Saturday cutoff
-    last_working_date = datetime(2025, 11, 10)  # 10/11/2025 - Last working day
+    last_working_date = datetime(2026, 5, 6)  # 06/05/2026 - Last working day
     
     modified_events = []
     
@@ -355,10 +355,10 @@ def mark_saturdays_as_holidays(calendar_data, semester):
             
             # Mark as holiday if:
             # 1. It's a Saturday after 25/10/2025, OR
-            # 2. It's any day after 10/11/2025 (last working day)
+            # 2. It's any day after 06/05/2026 (last working day)
             # 3. Not already marked as holiday
             if not is_holiday and (is_saturday_after_cutoff or is_after_last_working_day):
-                reason = 'post-cutoff (after 10/11/2025)' if is_after_last_working_day else 'Saturday after 25/10/2025'
+                reason = 'post-cutoff (after semester last working day)' if is_after_last_working_day else 'Saturday after 25/10/2025'
                 print(f"[CALENDAR] Marking {event_date_str} ({reason}) as holiday", file=sys.stderr)
                 modified_event = event.copy()
                 modified_event['content'] = "Holiday"

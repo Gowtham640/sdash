@@ -31,6 +31,9 @@ export const randomFacts = [
   "When you blush, your stomach also turns red. The same response that dilates blood vessels in your face affects your stomach lining too."
 ];
 
+// Hydration-safe default fact for initial render across pages.
+export const DEFAULT_RANDOM_FACT = randomFacts[0];
+
 export function getRandomFact(): string {
   const randomIndex = Math.floor(Math.random() * randomFacts.length);
   return randomFacts[randomIndex];

@@ -1,0 +1,19 @@
+{
+  "name": "SDash",
+  "short_name": "SDash",
+  "description": "A modern portal for SRM students",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/sdashTransparentLogo.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

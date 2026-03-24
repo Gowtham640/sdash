@@ -2,24 +2,25 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { getSlotOccurrences, getDayOrderStats, SlotOccurrence, DayOrderStats, TimetableData } from "@/lib/timetableUtils";
 import Link from "next/link";
-import PillNav from '../../components/PillNav';
-import StaggeredMenu from '../../components/StaggeredMenu';
+import Image from "next/image";
+import { motion } from "framer-motion";
+import { RotateCw, Settings, BadgeCheck, Clock3 } from "lucide-react";
 import { getRequestBodyWithPassword, clearPortalPassword } from "@/lib/passwordStorage";
 import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
-import NavigationButton from "@/components/NavigationButton";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { SkeletonLoader } from "@/components/ui/loading";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { normalizeAttendanceData, normalizeMarksData } from "@/lib/dataTransformers";
-import { Calendar, BookOpen, BarChart3, Calculator, User, Settings, Github, Linkedin } from 'lucide-react';
-import ShinyText from '@/components/ShinyText';
 import PwaInstallPrompt from '@/components/PwaInstallPrompt';
 import { useRouter } from "next/navigation";
-import type { AttendanceData, AttendanceSubject, MarksData, MarksCourse } from "@/lib/apiTypes";
-import Particles from "@/components/Particles";
+import type { AttendanceData, MarksData } from "@/lib/apiTypes";
 import { trackPostRequest } from "@/lib/postAnalytics";
+import GlassCard from "@/components/sdash/GlassCard";
+import StatChip from "@/components/sdash/StatChip";
+import SwipeableCards from "@/components/sdash/SwipeableCards";
+import PillNav from "@/components/sdash/PillNav";
 
 const DASHBOARD_CACHE_STORAGE_KEY = 'sdash_dashboard_unified_cache';
 
@@ -156,36 +157,57 @@ interface TimeSlot {
 type CachePayloadType = 'attendance' | 'marks' | 'timetable';
 
 export default function Dashboard() {
-  const initialCacheSnapshot = useMemo(() => getInitialDashboardCacheSnapshot(), []);
+  // SSR + first client paint must match: do not read storage until mount (see mount effect)
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
-  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(initialCacheSnapshot.attendanceData);
-  const [marksData, setMarksData] = useState<MarksData | null>(initialCacheSnapshot.marksData);
-  const [timetableData, setTimetableData] = useState<DashboardTimetableState>(initialCacheSnapshot.timetableData);
-  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>(initialCacheSnapshot.slotOccurrences);
+  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
+  const [marksData, setMarksData] = useState<MarksData | null>(null);
+  const [timetableData, setTimetableData] = useState<DashboardTimetableState>(null);
+  const [slotOccurrences, setSlotOccurrences] = useState<SlotOccurrence[]>([]);
   const [dayOrderStats, setDayOrderStats] = useState<DayOrderStats | null>(null);
-  const [loading, setLoading] = useState(!initialCacheSnapshot.hasCache);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSkeleton, setShowSkeleton] = useState(false);
-  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const router = useRouter();
 
   // Track errors
   useErrorTracking(error, '/dashboard');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const menuItems = [
-    { label: 'Home', ariaLabel: 'Go to home page', link: '/' },
-    { label: 'About', ariaLabel: 'Learn about us', link: '/about' },
-    { label: 'Services', ariaLabel: 'View our services', link: '/services' },
-    { label: 'Contact', ariaLabel: 'Get in touch', link: '/contact' }
-  ];
 
-  const socialItems = [
-    { label: 'Twitter', link: 'https://twitter.com' },
-    { label: 'GitHub', link: 'https://github.com' },
-    { label: 'LinkedIn', link: 'https://linkedin.com' }
-  ];
+  const [mounted, setMounted] = useState(false);
+  const [liveTime, setLiveTime] = useState<string>("--:--");
+  const [todayParts, setTodayParts] = useState<{ day: string; month: string; date: string }>({
+    day: "",
+    month: "",
+    date: "",
+  });
+  const [nowMinutes, setNowMinutes] = useState<number | null>(null);
+
+  useEffect(() => {
+    const updateTime = () => {
+      const d = new Date();
+      const time = new Intl.DateTimeFormat("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      }).format(d);
+
+      const day = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(d);
+      const month = new Intl.DateTimeFormat("en-US", { month: "short" }).format(d);
+      const date = new Intl.DateTimeFormat("en-US", { day: "numeric" }).format(d);
+
+      setLiveTime(time);
+      setTodayParts({ day, month, date });
+      setNowMinutes(d.getHours() * 60 + d.getMinutes());
+    };
+
+    setMounted(true);
+    updateTime();
+    const id = setInterval(updateTime, 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Get current date in DD/MM/YYYY format
   const getCurrentDateString = () => {
@@ -431,6 +453,12 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    const snap = getInitialDashboardCacheSnapshot();
+    setAttendanceData(snap.attendanceData);
+    setMarksData(snap.marksData);
+    setTimetableData(snap.timetableData);
+    setSlotOccurrences(snap.slotOccurrences);
+    setLoading(!snap.hasCache);
     checkAdminStatus();
     fetchUnifiedData();
   }, []);
@@ -549,12 +577,32 @@ export default function Dashboard() {
       setLoading(forceRefresh || !cacheAvailable);
       setError(null);
 
-      const access_token = getStorageItem('access_token');
+      let access_token = getStorageItem('access_token');
 
       if (!access_token) {
-        console.error('[Dashboard] No access token found');
+        console.warn('[Dashboard] Access token missing. Attempting recovery via /api/auth/refresh...');
+        try {
+          const refreshResponse = await fetch('/api/auth/refresh', { method: 'POST' });
+          if (refreshResponse.ok) {
+            const refreshPayload = await refreshResponse.json();
+            if (refreshPayload?.access_token) {
+              setStorageItem('access_token', refreshPayload.access_token);
+              access_token = refreshPayload.access_token;
+            }
+            if (refreshPayload?.refresh_token) {
+              setStorageItem('refresh_token', refreshPayload.refresh_token);
+            }
+          }
+        } catch (refreshError) {
+          console.error('[Dashboard] Token recovery via refresh failed:', refreshError);
+        }
+      }
+
+      if (!access_token) {
+        console.error('[Dashboard] No access token found after recovery attempt');
         setError('Please sign in to view dashboard');
         setLoading(false);
+        router.push('/auth');
         return;
       }
 
@@ -1153,32 +1201,22 @@ export default function Dashboard() {
     console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL) - calendar excluded (always fresh)');
   };
 
-  const calculatePresentHours = (conducted: string, absent: string): number => {
-    const conductedNum = parseInt(conducted) || 0;
-    const absentNum = parseInt(absent) || 0;
-    return conductedNum - absentNum;
-  };
-
-  const renderDashboardSkeleton = () => {
-    const threeDayDates = getThreeDayDates();
-
-    return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-
-        <div className="mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4">
-          <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
-            Welcome to your Dashboard
-          </div>
-        </div>
-        <div className="space-y-6">
-          <SkeletonLoader className="w-[90vw] h-8 rounded-full" />
-          <SkeletonLoader className="w-[90vw] h-16 rounded-2xl" />
-          <SkeletonLoader className="w-[90vw] h-16 rounded-2xl" />
-          <SkeletonLoader className="w-[90vw] h-16 rounded-2xl" />
-        </div>
+  const renderDashboardSkeleton = () => (
+    <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col gap-6 px-4 pt-6">
+      <div className="flex items-center gap-3">
+        <SkeletonLoader className="h-9 w-9 rounded-lg" />
+        <SkeletonLoader className="h-6 flex-1 rounded-lg max-w-[140px]" />
       </div>
-    );
-  };
+      <SkeletonLoader className="h-8 w-2/3 rounded-lg" />
+      <div className="flex gap-3 overflow-x-auto">
+        <SkeletonLoader className="h-10 w-28 shrink-0 rounded-full" />
+        <SkeletonLoader className="h-10 w-28 shrink-0 rounded-full" />
+        <SkeletonLoader className="h-10 w-28 shrink-0 rounded-full" />
+      </div>
+      <SkeletonLoader className="h-40 w-full rounded-[20px]" />
+      <SkeletonLoader className="h-48 w-full rounded-[20px]" />
+    </div>
+  );
 
   if (loading) {
     return renderDashboardSkeleton();
@@ -1192,16 +1230,16 @@ export default function Dashboard() {
     }
 
     return (
-      <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-6 sm:gap-7 md:gap-7 lg:gap-8 justify-center overflow-hidden">
-        <div className="text-red-400 text-base sm:text-lg md:text-xl lg:text-2xl font-sora text-center px-4">{error}</div>
+      <div className="min-h-screen bg-sdash-bg flex flex-col items-center justify-center gap-6 px-6">
+        <p className="text-sdash-danger text-center font-sora text-sm">{error}</p>
         {isSessionError && (
-          <NavigationButton
-            path="/auth"
+          <Link
+            href="/auth"
             onClick={handleReAuthenticate}
-            className="px-4 py-2 sm:px-5 sm:py-2.5 md:px-6 md:py-3 lg:px-6 lg:py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm sm:text-base"
+            className="bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full px-8 py-3 touch-target"
           >
-            Sign In Again
-          </NavigationButton>
+            Sign in again
+          </Link>
         )}
       </div>
     );
@@ -1212,6 +1250,168 @@ export default function Dashboard() {
   const currentDayOrder = getCurrentDayOrder();
   const isHolidayToday = isHolidayDayOrder(currentDayOrder);
 
+  const parseSlotRangeToMinutes = (timeRange: string): { start: number; end: number } | null => {
+    const parts = timeRange.split("-");
+    if (parts.length !== 2) return null;
+
+    const parsePart = (s: string): number | null => {
+      const [hh, mm] = s.split(":").map((x) => Number(x));
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+
+      // Match getTodaysTimetable sorting: times 01:xx-07:xx represent PM in the dataset.
+      const hours = hh < 8 && hh !== 0 ? hh + 12 : hh;
+      return hours * 60 + mm;
+    };
+
+    const start = parsePart(parts[0].trim());
+    const end = parsePart(parts[1].trim());
+    if (start == null || end == null) return null;
+    return { start, end };
+  };
+
+  const isClassesFinishedToday = (() => {
+    if (!mounted || nowMinutes == null || todaysTimetable.length === 0) return false;
+    const slotRanges = todaysTimetable
+      .map((slot) => parseSlotRangeToMinutes(slot.time))
+      .filter((range): range is { start: number; end: number } => range != null);
+    if (slotRanges.length === 0) return false;
+    const lastEnd = Math.max(...slotRanges.map((r) => r.end));
+    return nowMinutes >= lastEnd;
+  })();
+
+  const visibleTodaysTimetableSlots = (() => {
+    if (!todaysTimetable.length) return [];
+    if (isClassesFinishedToday) return [];
+    if (!mounted || nowMinutes == null) {
+      return todaysTimetable.slice(0, 2).map((slot, i) => ({
+        slot,
+        status: i === 0 ? "current" : "upcoming",
+      }));
+    }
+
+    const idxCurrent = todaysTimetable.findIndex((slot) => {
+      const range = parseSlotRangeToMinutes(slot.time);
+      if (!range) return false;
+      return nowMinutes >= range.start && nowMinutes < range.end;
+    });
+
+    const idx =
+      idxCurrent !== -1
+        ? idxCurrent
+        : todaysTimetable.findIndex((slot) => {
+            const range = parseSlotRangeToMinutes(slot.time);
+            if (!range) return false;
+            return nowMinutes < range.start;
+          });
+
+    const safeIdx = idx !== -1 ? idx : Math.max(0, todaysTimetable.length - 2);
+
+    const first = todaysTimetable[safeIdx];
+    const second = todaysTimetable[safeIdx + 1] ?? null;
+    const items = second ? [first, second] : first ? [first] : [];
+    return items.map((slot, i) => ({
+      slot,
+      status: i === 0 ? "current" : "upcoming",
+    }));
+  })();
+
+  const attendanceSubjects = attendanceData?.all_subjects?.filter(Boolean) ?? [];
+  const normalizeSubjectTitle = (value: string | undefined | null): string =>
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
+  const todaysTimetableSubjectKeys = new Set(
+    todaysTimetable
+      .map((slot) => normalizeSubjectTitle(slot.course_title))
+      .filter((key) => key.length > 0)
+  );
+
+  const todaysAttendanceSubjects = attendanceSubjects.filter((subject) =>
+    todaysTimetableSubjectKeys.has(normalizeSubjectTitle(subject?.course_title))
+  );
+
+  const sortedAttendanceSubjects = [...todaysAttendanceSubjects].sort((a, b) => {
+    const aPct = Math.round(parseFloat(String(a?.attendance_percentage || "0").replace("%", "")) || 0);
+    const bPct = Math.round(parseFloat(String(b?.attendance_percentage || "0").replace("%", "")) || 0);
+    const aCritical = aPct < 75;
+    const bCritical = bPct < 75;
+
+    if (aCritical === bCritical) return 0;
+    return aCritical ? -1 : 1;
+  });
+  const avgAttendance =
+    attendanceSubjects.length > 0
+      ? Math.round(
+          attendanceSubjects.reduce((s, a) => {
+            const p = parseFloat(String(a?.attendance_percentage || "0").replace("%", ""));
+            return s + (Number.isFinite(p) ? p : 0);
+          }, 0) / attendanceSubjects.length
+        )
+      : 0;
+
+  const marksCoursesForAvg = (marksData?.all_courses || []).filter(
+    (c) => c && c.assessments && c.assessments.length > 0
+  );
+  let marksAvgPct = 0;
+  if (marksCoursesForAvg.length > 0) {
+    let sum = 0;
+    marksCoursesForAvg.forEach((course) => {
+      const obtained = course!.assessments!.reduce(
+        (acc, x) => acc + (parseFloat(String(x.marks_obtained)) || 0),
+        0
+      );
+      const total = course!.assessments!.reduce(
+        (acc, x) => acc + (parseFloat(String(x.total_marks)) || 0),
+        0
+      );
+      sum += total > 0 ? (obtained / total) * 100 : 0;
+    });
+    marksAvgPct = Math.round(sum / marksCoursesForAvg.length);
+  }
+
+  const handleHeaderRefresh = () => {
+    setIsRefreshing(true);
+    void fetchUnifiedData(true).finally(() => setIsRefreshing(false));
+  };
+
+  const renderMarksAssessmentRows = (
+    assessments: Array<{ assessment_name?: string; marks_obtained?: string | number; total_marks?: string | number }>
+  ): React.ReactNode => {
+    if (!assessments.length) {
+      return <div className="text-xs text-sdash-text-muted font-sora">No exam components yet.</div>;
+    }
+
+    const rows: Array<typeof assessments> = [];
+    for (let i = 0; i < assessments.length; i += 3) {
+      rows.push(assessments.slice(i, i + 3));
+    }
+
+    return (
+      <div className="flex flex-col gap-2">
+        {rows.map((row, rowIndex) => (
+          <div key={`dashboard-marks-row-${rowIndex}`} className="grid grid-cols-3 gap-2">
+            {row.map((assessment, colIndex) => (
+              <div
+                key={`${assessment.assessment_name || 'exam'}-${rowIndex}-${colIndex}`}
+                className="bg-sdash-surface-1 border border-white/[0.07] rounded-[8px] px-3 py-2 min-w-0"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[11px] text-sdash-text-muted font-sora truncate">
+                    {assessment.assessment_name || `Exam ${colIndex + 1}`}
+                  </p>
+                  <p className="stat-number text-[12px] text-sdash-text-primary whitespace-nowrap">
+                    {assessment.marks_obtained ?? "—"}/{assessment.total_marks ?? "—"}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   console.log('[Dashboard] 🎯 Rendering dashboard with timetable info:', {
     currentDayOrder,
     todaysTimetableLength: todaysTimetable.length,
@@ -1220,518 +1420,306 @@ export default function Dashboard() {
   });
 
   return (
-
-    <div className="relative bg-black items-center justify-items-center min-h-screen flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8 justify-center overflow-hidden py-6 sm:py-8 md:py-9 lg:py-10">
-      <div className="fixed inset-0 z-10 pointer-events-none">
-        <Particles
-          particleColors={["#ffffff"]}
-          particleCount={500}
-          particleSpread={20}
-          speed={0.1}
-          particleBaseSize={200}
-          moveParticlesOnHover
-          alphaParticles={false}
-          disableRotation={false}
-          pixelRatio={window.devicePixelRatio || 1}
-        />
-      </div>
-      <PillNav
-        logo=""
-        logoAlt=""
-        items={[
-          { label: 'Attendance', href: '/attendance' },
-          { label: 'Timetable', href: '/timetable' },
-          { label: 'Marks', href: '/marks' },
-          { label: 'Calendar', href: '/calender' },
-          ...(isAdmin ? [{ label: 'Admin', href: '/admin' }] : [])
-        ]}
-        activeHref="/dashboard"
-        className="custom-nav"
-        ease="power2.easeOut"
-        pillColor="#000000"
-        baseColor="#ffffff"
-        hoveredPillTextColor="#000000"
-        pillTextColor="#ffffff"
-      />
-      <button
-        onClick={handleLogout}
-        disabled={isLoggingOut}
-        className="absolute top-5 right-5 z-[1005] px-3 py-1.5 rounded-full bg-red-600/95 hover:bg-red-500 border border-white/20 text-white font-sora text-xs sm:text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {isLoggingOut ? "Signing out..." : "Log Out"}
-      </button>
-
-
-      {/* Expandable Sidebar - Only visible on medium and larger screens */}
-      <div className="hidden md:block">
-        {/* Sidebar Toggle Button */}
+    <div className="min-h-screen bg-sdash-bg pb-28">
+      <header className="sticky top-0 z-40 backdrop-blur-md bg-sdash-bg/80 border-b border-white/[0.06] px-4 py-3 flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 overflow-hidden">
+            <Image
+              src="/sdashTransparentLogo.png"
+              alt="SDash logo"
+              width={28}
+              height={28}
+              className="w-7 h-7 object-contain"
+              priority
+            />
+          </div>
+          <span className="font-sora font-bold text-lg text-sdash-text-primary truncate">SDash</span>
+        </div>
         <button
-          onClick={() => setSidebarExpanded(!sidebarExpanded)}
-          className={`fixed top-14 left-4 z-[1001] bg-white/10 backdrop-blur border border-white/20 rounded-full p-2 transition-all duration-300 hover:bg-white/20 ${sidebarExpanded ? 'left-64' : 'left-4'
-            }`}
-          aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+          type="button"
+          onClick={handleHeaderRefresh}
+          aria-label="Refresh dashboard"
+          className="touch-target text-sdash-text-secondary shrink-0"
         >
-          <svg
-            className={`w-5 h-5 text-white transition-transform duration-300 ${sidebarExpanded ? 'rotate-180' : 'rotate-0'
-              }`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
+          <RotateCw size={18} className={isRefreshing ? "animate-spin-slow" : ""} />
         </button>
-
-        {/* Sidebar */}
-        <div
-          className={`fixed left-0 top-0 h-full z-[1000] transition-all duration-300 ease-in-out ${sidebarExpanded ? 'w-64' : 'w-16'
-            }`}
+        {isAdmin && (
+          <Link
+            href="/admin"
+            aria-label="Admin"
+            className="touch-target text-sdash-text-secondary shrink-0"
+          >
+            <Settings size={18} />
+          </Link>
+        )}
+        <button
+          type="button"
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="shrink-0 rounded-full border border-white/[0.1] px-3 py-1.5 text-xs font-sora font-semibold text-sdash-danger hover:bg-sdash-danger/10 disabled:opacity-50"
         >
-          {/* Glass Background - only visible when expanded */}
-          <div
-            className={`absolute inset-0 backdrop-blur bg-black/80 border-r border-white/20 transition-opacity duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0'
-              }`}
-          />
+          {isLoggingOut ? "…" : "Log out"}
+        </button>
+      </header>
 
-          {/* Sidebar Content */}
-          <div className="relative h-full flex flex-col">
-            {/* Header - only visible when expanded */}
-            <div
-              className={`p-6 border-b border-white/10 transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0'
-                }`}
-            >
-              <h2 className="text-xl font-sora font-bold text-white">Navigation</h2>
-            </div>
+      <main className="px-4 pt-2 space-y-2">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2 }}
+          className="flex items-start justify-between gap-4"
+        >
+          <div>
+            <h1 className="font-sora font-semibold text-[25px] text-sdash-text-primary tracking-[-0.02em]">
+              {todayParts.day ? <span className="text-sdash-text-primary">{todayParts.day}, </span> : "—"}
+              {todayParts.month ? <span className="text-sdash-text-primary">{todayParts.month}</span> : "—"}{" "}
+              {todayParts.date ? <span className="text-sdash-text-primary">{todayParts.date}</span> : ""}
+            </h1>
+          </div>
+          <div className="text-right">
+            <p className="font-sora font-semibold text-[25px] text-sdash-text-primary tabular-nums">
+              {mounted ? liveTime : "--:--"}
+            </p>
+          </div>
+        </motion.div>
 
-            {/* Navigation Links */}
-            <nav className="flex-1 p-4 space-y-4">
-              {/* Attendance */}
-              <div className="relative group">
-                <Link
-                  href="/attendance"
-                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
-                  title={sidebarExpanded ? "" : "Attendance"}
-                >
-                  <User className="w-6 h-6 flex-shrink-0" />
-                  <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
-                  >
-                    Attendance
-                  </span>
-                </Link>
-                {!sidebarExpanded && (
-                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
-                    Attendance
-                  </div>
-                )}
-              </div>
+        <div className="flex gap-3 overflow-x-auto hide-scrollbar -mx-4 px-4 pb-2">
+          <StatChip>
+            <span className="w-2 h-2 rounded-full bg-sdash-accent shrink-0" />
+            <span className="stat-number text-[13px] text-sdash-text-primary">{avgAttendance || "—"}%</span>
+            <span className="text-[13px] text-sdash-text-secondary whitespace-nowrap">Attendance</span>
+          </StatChip>
+          <StatChip>
+            <span className="stat-number text-[13px] text-sdash-text-primary truncate max-w-[100px]">
+              {"0"+currentDayOrder || "—"}
+            </span>
+            <span className="text-[13px] text-sdash-text-secondary whitespace-nowrap">Day Order</span>
+          </StatChip>
+        </div>
 
-              {/* Timetable */}
-              <div className="relative group">
-                <Link
-                  href="/timetable"
-                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
-                  title={sidebarExpanded ? "" : "Timetable"}
-                >
-                  <BookOpen className="w-6 h-6 flex-shrink-0" />
-                  <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
-                  >
-                    Timetable
-                  </span>
-                </Link>
-                {!sidebarExpanded && (
-                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
-                    Timetable
-                  </div>
-                )}
-              </div>
+        <section>
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <p className="section-label mb-0 !text-white !text-[15px]">TODAY&apos;S SCHEDULE</p>
+            <Link href="/timetable" className="text-sdash-accent text-[13px] font-sora font-medium">
+              View full schedule
+            </Link>
+          </div>
+          {todaysTimetable.length > 0 ? (
+            <div className="space-y-2">
+              {isClassesFinishedToday ? (
+                <GlassCard className="p-4 border border-dashed border-white/20 !rounded-[12px]">
+                  <p className="text-sm text-sdash-text-secondary font-sora text-center">Today&apos;s classes finished</p>
+                </GlassCard>
+              ) : (
+                visibleTodaysTimetableSlots.map(({ slot, status }, i) => {
+                  const range = parseSlotRangeToMinutes(slot.time);
+                  let remainingPct = 100;
+                  if (mounted && nowMinutes != null && range && range.end > range.start) {
+                    const now = nowMinutes;
+                    const remainingFraction =
+                      now <= range.start
+                        ? 1
+                        : now >= range.end
+                          ? 0
+                          : (range.end - now) / (range.end - range.start);
+                    remainingPct = Math.max(0, Math.min(1, remainingFraction)) * 100;
+                  }
 
-              {/* Marks */}
-              <div className="relative group">
-                <Link
-                  href="/marks"
-                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
-                  title={sidebarExpanded ? "" : "Marks"}
-                >
-                  <BarChart3 className="w-6 h-6 flex-shrink-0" />
-                  <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
-                  >
-                    Marks
-                  </span>
-                </Link>
-                {!sidebarExpanded && (
-                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
-                    Marks
-                  </div>
-                )}
-              </div>
-
-              {/* Calendar */}
-              <div className="relative group">
-                <Link
-                  href="/calender"
-                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-blue-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
-                  title={sidebarExpanded ? "" : "Calendar"}
-                >
-                  <Calendar className="w-6 h-6 flex-shrink-0" />
-                  <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
-                  >
-                    Calendar
-                  </span>
-                </Link>
-                {!sidebarExpanded && (
-                  <div className="absolute font-sora left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
-                    Calendar
-                  </div>
-                )}
-              </div>
-
-              {/* SGPA Calculator */}
-              <div className="relative group">
-                <Link
-                  href="/sgpa-calculator"
-                  className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-white hover:text-green-300 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
-                  title={sidebarExpanded ? "" : "SGPA Calculator"}
-                >
-                  <Calculator className="w-6 h-6 flex-shrink-0" />
-                  <span
-                    className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                      }`}
-                  >
-                    SGPA Calculator
-                  </span>
-                </Link>
-                {!sidebarExpanded && (
-                  <div className="absolute left-full ml-2 px-2 py-1 font-sora bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
-                    SGPA Calculator
-                  </div>
-                )}
-              </div>
-
-              {/* Admin - only show if admin */}
-              {isAdmin && (
-                <div className="relative group">
-                  <Link
-                    href="/admin"
-                    className={`flex items-center ${sidebarExpanded ? 'space-x-3' : 'justify-center'} text-red-300 hover:text-red-200 transition-all duration-300 hover:scale-105 p-2 rounded-lg hover:bg-white/10`}
-                    title={sidebarExpanded ? "" : "Admin"}
-                  >
-                    <Settings className="w-6 h-6 flex-shrink-0" />
-                    <span
-                      className={`font-sora text-sm whitespace-nowrap transition-all duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                        }`}
+                  return (
+                    <GlassCard
+                      key={`${slot.time}-${i}`}
+                      subjectCategory={slot.category}
+                      className={`p-4 ${i === 0 ? "!bg-sdash-accent-subtle !border-sdash-accent/20" : ""}`}
                     >
-                      Admin
-                    </span>
-                  </Link>
-                  {!sidebarExpanded && (
-                    <div className="absolute left-full ml-2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
-                      Admin
-                    </div>
-                  )}
-                </div>
+                      {/* Same as timetable: green bar depletes from bottom as the slot progresses */}
+                      <div className="pointer-events-none absolute left-0 top-0 bottom-0 z-[1] w-[3px]">
+                        <div
+                          className="absolute bottom-0 left-0 w-[3px] rounded-r-full bg-sdash-success transition-[height] duration-500 ease-linear"
+                          style={{ height: `${remainingPct}%` }}
+                        />
+                      </div>
+                      <div className="absolute top-3 right-3 z-[2]">
+                        {status === "current" ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-sdash-success/15 border border-sdash-success/35 px-2 py-1 text-[10px] font-sora font-medium text-sdash-success">
+                            <BadgeCheck size={12} />
+                            Current
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 border border-blue-500/30 px-2 py-1 text-[10px] font-sora font-medium text-blue-500">
+                            <Clock3 size={12} />
+                            Upcoming
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-sora font-semibold text-[15px] text-sdash-text-primary">
+                          {slot.course_title || "No class"}
+                        </p>
+                        <p className="font-geist-mono text-[13px] text-sdash-text-secondary mt-0.5">{slot.time}</p>
+                        <p className="caption mt-1">
+                          {slot.category}
+                          {slot.room ? ` · ${slot.room}` : ""}
+                        </p>
+                      </div>
+                    </GlassCard>
+                  );
+                })
               )}
-            </nav>
-          </div>
-        </div>
-      </div>
+            </div>
+          ) : (
+            <GlassCard className="p-4">
+              <p className="text-sm text-sdash-text-secondary font-sora">
+                {isHolidayToday
+                  ? "Today is marked as a holiday."
+                  : currentDayOrder
+                    ? "No classes today."
+                    : "Unable to determine day order."}
+              </p>
+            </GlassCard>
+          )}
+        </section>
 
-
-      <div className={`mt-10 sm:mt-12 md:mt-14 lg:mt-16 mb-6 sm:mb-7 md:mb-8 lg:mb-8 flex flex-col items-center gap-4 transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-        }`}>
-        <div className="text-white text-xl sm:text-2xl md:text-3xl lg:text-4xl font-sora font-bold text-center">
-          Welcome to your Dashboard
-        </div>
-      </div>
-
-      {/* Calendar Section - Show 3 days (Yesterday, Today, Tomorrow) */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-        }`}>
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Upcoming Calendar
-        </div>
-        <div className="flex flex-col gap-3 w-full">
-          {threeDayDates.map((dayInfo) => {
-            const event = Array.isArray(calendarData) ? calendarData.find(e => e && e.date === dayInfo.dateStr) : null;
-            const isToday = dayInfo.dateStr === getCurrentDateString();
-
-            // Enhanced holiday detection: check day_order and content
-            const dayOrder = event?.day_order || '';
-            const content = event?.content || '';
-            const isHoliday =
-              dayOrder === "-" ||
-              dayOrder === "DO -" ||
-              dayOrder.toLowerCase() === "holiday" ||
-              dayOrder.toLowerCase().includes('holiday') ||
-              (content && content.toLowerCase().includes('holiday'));
-
-            let bgColor = 'bg-white/10';
-            let textColor = 'text-white';
-
-            if (isToday) {
-              bgColor = 'bg-white';
-              textColor = 'text-black';
-            } else if (isHoliday) {
-              bgColor = 'bg-green-500/80';
-              textColor = 'text-white';
-            }
-
-            // Display content (handle empty string as 'No events')
-            const displayContent = content && content.trim() !== '' ? content : 'No events';
-
-            return (
-              <div
-                key={dayInfo.dateStr}
-                className={`relative p-2 sm:p-2 md:p-2.5 lg:p-2.5 z-10 w-full h-auto backdrop-blur ${bgColor} border border-white/20 rounded-2xl ${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex flex-col sm:flex-row gap-1.5 sm:gap-3 md:gap-4 lg:gap-4 justify-between items-center`}
-              >
-                <div className="flex gap-1.5 sm:gap-2 md:gap-3 lg:gap-3 items-center">
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[60px] sm:min-w-[70px] md:min-w-[80px] lg:min-w-[85px]`}>
-                    {dayInfo.dayName}
-                  </p>
-                  <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora`}>
-                    {dayInfo.dateStr}
-                  </p>
-                </div>
-                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora flex-1 text-center`}>
-                  {displayContent}
-                </p>
-                <p className={`${textColor} text-xs sm:text-sm md:text-base lg:text-base font-sora font-bold min-w-[50px] sm:min-w-[60px] md:min-w-[65px] lg:min-w-[70px] text-right`}>
-                  {dayOrder || '-'}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Today's Timetable Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-        }`}>
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Today&apos;s Timetable
-          {isHolidayToday ? ' (Holiday)' : currentDayOrder ? ` - ${currentDayOrder}` : ''}
-        </div>
-        {todaysTimetable.length > 0 ? (
-          <div className="flex flex-col gap-3 w-full">
-            {todaysTimetable.map((slot, index) => (
-              <div
-                key={index}
-                className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-2 sm:gap-4 md:gap-6 lg:gap-8 justify-start items-center"
-              >
-                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-light min-w-[100px] sm:min-w-[120px] md:min-w-[130px] lg:min-w-[150px] whitespace-nowrap">
-                  {slot.time}
-                </div>
-                <div className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold flex-1">
-                  {slot.course_title || 'No class'}
-                </div>
-                {slot.category && (
-                  <div className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora flex items-center gap-1">
-                    <span>{slot.category}</span>
-                    {slot.room && (
-                      <span className="text-white/50">• {slot.room}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-white/70 text-lg font-sora">
-            {isHolidayToday
-              ? 'Today is marked as a holiday'
-              : currentDayOrder
-                ? 'No classes today'
-                : 'Unable to determine day order'}
-          </div>
-        )}
-      </div>
-
-      {/* Attendance Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-        }`}>
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Attendance Overview
-        </div>
-        {attendanceData?.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
-          <div className="flex flex-col gap-3 w-full">
-            {attendanceData.all_subjects.map((subject, index) => {
-              if (!subject || !subject.attendance_percentage) return null; // Skip null/invalid subjects
-              const attendancePercent = parseFloat(subject.attendance_percentage.replace('%', ''));
-
-              return (
-                <div
-                  key={index}
-                  className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
-                >
-                  <div className="flex-1">
-                    <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
-                      {subject.course_title}
-                    </p>
-                    <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                      {subject.category}
-                    </p>
-                  </div>
-                  <div className="text-center">
-                    <p className={`text-lg sm:text-xl md:text-2xl lg:text-2xl font-bold ${attendancePercent >= 75 ? 'text-green-400' : 'text-red-400'}`}>
-                      {subject.attendance_percentage}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="text-white/70 text-lg font-sora">
-            No attendance data available
-          </div>
-        )}
-      </div>
-
-
-      {/* Marks Section */}
-      <div className={`relative p-4 sm:p-5 md:p-6 lg:p-7 z-10 w-[95vw] sm:w-[85vw] md:w-[70vw] lg:w-[60vw] h-auto backdrop-blur bg-white/10 border border-white/20 rounded-3xl text-white text-base sm:text-lg md:text-xl lg:text-3xl font-sora flex flex-col gap-3 sm:gap-4 md:gap-4 lg:gap-4 justify-center items-center transition-all duration-300 ${sidebarExpanded ? 'md:ml-64' : 'md:ml-16'
-        }`}>
-        <div className="text-white text-base sm:text-lg md:text-xl lg:text-2xl font-sora font-bold mb-1.5 sm:mb-2">
-          Marks Overview
-        </div>
-        {marksData?.all_courses && Array.isArray(marksData.all_courses) && marksData.all_courses.length > 0 ? (
-          <div className="flex flex-col gap-3 w-full">
-            {marksData.all_courses
-              .filter(course => course && course.assessments && Array.isArray(course.assessments) && course.assessments.length > 0)
-              .filter((course, index, self) =>
-                course && index === self.findIndex(c =>
-                  c && c.course_code === course.course_code && c.subject_type === course.subject_type
-                )
-              )
-              .map((course, index) => {
-                if (!course) return null;
-
-                const getCourseTitle = (course: MarksCourse): string => {
-                  return course.course_title || course.course_code;
-                };
-
-                const getTotalMarks = () => {
-                  if (!course.assessments || !Array.isArray(course.assessments) || course.assessments.length === 0) return { obtained: 0, total: 0 };
-                  const obtained = course.assessments.reduce((sum, a) => sum + (a ? (parseFloat(a.marks_obtained) || 0) : 0), 0);
-                  const total = course.assessments.reduce((sum, a) => sum + (a ? (parseFloat(a.total_marks) || 0) : 0), 0);
-                  return { obtained, total };
-                };
-
-                const { obtained, total } = getTotalMarks();
-
+        <section>
+          <p className="section-label mb-3 pt-2 !text-white !text-[15px]">ATTENDANCE</p>
+          {sortedAttendanceSubjects.length > 0 ? (
+            <SwipeableCards>
+              {sortedAttendanceSubjects.map((subject) => {
+                if (!subject?.attendance_percentage) return null;
+                const pctRaw = parseFloat(String(subject.attendance_percentage).replace("%", ""));
+                const pct = Math.round(Number.isFinite(pctRaw) ? pctRaw : 0);
+                const conducted = parseInt(String(subject.hours_conducted), 10) || 0;
+                const absent = parseInt(String(subject.hours_absent), 10) || 0;
+                const present = Math.max(0, conducted - absent);
+                const hasSafeAttendance = pct >= 75;
+                const marginClasses = Math.max(0, Math.floor((present / 0.75) - conducted));
+                const requiredClasses = Math.max(0, Math.ceil(((0.75 * conducted) - present) / 0.25));
                 return (
-                  <div
-                    key={`${course.course_code}-${course.subject_type}-${index}`}
-                    className="relative p-3 sm:p-3.5 md:p-4 lg:p-4 z-10 w-full h-auto backdrop-blur bg-white/10 border border-white/20 rounded-2xl text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora flex flex-col sm:flex-row gap-3 sm:gap-4 md:gap-5 lg:gap-6 justify-between items-center"
+                  <GlassCard
+                    key={`${subject.subject_code}-${subject.category}`}
+                    subjectCategory={subject.category}
+                    className="p-3"
                   >
-                    <div className="flex-1">
-                      <p className="text-white text-xs sm:text-sm md:text-base lg:text-lg font-sora font-bold">
-                        {getCourseTitle(course)}
-                      </p>
-                      <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">
-                        {course.course_code} • {course.subject_type}
+                    <p className="font-sora font-semibold text-lg text-sdash-text-primary">{subject.course_title}</p>
+                    <p className="text-md text-sdash-text-secondary mt-1">{subject.faculty_name}</p>
+                    <p
+                      className={`font-geist-mono font-bold text-[56px] tabular-nums leading-none mt-4 ${
+                        pct >= 75 ? "text-sdash-success" : "text-sdash-danger"
+                      }`}
+                    >
+                      {pct}%
+                    </p>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <div className="inline-flex items-center gap-2 rounded-full bg-sdash-surface-1 border border-white/[0.08] px-1 py-1">
+                        <span
+                          className="inline-flex items-center rounded-full bg-sdash-surface-2 border border-white/[0.08] overflow-hidden"
+                          title="Present | Absent"
+                        >
+                          <span className="stat-number text-md text-sdash-text-primary !text-green-500 px-2 py-0.5">{present}</span>
+                          <span className="w-px h-5 bg-white/[0.14]" />
+                          <span className="stat-number text-md text-sdash-text-primary !text-red-500 px-2 py-0.5">{absent}</span>
+                        </span>
+                        <span className="stat-number text-md text-sdash-text-primary mr-2" title="Conducted">
+                          {conducted}
+                        </span>
+                      </div>
+                      <p className="text-lg font-sora text-sdash-text-primary shrink-0">
+                        {hasSafeAttendance ? "Margin: " : "Required: "}
+                        <span className={hasSafeAttendance ? "text-green-500 text-2xl" : "text-red-500 text-2xl"} >
+                          {hasSafeAttendance ? marginClasses : requiredClasses}
+                        </span>
                       </p>
                     </div>
-                    <div className="flex gap-4 sm:gap-5 md:gap-6 lg:gap-6 items-center">
-                      <div className="text-center">
-                        <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Obtained</p>
-                        <p className="text-green-400 text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{obtained.toFixed(1)}</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-white/70 text-[10px] sm:text-xs md:text-sm lg:text-sm font-sora">Total</p>
-                        <p className="text-white text-lg sm:text-xl md:text-xl lg:text-xl font-bold">{total.toFixed(1)}</p>
-                      </div>
-                    </div>
-                  </div>
+                  </GlassCard>
                 );
               })}
-          </div>
-        ) : (
-          <div className="text-white/70 text-lg font-sora">
-            No marks data available
-          </div>
-        )}
-      </div>
+            </SwipeableCards>
+          ) : (
+            <GlassCard className="p-4">
+              <p className="text-sm text-sdash-text-secondary font-sora">No attendance cards for today.</p>
+            </GlassCard>
+          )}
+        </section>
 
-      {/* Attribution & Links */}
-      <div className="relative z-[200] flex flex-col items-center gap-2 py-6 text-white">
-        <span className="text-white/60 md:text-sm lg:text-base text-[10px] uppercase font-sora tracking-[0.3em]">Made by</span>
-        <div className="grid grid-cols-3 mt-2 text-sm font-sora font-semibold">
-          {/* Gowtham */}
-          <div className="flex flex-col items-center gap-2">
-            <ShinyText text="Gowtham " speed={2} className="text-white lg:text-xl" disabled={false} />
-            <div className="flex items-center gap-3">
-              <a
-                href="https://github.com/Gowtham640"
-                target="_blank"
-                rel="noreferrer"
-                className="text-white/80 hover:text-white"
-              >
-                <Github className="h-5 w-5" />
-              </a>
-              <a
-                href="https://www.linkedin.com/in/gowtham-ramakrishna-rayapureddi-aaa60532a/"
-                target="_blank"
-                rel="noreferrer"
-                className="text-white/80 hover:text-white"
-              >
-                <Linkedin className="h-5 w-5" />
-              </a>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <ShinyText text="&" speed={2} className="text-white " disabled={false} />
-          </div>
-          {/* Anas */}
-          <div className="flex flex-col items-center gap-2">
-            <ShinyText text="Anas" speed={2} className="text-white lg:text-xl" disabled={false} />
-            <div className="flex items-center gap-3">
-              <a
-                href="https://github.com/SyedMohammadAnas"
-                target="_blank"
-                rel="noreferrer"
-                className="text-white/80 hover:text-white"
-              >
-                <Github className="h-5 w-5" />
-              </a>
-              <a
-                href="https://www.linkedin.com/in/syed-mohammad-anas-a6a8642b7/"
-                target="_blank"
-                rel="noreferrer"
-                className="text-white/80 hover:text-white"
-              >
-                <Linkedin className="h-5 w-5" />
-              </a>
-            </div>
-          </div>
-        </div>
-        <span className="text-white/60 md:text-sm lg:text-base text-[10px] uppercase font-sora tracking-[0.3em]">With hope that this will help you</span>
+        <section>
+          <p className="section-label mb-3 !text-white !text-[15px]">MARKS</p>
+          {marksData?.all_courses && marksData.all_courses.length > 0 ? (
+            <SwipeableCards>
+              {marksData.all_courses
+                .filter((course) => course && course.assessments?.length)
+                .filter(
+                  (course, index, self) =>
+                    course &&
+                    index ===
+                      self.findIndex(
+                        (c) =>
+                          c &&
+                          c.course_code === course.course_code &&
+                          c.subject_type === course.subject_type
+                      )
+                )
+                .map((course, courseIndex) => {
+                  if (!course) return null;
+                  const obtained = course.assessments.reduce(
+                    (s, a) => s + (parseFloat(String(a.marks_obtained)) || 0),
+                    0
+                  );
+                  const total = course.assessments.reduce(
+                    (s, a) => s + (parseFloat(String(a.total_marks)) || 0),
+                    0
+                  );
+                  const pct = total > 0 ? Math.round((obtained / total) * 100) : 0;
+                  return (
+                    <GlassCard
+                      key={`${course.course_code}-${course.subject_type}-${courseIndex}`}
+                      subjectCategory={course.subject_type}
+                      className="p-3"
+                    >
+                      <p className="font-sora font-semibold text-lg text-sdash-text-primary">
+                        {course.course_title || course.course_code}
+                      </p>
+                      <p className="text-md text-sdash-text-secondary mt-1">
+                        {course.course_code} · {course.subject_type}
+                      </p>
+                      <div className="flex items-baseline gap-1 mt-4">
+                        <span className="display-stat text-sdash-text-primary">{obtained.toFixed(1)}</span>
+                        <span className="font-geist-mono text-2xl text-sdash-text-secondary">/{total.toFixed(1)}</span>
+                      </div>
+                      <div className="mt-4">
+                        {renderMarksAssessmentRows(course.assessments)}
+                      </div>
+                      <p className="text-xs font-sora text-sdash-text-secondary mt-1">Overall: {pct}%</p>
+                    </GlassCard>
+                  );
+                })}
+            </SwipeableCards>
+          ) : (
+            <GlassCard className="p-4">
+              <p className="text-sm text-sdash-text-secondary font-sora">No marks data yet.</p>
+            </GlassCard>
+          )}
+        </section>
 
-      </div>
+        <p className="text-center text-[11px] text-sdash-text-muted font-sora pb-4">
+          SDash · Gowtham & Anas
+        </p>
+      </main>
+
+      <PillNav />
       <PwaInstallPrompt />
-      {/* Re-auth Modal */}
+
       {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
-            <h2 className="text-2xl font-bold text-white mb-4">Session Expired</h2>
-            <p className="text-gray-300 mb-6">
-              Your portal session has expired. Please sign in again to continue.
-            </p>
-            <NavigationButton
-              path="/auth"
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4">
+          <GlassCard className="p-6 max-w-md w-full">
+            <h2 className="heading-1 text-sdash-text-primary mb-3">Session expired</h2>
+            <p className="text-sm text-sdash-text-secondary mb-6">Please sign in again to continue.</p>
+            <Link
+              href="/auth"
               onClick={handleReAuthenticate}
-              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-semibold"
+              className="block w-full text-center bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full py-3 touch-target"
             >
-              Sign In
-            </NavigationButton>
-          </div>
+              Sign in
+            </Link>
+          </GlassCard>
         </div>
       )}
     </div>
