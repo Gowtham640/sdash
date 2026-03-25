@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callBackendScraper, hydrateCacheEntry } from "@/lib/scraperClient";
 import type { CacheDataType } from "@/lib/supabaseCache";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 const VALID_TYPES: CacheDataType[] = ["attendance", "marks", "timetable", "calendar"];
 
@@ -48,18 +49,45 @@ export async function POST(request: NextRequest) {
     const user_id = decoded.sub as string;
     const user_email = (decoded.email as string) || decoded.sub as string;
 
-    if (!password) {
-      return NextResponse.json(
-        { success: false, error: "Password is required to refresh data" },
-        { status: 400 }
-      );
+    let resolvedPassword: string | undefined =
+      typeof password === "string" && password.trim() ? password : undefined;
+
+    if (!resolvedPassword) {
+      try {
+        const { data: userRow, error: userError } = await supabaseAdmin
+          .from("users")
+          .select("has_token")
+          .eq("id", user_id)
+          .maybeSingle();
+
+        if (userError) {
+          console.warn("[API /data/refresh] Failed to read users.has_token:", userError);
+        }
+
+        const hasToken = Boolean(userRow?.has_token);
+        if (!hasToken) {
+          return NextResponse.json(
+            { success: false, error: "Password is required to refresh data" },
+            { status: 400 }
+          );
+        }
+
+        console.log("[API /data/refresh] ✅ Proceeding without password (users.has_token = true).");
+        resolvedPassword = "";
+      } catch (error) {
+        console.warn("[API /data/refresh] has_token lookup failed:", error);
+        return NextResponse.json(
+          { success: false, error: "Password is required to refresh data" },
+          { status: 400 }
+        );
+      }
     }
 
     const action = `get_${entryType}_data`;
     console.log(`[API /data/refresh] 🔄 Triggering backend refresh for ${entryType}`);
     const backendResult = await callBackendScraper(action, {
       email: user_email,
-      password,
+      password: resolvedPassword,
       user_id,
       requestedType: entryType,
     });

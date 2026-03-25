@@ -13,7 +13,7 @@ import { Eye, EyeOff, Shield } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import GlassCard from "@/components/sdash/GlassCard";
 import { storePortalPassword } from "@/lib/passwordStorage";
-import { setStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
+import { setStorageItem, getStorageItem, removeStorageItem, isPrivateBrowsing } from "@/lib/browserStorage";
 import { trackPostRequest } from "@/lib/postAnalytics";
 
 const HCAPTCHA_SITE_KEY = "a41abb7e-25be-411c-b2fe-c0365fc425ba";
@@ -228,6 +228,7 @@ export default function AuthPage() {
   type AuthCheckResponse = {
     auth_exists: boolean;
     public_exists: boolean;
+    has_token?: boolean;
     user_id?: string | null;
     error?: string;
   };
@@ -255,6 +256,46 @@ export default function AuthPage() {
 
     return (await checkResponse.json()) as AuthCheckResponse;
   }, []);
+
+  const resumeSessionIfPossible = useCallback(async () => {
+    try {
+      const existingAccessToken = getStorageItem("access_token");
+      if (existingAccessToken) {
+        console.log("[Auth Page] Session already present in storage; redirecting.");
+        router.replace("/dashboard");
+        return;
+      }
+
+      const refreshResponse = await fetch("/api/auth/refresh", { method: "POST" });
+      if (!refreshResponse.ok) {
+        return;
+      }
+
+      const payload = await refreshResponse.json();
+      if (payload?.access_token) {
+        setStorageItem("access_token", payload.access_token);
+      }
+      if (payload?.refresh_token) {
+        setStorageItem("refresh_token", payload.refresh_token);
+      }
+
+      if (payload?.access_token) {
+        console.log("[Auth Page] Session resumed via refresh; redirecting.");
+        router.replace("/dashboard");
+      }
+    } catch (error) {
+      console.warn("[Auth Page] Session resume failed (non-blocking):", error);
+    }
+  }, [router]);
+
+  const resumeAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (resumeAttemptedRef.current) {
+      return;
+    }
+    resumeAttemptedRef.current = true;
+    void resumeSessionIfPossible();
+  }, [resumeSessionIfPossible]);
 
   const fetchUserDataSafely = useCallback(async () => {
     try {
@@ -601,7 +642,9 @@ export default function AuthPage() {
         const checkData = await checkUserExistence();
 
         if (checkData.auth_exists && checkData.public_exists) {
-          console.log("[Auth Page] Existing user path (no captcha).");
+          console.log("[Auth Page] Existing user path (no captcha).", {
+            has_token: Boolean(checkData.has_token),
+          });
           await redirectExistingUser();
           return;
         }

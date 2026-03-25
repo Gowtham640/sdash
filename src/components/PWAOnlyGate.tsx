@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Rocket, Share2, SquarePlus } from "lucide-react";
 
 type PWAOnlyGateProps = {
@@ -9,6 +9,8 @@ type PWAOnlyGateProps = {
 };
 
 type DisplayMode = "unknown" | "standalone" | "browser";
+
+const PWA_SKIP_KEY = "sdash_pwa_gate_skipped";
 
 function getDisplayMode(): DisplayMode {
   if (typeof window === "undefined") {
@@ -28,6 +30,16 @@ function getDisplayMode(): DisplayMode {
 
 export default function PWAOnlyGate({ children }: PWAOnlyGateProps) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>("unknown");
+  const [skipGate, setSkipGate] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    try {
+      return window.localStorage.getItem(PWA_SKIP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     const updateDisplayMode = () => {
@@ -45,10 +57,20 @@ export default function PWAOnlyGate({ children }: PWAOnlyGateProps) {
     };
   }, []);
 
-  const isAllowed = useMemo(() => displayMode === "standalone", [displayMode]);
+  const isAllowed = useMemo(() => displayMode === "standalone" || skipGate, [displayMode, skipGate]);
+
+  const handleSkip = useCallback(() => {
+    try {
+      window.localStorage.setItem(PWA_SKIP_KEY, "1");
+    } catch {
+      // ignore storage failures
+    }
+    setSkipGate(true);
+  }, []);
 
   useEffect(() => {
-    if (displayMode !== "browser") {
+    // Only lock scrolling when we're actively showing the gate screen.
+    if (displayMode !== "browser" || skipGate) {
       return;
     }
 
@@ -74,7 +96,7 @@ export default function PWAOnlyGate({ children }: PWAOnlyGateProps) {
       body.style.overscrollBehavior = previousBodyOverscroll;
       body.style.touchAction = previousBodyTouchAction;
     };
-  }, [displayMode]);
+  }, [displayMode, skipGate]);
 
   if (displayMode === "unknown") {
     return <div className="min-h-screen bg-sdash-bg" />;
@@ -87,6 +109,15 @@ export default function PWAOnlyGate({ children }: PWAOnlyGateProps) {
   return (
     <div className="fixed inset-0 h-dvh overflow-hidden overscroll-none bg-sdash-bg px-8 py-10 touch-none">
       <div className="mx-auto flex h-full w-full max-w-md flex-col">
+        <div className="absolute right-6 top-10">
+          <button
+            type="button"
+            onClick={handleSkip}
+            className="rounded-full border border-white/20 bg-black/30 px-4 py-2 text-xs font-sora font-semibold uppercase tracking-[0.22em] text-white/80 backdrop-blur hover:bg-white/10 hover:text-white"
+          >
+            Skip
+          </button>
+        </div>
         <div className="mb-16 flex items-center gap-3">
           <Image src="/sdashTransparentLogo.png" alt="SDash logo" width={36} height={36} className="h-9 w-9 object-contain" priority />
           <span className="font-sora text-3xl font-bold tracking-tight text-sdash-text-primary">SDash</span>

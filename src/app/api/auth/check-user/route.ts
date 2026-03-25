@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
 
         const { data: publicUser, error: publicError } = await supabaseAdmin
             .from("users")
-            .select("id,email")
+            .select("id,email,has_token")
             .eq("email", email)
             .maybeSingle();
 
@@ -86,6 +86,7 @@ export async function POST(request: NextRequest) {
             auth_exists: Boolean(authUser),
             public_exists: Boolean(publicUser),
             user_id: authUser?.id ?? publicUser?.id ?? null,
+            has_token: Boolean(publicUser?.has_token),
         });
     } catch (error) {
         console.error("[API /auth/check-user] Error:", error);

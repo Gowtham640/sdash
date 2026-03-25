@@ -247,15 +247,10 @@ export default function Dashboard() {
           continue;
         }
 
-        if (!password) {
-          console.warn(`[Dashboard] ⚠️ Cannot refresh ${dataType} without password`);
-          continue;
-        }
-
         const refreshResponse = await trackPostRequest('/api/data/refresh', {
           action: 'data_refresh',
           dataType,
-          payload: { access_token, data_type: dataType, password },
+          payload: { access_token, data_type: dataType, ...(password ? { password } : {}) },
           omitPayloadKeys: ['password', 'access_token'],
         });
         const refreshResult = await refreshResponse.json();
