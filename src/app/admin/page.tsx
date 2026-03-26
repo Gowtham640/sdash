@@ -131,6 +131,9 @@ export default function AdminPage() {
   // Analytics filters
   const [analyticsSemester, setAnalyticsSemester] = useState<string>('all');
   const [analyticsTimeRange, setAnalyticsTimeRange] = useState<string>('30d'); // Default: past month
+  const [deleteEmailQuery, setDeleteEmailQuery] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteStatusMessage, setDeleteStatusMessage] = useState<string | null>(null);
 
   // Helper function to get time range label
   const getTimeRangeLabel = (timeRange: string): string => {
@@ -313,6 +316,51 @@ export default function AdminPage() {
       console.error('[Admin] Error fetching analytics:', err);
     } finally {
       setAnalyticsLoading(false);
+    }
+  };
+
+  const handleDeleteUserData = async () => {
+    const access_token = getStorageItem('access_token');
+    const normalizedEmail = deleteEmailQuery.trim().toLowerCase();
+
+    if (!access_token) {
+      setDeleteStatusMessage('Missing access token. Please sign in again.');
+      return;
+    }
+
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      setDeleteStatusMessage('Enter a valid email address.');
+      return;
+    }
+
+    try {
+      setDeleteLoading(true);
+      setDeleteStatusMessage(null);
+
+      const response = await trackPostRequest('/api/admin/user-delete', {
+        action: 'admin_user_delete',
+        dataType: 'user',
+        primary: false,
+        payload: { access_token, email: normalizedEmail },
+        omitPayloadKeys: ['access_token'],
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        setDeleteStatusMessage(result?.error || 'Failed to delete user data.');
+        return;
+      }
+
+      const deleted = result.deleted || {};
+      setDeleteStatusMessage(
+        `Deleted for ${normalizedEmail} - auth:${deleted.auth_users || 0}, public:${deleted.public_users || 0}, cache:${deleted.user_cache || 0}, tokens:${deleted.tokens || 0}, jobs:${deleted.jobs || 0}`
+      );
+      setDeleteEmailQuery('');
+    } catch (err) {
+      console.error('[Admin] Error deleting user data:', err);
+      setDeleteStatusMessage('Failed to delete user data.');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -822,6 +870,31 @@ export default function AdminPage() {
                   <option value="8" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Semester 8</option>
                 </select>
               </div>
+            </div>
+
+            <div className="w-full p-4 backdrop-blur rounded-2xl border border-red-400/30" style={{ background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.22) 0%, rgba(127, 29, 29, 0.28) 100%)' }}>
+              <div className="text-white font-sora font-semibold mb-2">User Data Cleanup</div>
+              <div className="text-white/70 text-sm mb-3">Search by email and delete all related user data from database tables.</div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="email"
+                  value={deleteEmailQuery}
+                  onChange={(e) => setDeleteEmailQuery(e.target.value)}
+                  placeholder="as1448@srmist.edu.in"
+                  className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/20 text-white placeholder:text-white/50 focus:outline-none focus:ring-2 focus:ring-red-400/40"
+                />
+                <button
+                  type="button"
+                  onClick={handleDeleteUserData}
+                  disabled={deleteLoading}
+                  className="px-4 py-2 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-sora font-semibold disabled:opacity-60"
+                >
+                  {deleteLoading ? 'Deleting...' : 'Delete User Data'}
+                </button>
+              </div>
+              {deleteStatusMessage && (
+                <div className="mt-2 text-sm text-white/85">{deleteStatusMessage}</div>
+              )}
             </div>
 
             {analyticsLoading ? (
