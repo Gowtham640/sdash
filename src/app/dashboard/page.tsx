@@ -255,10 +255,31 @@ export default function Dashboard() {
         });
         const refreshResult = await refreshResponse.json();
 
-        if (refreshResult.success) {
+        if (refreshResult.success && refreshResult.data != null) {
           console.log(`[Dashboard] ✅ Refreshed ${dataType} via backend`);
         } else {
-          console.warn(`[Dashboard] ⚠️ Refresh for ${dataType} failed:`, refreshResult.error);
+          console.warn(`[Dashboard] ⚠️ Refresh for ${dataType} returned no immediate data, polling cache...`);
+          let hydrated = false;
+          for (let attempt = 1; attempt <= 6; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const pollResponse = await trackPostRequest('/api/data/cache', {
+              action: 'cache_fetch',
+              dataType,
+              primary: false,
+              payload: { access_token, data_type: dataType },
+              omitPayloadKeys: ['access_token'],
+            });
+            const pollResult = await pollResponse.json();
+            if (pollResult?.success && pollResult?.data != null) {
+              hydrated = true;
+              console.log(`[Dashboard] ✅ ${dataType} cache hydrated after refresh (attempt ${attempt})`);
+              break;
+            }
+          }
+
+          if (!hydrated) {
+            console.warn(`[Dashboard] ⚠️ Refresh for ${dataType} failed or still pending:`, refreshResult.error);
+          }
         }
       } catch (error) {
         console.error(`[Dashboard] ❌ Error ensuring ${dataType} cache:`, error);

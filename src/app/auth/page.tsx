@@ -266,6 +266,11 @@ export default function AuthPage() {
         return;
       }
 
+      const existingRefreshToken = getStorageItem("refresh_token");
+      if (!existingRefreshToken) {
+        return;
+      }
+
       const refreshResponse = await fetch("/api/auth/refresh", { method: "POST" });
       if (!refreshResponse.ok) {
         return;

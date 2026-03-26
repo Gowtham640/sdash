@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { setStorageItem } from "@/lib/browserStorage";
+import { getStorageItem, setStorageItem } from "@/lib/browserStorage";
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
 
@@ -17,6 +17,12 @@ export default function SessionRefresher() {
 
     const refreshOnce = async () => {
       try {
+        const storedRefreshToken = getStorageItem("refresh_token");
+        if (!storedRefreshToken) {
+          // Avoid noisy 401 calls when no refresh token exists yet.
+          return;
+        }
+
         const response = await fetch("/api/auth/refresh", { method: "POST" });
         if (response.ok) {
           const payload = await response.json();
