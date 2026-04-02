@@ -30,14 +30,17 @@ export const BottomSheet = ({ open, onClose, children }: BottomSheetProps) => (
             if (info.offset.y > 100) onClose();
           }}
           className="fixed bottom-0 left-0 right-0 z-50 glass-card-elevated rounded-t-[28px] max-h-[85vh] overflow-y-auto"
-          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+          style={{
+            // Reserve space for floating PillNav (y-axis clearance, not z-index)
+            paddingBottom: "calc(6.5rem + env(safe-area-inset-bottom))",
+          }}
           role="dialog"
           aria-modal="true"
         >
           <div className="flex justify-center pt-3 pb-4">
             <div className="w-10 h-1 bg-white/20 rounded-full" />
           </div>
-          <div className="px-6 pb-8">{children}</div>
+          <div className="px-6 pb-6">{children}</div>
         </motion.div>
       </>
     )}

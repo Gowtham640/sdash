@@ -6,12 +6,10 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { getTimetableSummary, getSlotOccurrences, getDayOrderStats, type DayOrderStats, type SlotOccurrence, type TimetableData, type CalendarEvent, type TimetableDayOrder } from '@/lib/timetableUtils';
 import { AttendancePredictionModal } from '@/components/AttendancePredictionModal';
 import { ODMLModal } from '@/components/ODMLModal';
-import { calculatePredictedAttendance, calculateODMLAdjustedAttendance, calculateSubjectHoursInDateRange, getDayOrderStatsForDateRange, type PredictionResult, type LeavePeriod } from '@/lib/attendancePrediction';
+import { calculatePredictedAttendance, calculateODMLAdjustedAttendance, calculateSubjectHoursInDateRange, getDayOrderStatsForDateRange, formatDateRange, type PredictionResult, type LeavePeriod } from '@/lib/attendancePrediction';
 import { markSaturdaysAsHolidays } from '@/lib/calendarHolidays';
-import { Calendar } from '@/components/ui/calendar';
-import { Button } from '@/components/ui/button';
-import { DateRange } from 'react-day-picker';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
+import { toast } from 'sonner';
 import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
@@ -26,6 +24,7 @@ import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
 import { isDataFresh } from '@/lib/dataExpiry';
 import type { AttendanceData, AttendanceSubject } from '@/lib/apiTypes';
+import { Plus } from 'lucide-react';
 import TopAppBar from '@/components/sdash/TopAppBar';
 import PillNav from '@/components/sdash/PillNav';
 import GlassCard from '@/components/sdash/GlassCard';
@@ -571,6 +570,20 @@ export default function AttendancePage() {
     void fetchUnifiedDataRef.current?.();
   }, []);
 
+  // Deep-link from dashboard/marks: /attendance?openTool=predict | odml
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const tool = params.get('openTool');
+    if (tool === 'predict') {
+      setShowPredictionModal(true);
+      window.history.replaceState({}, '', '/attendance');
+    } else if (tool === 'odml') {
+      setShowODMLModal(true);
+      window.history.replaceState({}, '', '/attendance');
+    }
+  }, []);
+
   useEffect(() => {
     showOdmlAppliedRef.current = showOdmlApplied;
   }, [showOdmlApplied]);
@@ -606,8 +619,9 @@ export default function AttendancePage() {
     };
 
     loadSavedOdml();
+    // Do not depend on attendanceData: applySavedOdml updates it and would retrigger this effect → endless GET /api/odml
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attendanceData, originalAttendanceData, slotOccurrences, calendarData, showOdmlApplied]);
+  }, [originalAttendanceData, slotOccurrences, calendarData, showOdmlApplied]);
 
   // Apply saved ODML to attendance data
   const applySavedOdml = (records: OdmlRecord[]) => {
@@ -943,11 +957,11 @@ export default function AttendancePage() {
         periods
       );
 
-      // Save each period to database
+      // Save each period to user_odml (Supabase via /api/odml)
       const access_token = getStorageItem('access_token');
       if (access_token) {
+        let saveFailures = 0;
         for (const period of periods) {
-          // Calculate subject hours for this specific period
           const subjectHours: Record<string, number> = {};
 
           if (attendanceData && attendanceData.all_subjects) {
@@ -964,22 +978,32 @@ export default function AttendancePage() {
             });
           }
 
-          // Save to database
-          await saveOdmlRecord(
+          const saved = await saveOdmlRecord(
             access_token,
             period.from,
             period.to,
             subjectHours
           );
+          if (!saved) {
+            saveFailures += 1;
+            console.error('[Attendance] saveOdmlRecord returned null for period', period.from, period.to);
+          }
         }
 
-        // Reload saved ODML records
+        if (saveFailures > 0) {
+          toast.error('Some OD/ML periods did not save. Check your connection and try again.');
+        } else if (periods.length > 0) {
+          toast.success('OD/ML saved to your account.');
+        }
+
         const savedRecords = await fetchOdmlRecords(access_token);
         setSavedOdmlRecords(savedRecords);
         if (savedRecords.length > 0) {
           applySavedOdml(savedRecords);
           setShowOdmlApplied(true);
         }
+      } else {
+        toast.error('Sign in required to save OD/ML.');
       }
 
       setPredictionResults(results);
@@ -1006,6 +1030,47 @@ export default function AttendancePage() {
     if (originalAttendanceData) {
       setAttendanceData(originalAttendanceData);
     }
+  };
+
+  /** Exit OD/ML-adjusted view but keep saved periods in Supabase */
+  const handleExitOdmlView = useCallback(() => {
+    setShowOdmlApplied(false);
+    setIsOdmlMode(false);
+    setIsPredictionMode(false);
+    setPredictionResults([]);
+    if (originalAttendanceData) {
+      setAttendanceData(originalAttendanceData);
+    }
+  }, [originalAttendanceData]);
+
+  const handleOdmlToolbarClick = () => {
+    if (savedOdmlRecords.length === 0) {
+      setShowODMLModal(true);
+      return;
+    }
+    if (showOdmlApplied) {
+      handleExitOdmlView();
+    } else {
+      setShowOdmlApplied(true);
+      applySavedOdml(savedOdmlRecords);
+      setIsOdmlMode(true);
+      setIsPredictionMode(false);
+    }
+  };
+
+  const handlePredictionToolbarClick = () => {
+    if (isPredictionMode) {
+      setIsPredictionMode(false);
+      setLeavePeriods([]);
+      if (!isOdmlMode) {
+        setPredictionResults([]);
+        if (originalAttendanceData) {
+          setAttendanceData(originalAttendanceData);
+        }
+      }
+      return;
+    }
+    setShowPredictionModal(true);
   };
 
   const formatOdmlDate = (value: string) => {
@@ -1048,17 +1113,6 @@ export default function AttendancePage() {
     } finally {
       setDeletingRecordId(null);
     }
-  };
-
-  const handleActivateOdmlPrediction = () => {
-    if (isOdmlMode || savedOdmlRecords.length === 0) {
-      return;
-    }
-
-    setShowOdmlApplied(true);
-    applySavedOdml(savedOdmlRecords);
-    setIsOdmlMode(true);
-    setIsPredictionMode(false);
   };
 
   const handleReAuthenticate = () => {
@@ -1491,10 +1545,20 @@ export default function AttendancePage() {
           )
         : null;
 
+      const origSubject =
+        originalAttendanceData?.all_subjects?.find(
+          (s) =>
+            s &&
+            s.subject_code === subject.subject_code &&
+            s.category === subject.category
+        ) ?? subject;
+
       const attendancePercentage = prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance);
       const currentAttendance = prediction ? prediction.currentAttendance : getAttendancePercentage(subject.attendance);
-      const requiredMargin = calculateRequiredMargin(subject);
-      const predictedMargin = prediction ? getPredictedMargin(subject, prediction, requiredMargin) : null;
+      const requiredMarginActual = calculateRequiredMargin(origSubject);
+      const predictedMargin = prediction
+        ? getPredictedMargin(origSubject, prediction, requiredMarginActual)
+        : null;
       const displayedPct = Math.round(attendancePercentage);
 
       const baseConducted = parseInt(String(subject.hours_conducted), 10) || 0;
@@ -1515,11 +1579,23 @@ export default function AttendancePage() {
 
       const marginLabel = predictedMargin
         ? (predictedMargin.type === "required" ? "Required" : "Margin")
-        : (requiredMargin.type === "required" ? "Required" : "Margin");
-      const marginValue = predictedMargin ? predictedMargin.value : requiredMargin.value;
-      const marginValueClass = (predictedMargin ? predictedMargin.type : requiredMargin.type) === "required"
+        : (requiredMarginActual.type === "required" ? "Required" : "Margin");
+      const marginValue = predictedMargin ? predictedMargin.value : requiredMarginActual.value;
+      const marginValueClass = (predictedMargin ? predictedMargin.type : requiredMarginActual.type) === "required"
         ? "text-red-500"
         : "text-green-500";
+
+      const currentMarginLabel = prediction
+        ? requiredMarginActual.type === "required"
+          ? "Current required"
+          : "Current margin"
+        : null;
+      const currentMarginValue = prediction ? requiredMarginActual.value : null;
+      const currentMarginClass = prediction
+        ? requiredMarginActual.type === "required"
+          ? "text-red-500"
+          : "text-green-500"
+        : null;
 
       return {
         subject,
@@ -1533,9 +1609,12 @@ export default function AttendancePage() {
         marginLabel,
         marginValue,
         marginValueClass,
+        currentMarginLabel,
+        currentMarginValue,
+        currentMarginClass,
       };
     });
-  }, [sortedAttendanceSubjects, isPredictionMode, isOdmlMode, predictionResults, getPredictedMargin]);
+  }, [sortedAttendanceSubjects, isPredictionMode, isOdmlMode, predictionResults, getPredictedMargin, originalAttendanceData]);
 
   const criticalSubjectRows = useMemo(
     () => subjectDisplayRows.filter((row) => row.marginLabel === "Required" && row.marginValue > 0),
@@ -1556,6 +1635,10 @@ export default function AttendancePage() {
     marginLabel,
     marginValue,
     marginValueClass,
+    prediction,
+    currentMarginLabel,
+    currentMarginValue,
+    currentMarginClass,
   }: (typeof subjectDisplayRows)[number]): React.ReactNode => (
     <GlassCard
       key={`${subject.subject_code}-${originalIndex}`}
@@ -1589,9 +1672,16 @@ export default function AttendancePage() {
               {displayConducted}
             </span>
           </div>
-          <p className="text-sm font-sora text-sdash-text-primary shrink-0">
-            {marginLabel}: <span className={marginValueClass}>{marginValue}</span>
-          </p>
+          <div className="flex flex-col items-end gap-0.5 shrink-0 text-right">
+            {prediction && currentMarginLabel != null && currentMarginValue != null && currentMarginClass && (
+              <p className="text-sm font-sora text-sdash-text-primary">
+                {currentMarginLabel}: <span className={currentMarginClass}>{currentMarginValue}</span>
+              </p>
+            )}
+            <p className="text-sm font-sora text-sdash-text-primary">
+              {marginLabel}: <span className={marginValueClass}>{marginValue}</span>
+            </p>
+          </div>
         </div>
       </button>
     </GlassCard>
@@ -1778,6 +1868,116 @@ export default function AttendancePage() {
     hasPrediction: predictionResults.length > 0
   });
 
+  const attendanceToolsBlock =
+    attendanceData.all_subjects && attendanceData.all_subjects.length > 0 ? (
+      <>
+        <div className="mt-3 flex w-full gap-2">
+          <button
+            type="button"
+            onClick={handlePredictionToolbarClick}
+            className={`flex-1 rounded-full border py-2.5 text-sm font-sora touch-target ${
+              isPredictionMode
+                ? 'border-sdash-success/50 bg-sdash-success text-sdash-text-primary'
+                : 'border-white/[0.12] bg-sdash-surface-1 text-sdash-text-primary'
+            }`}
+          >
+            Predict attendance
+          </button>
+          <button
+            type="button"
+            onClick={handleOdmlToolbarClick}
+            className={`flex-1 rounded-full border py-2.5 text-sm font-sora touch-target ${
+              savedOdmlRecords.length > 0 && showOdmlApplied
+                ? 'border-sdash-accent/40 bg-sdash-accent text-sdash-text-primary'
+                : 'border-white/[0.12] bg-sdash-surface-1 text-sdash-text-primary'
+            }`}
+          >
+            {savedOdmlRecords.length > 0 ? 'OD/ML' : 'Calculate ODML'}
+          </button>
+        </div>
+        {isPredictionMode && (
+          <details className="mt-2 w-full rounded-xl border border-sdash-success/30 bg-sdash-surface-1 px-3 py-2">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-sora text-sm text-sdash-text-primary [&::-webkit-details-marker]:hidden">
+              <span>
+                Leave periods
+                <span className="ml-1 text-sdash-text-muted">({leavePeriods.length})</span>
+              </span>
+              <button
+                type="button"
+                aria-label="Add or edit leave periods"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/[0.12] bg-sdash-surface-2 text-sdash-text-primary touch-target hover:bg-white/[0.06]"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowPredictionModal(true);
+                }}
+              >
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
+              </button>
+            </summary>
+            <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.08] pt-3">
+              {leavePeriods.length === 0 ? (
+                <p className="text-xs font-sora text-sdash-text-muted">No leave periods. Tap + to add.</p>
+              ) : (
+                leavePeriods.map((period) => (
+                  <div
+                    key={period.id}
+                    className="rounded-lg border border-white/[0.08] bg-black/10 px-3 py-2 text-xs font-sora text-sdash-text-primary"
+                  >
+                    {formatDateRange(period.from, period.to)}
+                  </div>
+                ))
+              )}
+            </div>
+          </details>
+        )}
+        <details className="mt-2 w-full rounded-xl border border-white/[0.12] bg-sdash-surface-1 px-3 py-2">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-sora text-sm text-sdash-text-primary [&::-webkit-details-marker]:hidden">
+            <span>
+              OD/ML periods
+              <span className="ml-1 text-sdash-text-muted">({savedOdmlRecords.length})</span>
+            </span>
+            <button
+              type="button"
+              aria-label="Add OD/ML period"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/[0.12] bg-sdash-surface-2 text-sdash-text-primary touch-target hover:bg-white/[0.06]"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowODMLModal(true);
+              }}
+            >
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+            </button>
+          </summary>
+          <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.08] pt-3">
+            {savedOdmlRecords.length === 0 ? (
+              <p className="text-xs font-sora text-sdash-text-muted">No saved periods. Tap + to add.</p>
+            ) : (
+              savedOdmlRecords.map((record) => (
+                <div
+                  key={record.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.08] bg-black/10 px-3 py-2 text-xs font-sora text-sdash-text-primary"
+                >
+                  <span className="min-w-0 truncate">
+                    {formatOdmlDate(record.period_from)} → {formatOdmlDate(record.period_to)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteOdmlRecord(record.id)}
+                    disabled={deletingRecordId === record.id}
+                    className="shrink-0 rounded-lg bg-red-500/85 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white disabled:opacity-40"
+                  >
+                    {deletingRecordId === record.id ? '…' : 'Delete'}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </details>
+      </>
+    ) : null;
+
   return (
     <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col justify-start overflow-y-auto">
       <TopAppBar title="Attendance" showBack onRefresh={() => void refreshAttendanceData()} isRefreshing={loading || isRefreshing} />
@@ -1816,128 +2016,93 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* ODML Banner */}
-      {savedOdmlRecords.length > 0 && (
-        <GlassCard className="w-full border border-sdash-success/30 bg-sdash-success/5 p-4 sm:p-5 flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-row gap-2">
-            <div className="text-white font-sora text-xs md:text-lg lg:text-lg font-normal lg:font-bold">
-              {showOdmlApplied ? 'Attendance shown with OD/ML applied' : 'Showing attendance without OD/ML'}
-            </div>
-            {savedOdmlRecords.length > 0 && (
-              <button
-                onClick={handleActivateOdmlPrediction}
-                className="bg-white/20 border w-1/2 lg:w-1/4 border-white/40 text-white font-sora px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-2.5 lg:px-6 lg:py-3 rounded-2xl transition-colors duration-200 text-xs sm:text-sm md:text-base lg:text-base"
-              >
-                Use saved OD/ML
-              </button>
-            )}
-            </div>
-            <div className="text-green-300/80 font-sora text-xs md:text-lg lg:text-[15px] lg:font-normal font-thin">
-              {savedOdmlRecords.length} OD/ML period{savedOdmlRecords.length !== 1 ? 's' : ''} saved
-            </div>
-          </div>
-          <details className="bg-white/5 border border-white/20 rounded-2xl p-3 text-sm text-white/80 font-sora">
-            <summary className="cursor-pointer font-semibold text-xs md:text-lg lg:text-lg">
-              OD/ML Records ({savedOdmlRecords.length})
-            </summary>
-            <div className="mt-3 flex flex-col gap-2 max-h-48 overflow-y-auto">
-              {savedOdmlRecords.map(record => (
-                <div
-                  key={record.id}
-                  className="flex items-center justify-between gap-3 rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-[11px] sm:text-xs"
-                >
-                  <div>
-                    <div className="font-sora text-white">
-                      {formatOdmlDate(record.period_from)} → {formatOdmlDate(record.period_to)}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteOdmlRecord(record.id)}
-                    disabled={deletingRecordId === record.id}
-                    className="flex-shrink-0 rounded-xl bg-red-500/80 hover:bg-red-600 disabled:bg-red-500/40 transition-colors px-3 py-1 text-[10px] uppercase tracking-[0.2em]"
-                  >
-                    {deletingRecordId === record.id ? 'Deleting...' : 'Delete'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </details>
-        </GlassCard>
-      )}
+      {attendanceViewMode === 'list' && attendanceToolsBlock}
 
       {/* Subject cards — swipeable glass (compass-style); full stats in BottomSheet */}
       <div className="w-full mt-3 flex flex-col items-stretch">
         {attendanceData && attendanceData.all_subjects && Array.isArray(attendanceData.all_subjects) && attendanceData.all_subjects.length > 0 ? (
           attendanceViewMode === 'cards' ? (
-            <SwipeableCards>
-              {subjectDisplayRows.map(
-                ({
-                  subject,
-                  originalIndex,
-                  prediction,
-                  displayedPct,
-                  currentAttendance,
-                  displayPresent,
-                  displayAbsent,
-                  displayConducted,
-                  marginLabel,
-                  marginValue,
-                  marginValueClass,
-                }) => (
-                  <GlassCard
-                    key={`${subject.subject_code}-${originalIndex}`}
-                    subjectCategory={subject.category}
-                    className="p-3 flex flex-col gap-4 w-full"
-                  >
-                    <div>
-                      <p className="font-sora font-semibold text-lg text-sdash-text-primary leading-snug">
-                        {subject.course_title}
-                      </p>
-                      <p className="text-md text-sdash-text-secondary mt-1">{subject.subject_code}</p>
-                      <p className="text-md text-sdash-text-muted mt-1 font-sora">
-                        {subject.faculty_name} · {subject.category} · Slot {subject.slot} · Room {subject.room}
-                      </p>
-                    </div>
-                    <div className="flex items-baseline gap-2">
-                      <span className={`display-stat ${displayedPct < 75 ? "text-sdash-danger" : "text-sdash-success"}`}>
-                        {displayedPct}%
-                      </span>
-                    </div>
-                    {prediction && (
-                      <p className="text-xl font-sora text-sdash-text-primary shrink-0">
-                        Current: {Math.round(currentAttendance)}%
-                      </p>
-                    )}
-                    <div className="mt-1 flex items-center justify-between gap-3">
-                      <div className="inline-flex items-center gap-2 rounded-full bg-sdash-surface-1 border border-white/[0.08] px-1 py-1">
-                        <span
-                          className="inline-flex items-center rounded-full bg-sdash-surface-2 border border-white/[0.08] overflow-hidden"
-                          title="Present | Absent"
-                        >
-                          <span className="stat-number text-md text-sdash-text-primary !text-green-500 px-2 py-0.5">{displayPresent}</span>
-                          <span className="w-px h-4 bg-white/[0.14]" />
-                          <span className="stat-number text-md text-sdash-text-primary !text-red-500 px-2 py-0.5">{displayAbsent}</span>
-                        </span>
-                        <span className="stat-number text-md text-sdash-text-primary mr-2" title="Conducted">
-                          {displayConducted}
+            <>
+              <SwipeableCards>
+                {subjectDisplayRows.map(
+                  ({
+                    subject,
+                    originalIndex,
+                    prediction,
+                    displayedPct,
+                    currentAttendance,
+                    displayPresent,
+                    displayAbsent,
+                    displayConducted,
+                    marginLabel,
+                    marginValue,
+                    marginValueClass,
+                    currentMarginLabel,
+                    currentMarginValue,
+                    currentMarginClass,
+                  }) => (
+                    <GlassCard
+                      key={`${subject.subject_code}-${originalIndex}`}
+                      subjectCategory={subject.category}
+                      className="p-3 flex flex-col gap-4 w-full"
+                    >
+                      <div>
+                        <p className="font-sora font-semibold text-lg text-sdash-text-primary leading-snug">
+                          {subject.course_title}
+                        </p>
+                        <p className="text-md text-sdash-text-secondary mt-1">{subject.subject_code}</p>
+                        <p className="text-md text-sdash-text-muted mt-1 font-sora">
+                          {subject.faculty_name} · {subject.category} · Slot {subject.slot} · Room {subject.room}
+                        </p>
+                      </div>
+                      <div className="flex items-baseline gap-2">
+                        <span className={`display-stat ${displayedPct < 75 ? "text-sdash-danger" : "text-sdash-success"}`}>
+                          {displayedPct}%
                         </span>
                       </div>
-                      <p className="text-xl font-sora text-sdash-text-primary shrink-0">
-                        {marginLabel}: <span className={marginValueClass}>{marginValue}</span>
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setDetailSubjectIndex(originalIndex)}
-                      className="w-full rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-sm font-sora text-sdash-text-primary touch-target"
-                    >
-                      Full details
-                    </button>
-                  </GlassCard>
-                )
-              )}
-            </SwipeableCards>
+                      {prediction && (
+                        <p className="text-xl font-sora text-sdash-text-primary shrink-0">
+                          Current: {Math.round(currentAttendance)}%
+                        </p>
+                      )}
+                        <div className="mt-1 flex items-center justify-between gap-3">
+                        <div className="inline-flex items-center gap-2 rounded-full bg-sdash-surface-1 border border-white/[0.08] px-1 py-1">
+                          <span
+                            className="inline-flex items-center rounded-full bg-sdash-surface-2 border border-white/[0.08] overflow-hidden"
+                            title="Present | Absent"
+                          >
+                            <span className="stat-number text-md text-sdash-text-primary !text-green-500 px-2 py-0.5">{displayPresent}</span>
+                            <span className="w-px h-4 bg-white/[0.14]" />
+                            <span className="stat-number text-md text-sdash-text-primary !text-red-500 px-2 py-0.5">{displayAbsent}</span>
+                          </span>
+                          <span className="stat-number text-md text-sdash-text-primary mr-2" title="Conducted">
+                            {displayConducted}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
+                          {prediction && currentMarginLabel != null && currentMarginValue != null && currentMarginClass && (
+                            <p className="text-xl font-sora text-sdash-text-primary">
+                              {currentMarginLabel}: <span className={currentMarginClass}>{currentMarginValue}</span>
+                            </p>
+                          )}
+                          <p className="text-xl font-sora text-sdash-text-primary">
+                            {marginLabel}: <span className={marginValueClass}>{marginValue}</span>
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDetailSubjectIndex(originalIndex)}
+                        className="w-full rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-sm font-sora text-sdash-text-primary touch-target"
+                      >
+                        Full details
+                      </button>
+                    </GlassCard>
+                  )
+                )}
+              </SwipeableCards>
+              {attendanceToolsBlock}
+            </>
           ) : (
             <div className="flex flex-col gap-3">
               {criticalSubjectRows.length > 0 && (

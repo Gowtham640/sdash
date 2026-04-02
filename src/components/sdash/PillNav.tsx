@@ -7,12 +7,12 @@ import { useMemo, useEffect, useRef, useCallback, useSyncExternalStore, type CSS
 import { LiquidGlass, type LiquidGlassRef } from "@specy/liquid-glass-react";
 
 const tabs = [
-  { path: "/dashboard", icon: Home, label: "Home" },
-  { path: "/timetable", icon: Clock, label: "Timetable" },
-  { path: "/attendance", icon: BarChart3, label: "Attendance" },
-  { path: "/marks", icon: Award, label: "Marks" },
-  { path: "/calender", icon: CalendarDays, label: "Calendar" },
-  { path: "/sgpa-calculator", icon: Calculator, label: "GPA" },
+  { path: "/dashboard", icon: Home, label: "Home", shortLabel: "home" },
+  { path: "/timetable", icon: Clock, label: "Timetable", shortLabel: "timetable" },
+  { path: "/attendance", icon: BarChart3, label: "Attendance", shortLabel: "attendance" },
+  { path: "/marks", icon: Award, label: "Marks", shortLabel: "marks" },
+  { path: "/calender", icon: CalendarDays, label: "Calendar", shortLabel: "calendar" },
+  { path: "/sgpa-calculator", icon: Calculator, label: "GPA", shortLabel: "gpa" },
 ];
 
 export const PillNav = () => {
@@ -27,14 +27,20 @@ export const PillNav = () => {
     () => false
   );
 
+  // Scrollable host is the LiquidGlass root (inline overflow-x), not the inner nav — hide scrollbar on PC/WebKit
+  const syncHideScrollbarOnGlassHost = useCallback(() => {
+    glassRef.current?.getElement()?.classList.add("hide-scrollbar");
+  }, []);
+
   // Re-capture background when route changes (paint cache uses page behind the bar)
   useEffect(() => {
     if (!mounted) return;
     const id = requestAnimationFrame(() => {
+      syncHideScrollbarOnGlassHost();
       void glassRef.current?.forceUpdate();
     });
     return () => cancelAnimationFrame(id);
-  }, [pathname, mounted]);
+  }, [pathname, mounted, syncHideScrollbarOnGlassHost]);
 
   // Library defaults use pixel-scale (depth ~24, radius ~16); README "0–1" is misleading — tiny values make the glass invisible
   const glassStyle = useMemo(
@@ -74,11 +80,12 @@ export const PillNav = () => {
 
   const onGlassReady = useCallback(() => {
     requestAnimationFrame(() => {
+      syncHideScrollbarOnGlassHost();
       glassRef.current?.forcePositionUpdate();
       glassRef.current?.forceSizeUpdate();
       void glassRef.current?.forceUpdate();
     });
-  }, []);
+  }, [syncHideScrollbarOnGlassHost]);
 
   const tabButtons = (
     <>
@@ -108,6 +115,13 @@ export const PillNav = () => {
                 isActive ? "text-sdash-accent" : "text-sdash-text"
               }`}
             />
+            <span
+              className={`relative z-10 max-w-[4.5rem] truncate text-[9px] font-sora font-medium leading-none tracking-tight ${
+                isActive ? "text-sdash-accent/90" : "text-sdash-text-white/60"
+              }`}
+            >
+              {tab.shortLabel}
+            </span>
           </button>
         );
       })}

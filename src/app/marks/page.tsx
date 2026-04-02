@@ -553,6 +553,23 @@ export default function MarksPage() {
           </div>
         </div>
 
+        {marksViewMode === 'list' && entries.length > 0 && (
+          <div className="mt-3 flex w-full gap-2">
+            <Link
+              href="/attendance?openTool=predict"
+              className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
+            >
+              Predict attendance
+            </Link>
+            <Link
+              href="/attendance?openTool=odml"
+              className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
+            >
+              Calculate ODML
+            </Link>
+          </div>
+        )}
+
         {entries.length === 0 ? (
           <GlassCard className="p-6 text-center">
             <p className="text-sm text-sdash-text-secondary font-sora">
@@ -562,24 +579,40 @@ export default function MarksPage() {
         ) : (
           <div className="mt-3">
             {marksViewMode === 'cards' ? (
-              <SwipeableCards>
-                {marksRows.map(({ key, entry, courseTitle, normalizedAssessments, totalValue, maxTotal, graphId }) => (
-                  <GlassCard key={key} className="p-3 flex flex-col gap-3">
-                    <p className="font-sora font-semibold text-base text-sdash-text-primary">{courseTitle}</p>
-                    {entry.courseCode ? (
-                      <p className="text-xs text-sdash-text-secondary uppercase tracking-wider">{entry.courseCode}</p>
-                    ) : null}
+              <>
+                <SwipeableCards>
+                  {marksRows.map(({ key, entry, courseTitle, normalizedAssessments, totalValue, maxTotal, graphId }) => (
+                    <GlassCard key={key} className="p-3 flex flex-col gap-3">
+                      <p className="font-sora font-semibold text-base text-sdash-text-primary">{courseTitle}</p>
+                      {entry.courseCode ? (
+                        <p className="text-xs text-sdash-text-secondary uppercase tracking-wider">{entry.courseCode}</p>
+                      ) : null}
 
-                    <div className="flex items-baseline gap-1 mt-2">
-                      <span className="display-stat text-sdash-text-primary">{formatTotalValue(totalValue)}</span>
-                      <span className="font-geist-mono text-2xl text-sdash-text-secondary">/{formatTotalValue(maxTotal)}</span>
-                    </div>
+                      <div className="flex items-baseline gap-1 mt-2">
+                        <span className="display-stat text-sdash-text-primary">{formatTotalValue(totalValue)}</span>
+                        <span className="font-geist-mono text-2xl text-sdash-text-secondary">/{formatTotalValue(maxTotal)}</span>
+                      </div>
 
-                    <div className="mt-2">{renderAssessmentRows(normalizedAssessments)}</div>
-                    <div className="pt-2">{renderAssessmentGraph(normalizedAssessments, graphId)}</div>
-                  </GlassCard>
-                ))}
-              </SwipeableCards>
+                      <div className="mt-2">{renderAssessmentRows(normalizedAssessments)}</div>
+                      <div className="pt-2">{renderAssessmentGraph(normalizedAssessments, graphId)}</div>
+                    </GlassCard>
+                  ))}
+                </SwipeableCards>
+                <div className="mt-3 flex w-full gap-2">
+                  <Link
+                    href="/attendance?openTool=predict"
+                    className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
+                  >
+                    Predict attendance
+                  </Link>
+                  <Link
+                    href="/attendance?openTool=odml"
+                    className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
+                  >
+                    Calculate ODML
+                  </Link>
+                </div>
+              </>
             ) : (
               <div className="flex flex-col gap-3">
                 {marksRows.map(({ key, entry, courseTitle, normalizedAssessments, totalValue, maxTotal, pct, creditLabel }) => (

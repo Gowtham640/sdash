@@ -664,6 +664,26 @@ export default function AuthPage() {
         }
 
         console.log("[Auth Page] Onboarding user path (captcha required).");
+        // Queue Go backend /login immediately (same payload shape as login without captcha) so the worker
+        // starts while the user completes hCaptcha. Full sign-in still uses POST /api/auth/login after CAPTCHA.
+        void trackPostRequest("/api/auth/queue-go-login", {
+          action: "auth_queue_go_login",
+          dataType: "login",
+          payload: { email: normalizedEmail, password },
+          omitPayloadKeys: ["password"],
+        })
+          .then(async (queueResponse) => {
+            if (!queueResponse.ok) {
+              console.warn(
+                "[Auth Page] Early Go queue request failed (non-blocking):",
+                queueResponse.status
+              );
+            }
+          })
+          .catch((queueErr) => {
+            console.warn("[Auth Page] Early Go queue request error (non-blocking):", queueErr);
+          });
+
         // Keep the "Signing in..." UI active for a short delay before showing CAPTCHA.
         loginToCaptchaDelayRef.current = setTimeout(() => {
           loginToCaptchaDelayRef.current = null;
@@ -759,7 +779,7 @@ export default function AuthPage() {
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={isLoading}
                       required
-                      placeholder="ra2211003010XXX"
+                      placeholder="ab1234@srmist.edu.in"
                         className={`w-full bg-sdash-surface-2 border ${
                         error ? "border-sdash-danger" : "border-white/[0.07]"
                         } rounded-[14px] px-4 py-3 text-base text-sdash-text-primary font-sora placeholder:text-sdash-text-muted focus:border-sdash-accent focus:outline-none transition-colors`}
