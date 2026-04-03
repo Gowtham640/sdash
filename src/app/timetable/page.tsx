@@ -23,6 +23,8 @@ import PillNav from "@/components/sdash/PillNav";
 import GlassCard from "@/components/sdash/GlassCard";
 import StatChip from "@/components/sdash/StatChip";
 import { trackPostRequest } from "@/lib/postAnalytics";
+import { Check, ChevronDown, Pencil } from "lucide-react";
+// import { motion, useAnimation } from "framer-motion"; // Customise timetable hint (disabled)
 
 interface TimeSlotCell {
   course: string;
@@ -173,6 +175,173 @@ const extractCalendarEvents = (input: unknown): CalendarEvent[] | null => {
 const TIMETABLE_DAY_LABELS = ["DO 1", "DO 2", "DO 3", "DO 4", "DO 5"] as const;
 const TIMETABLE_DAY_KEYS = ["do1", "do2", "do3", "do4", "do5"] as const;
 
+/** Default slot order (matches transform + scraper grid). */
+const DEFAULT_TIME_SLOT_ORDER = [
+  "08:00-08:50",
+  "08:50-09:40",
+  "09:45-10:35",
+  "10:40-11:30",
+  "11:35-12:25",
+  "12:30-01:20",
+  "01:25-02:15",
+  "02:20-03:10",
+  "03:10-04:00",
+  "04:00-04:50",
+] as const;
+
+/** Batch slot letters per day row (scraper-3/scraper/timetable.go). */
+const BATCH_1_SLOTS: string[][] = [
+  ["A", "A", "F", "F", "G", "P6", "P7", "P8", "P9", "P10"],
+  ["P11", "P12", "P13", "P14", "P15", "B", "B", "G", "G", "A"],
+  ["C", "C", "A", "D", "B", "P26", "P27", "P28", "P29", "P30"],
+  ["P31", "P32", "P33", "P34", "P35", "D", "D", "B", "E", "C"],
+  ["E", "E", "C", "F", "D", "P46", "P47", "P48", "P49", "P50"],
+];
+
+const BATCH_2_SLOTS: string[][] = [
+  ["P1", "P2", "P3", "P4", "P5", "A", "A", "F", "F", "G"],
+  ["B", "B", "G", "G", "A", "P16", "P17", "P18", "P19", "P20"],
+  ["P21", "P22", "P23", "P24", "P25", "C", "C", "A", "D", "B"],
+  ["D", "D", "B", "E", "C", "P36", "P37", "P38", "P39", "P40"],
+  ["P41", "P42", "P43", "P44", "P45", "E", "E", "C", "F", "D"],
+];
+
+function getSlotLetterForGrid(batch: string, dayNumber: number, slotIndex: number): string {
+  const dayIx = dayNumber - 1;
+  const grid = batch === "1" ? BATCH_1_SLOTS : BATCH_2_SLOTS;
+  if (dayIx < 0 || dayIx >= grid.length) return "X";
+  const row = grid[dayIx];
+  if (slotIndex < 0 || slotIndex >= row.length) return "X";
+  return row[slotIndex];
+}
+
+/** Sparse patch document stored in public.timetable_modification. */
+interface TimetableAddCellData {
+  code: string;
+  name: string;
+  slot: string;
+  online: boolean;
+  roomNo: string;
+  slotType: string;
+  courseType: string;
+  isOptional: boolean;
+}
+
+type TimetableModCell = { __type: "ADD"; data: TimetableAddCellData } | { __type: "REMOVE" };
+
+interface TimetableModificationDoc {
+  batch: string;
+  regNumber: string;
+  schedule: Array<{ day: number; table: Array<TimetableModCell | null> }>;
+}
+
+function mergeCellIntoDoc(
+  prev: TimetableModificationDoc,
+  day: number,
+  slotIndex: number,
+  cell: TimetableModCell | null,
+  batch: string,
+  regNumber: string
+): TimetableModificationDoc {
+  const schedule = [...(prev.schedule ?? [])];
+  let dayEntry = schedule.find((d) => d.day === day);
+  const table: Array<TimetableModCell | null> = dayEntry
+    ? [...dayEntry.table]
+    : Array.from({ length: 10 }, () => null);
+  while (table.length < 10) {
+    table.push(null);
+  }
+  if (slotIndex < 0 || slotIndex >= 10) {
+    return prev;
+  }
+  table[slotIndex] = cell;
+  const newDay = { day, table };
+  const idx = schedule.findIndex((d) => d.day === day);
+  if (idx >= 0) {
+    schedule[idx] = newDay;
+  } else {
+    schedule.push(newDay);
+  }
+  return { batch, regNumber, schedule };
+}
+
+function pruneModificationDoc(doc: TimetableModificationDoc): TimetableModificationDoc {
+  const schedule = doc.schedule.filter((day) => {
+    if (!Array.isArray(day.table)) {
+      return false;
+    }
+    return day.table.some((c) => c !== null && c !== undefined);
+  });
+  return { ...doc, schedule };
+}
+
+/**
+ * Client-side preview: applies the same sparse patch semantics as the Go worker (ADD/REMOVE/skip null)
+ * onto the cached TimetableData shape so the list + quick stats match before reload.
+ */
+function applyModificationPreviewToTimetableData(
+  base: TimetableData,
+  pending: TimetableModificationDoc | null
+): TimetableData {
+  if (!pending?.schedule?.length) {
+    return base;
+  }
+  const clone = JSON.parse(JSON.stringify(base)) as TimetableData;
+  const timeOrder =
+    clone.time_slots?.length > 0 ? clone.time_slots : [...DEFAULT_TIME_SLOT_ORDER];
+
+  for (const dayPatch of pending.schedule) {
+    const doName = TIMETABLE_DAY_LABELS[dayPatch.day - 1];
+    if (!doName || !Array.isArray(dayPatch.table)) {
+      continue;
+    }
+    let doEntry = findDayOrderEntry(clone.timetable, doName);
+    if (!doEntry) {
+      const created = { do_name: doName, time_slots: {} } as TimetableDayOrder;
+      (clone.timetable as Record<string, TimetableDayOrder>)[doName] = created;
+      doEntry = created;
+    }
+    if (!doEntry.time_slots) {
+      doEntry.time_slots = {};
+    }
+    const tsMap = doEntry.time_slots as Record<
+      string,
+      {
+        slot_code: string;
+        course_title: string;
+        slot_type: string;
+        is_alternate: boolean;
+        courseType?: string;
+        online?: boolean;
+      }
+    >;
+
+    dayPatch.table.forEach((cell, slotIndex) => {
+      if (cell == null) {
+        return;
+      }
+      const timeKey = timeOrder[slotIndex];
+      if (!timeKey) {
+        return;
+      }
+      if (cell.__type === "REMOVE") {
+        delete tsMap[timeKey];
+      } else if (cell.__type === "ADD") {
+        const d = cell.data;
+        tsMap[timeKey] = {
+          slot_code: d.slot,
+          course_title: d.name,
+          slot_type: d.slotType,
+          is_alternate: false,
+          courseType: d.courseType,
+          online: d.online,
+        };
+      }
+    });
+  }
+  return clone;
+}
+
 const normalizeDayKey = (value: string): string => value.replace(/\s+/g, '').toLowerCase();
 
 const findDayOrderEntry = (
@@ -302,6 +471,50 @@ interface TimetableInitialSnapshot {
   hasTimetableCache: boolean;
 }
 
+/*
+ * --- Customise timetable hint (disabled): component + framer-motion import above ---
+function CustomiseTimetableHint({ onFadeComplete }: { onFadeComplete: () => void }) {
+  const controls = useAnimation();
+  useEffect(() => {
+    let cancelled = false;
+    async function runSequence() {
+      await controls.set({ x: 0, opacity: 1 });
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await controls.start({
+          x: -12,
+          transition: { duration: 0.45, ease: [0.45, 0, 0.55, 1] },
+        });
+        if (cancelled) return;
+        await controls.start({
+          x: 0,
+          transition: { duration: 0.45, ease: [0.45, 0, 0.55, 1] },
+        });
+        if (cancelled) return;
+      }
+      await controls.start({ opacity: 0, transition: { duration: 0.4 } });
+      if (!cancelled) onFadeComplete();
+    }
+    void runSequence();
+    return () => {
+      cancelled = true;
+      void controls.stop();
+    };
+  }, [controls, onFadeComplete]);
+  return (
+    <motion.div
+      animate={controls}
+      initial={{ x: 0, opacity: 1 }}
+      className="pointer-events-none flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-sora text-sdash-text-muted"
+    >
+      <span className="text-sdash-accent" aria-hidden>
+        ←
+      </span>
+      <span>Customise your time table</span>
+    </motion.div>
+  );
+}
+*/
+
 const getInitialTimetableSnapshot = (): TimetableInitialSnapshot => {
   const cachedTimetable = resolveCachedTimetable(getClientCache('timetable'));
   const calendarData = getClientCache<CalendarEvent[]>('calendar') ?? [];
@@ -339,6 +552,102 @@ export default function TimetablePage() {
   /** Active day order tab for compass-style slot list */
   const [activeDayOrder, setActiveDayOrder] = useState<string>("DO 1");
   const [hasUserSelectedDayOrder, setHasUserSelectedDayOrder] = useState(false);
+
+  /**
+   * Timetable edit session: pendingModificationDoc is local until global Save (then API + backend refresh).
+   * While editing, preview = raw + pending. After Save, sessionSavedTimetableOverride keeps merged grid until reload.
+   */
+  const [timetableEditMode, setTimetableEditMode] = useState(false);
+  const [editorContextLoading, setEditorContextLoading] = useState(false);
+  const [editorContextLoaded, setEditorContextLoaded] = useState(false);
+  const [pendingModificationDoc, setPendingModificationDoc] = useState<TimetableModificationDoc | null>(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<{
+    timeKey: string;
+    slotIndex: number;
+    dayNumber: number;
+    subject: string | null;
+    badgeType: "theory" | "lab" | null;
+  } | null>(null);
+  const [editorBatch, setEditorBatch] = useState("2");
+  const [editorRegNumber, setEditorRegNumber] = useState("");
+  const [courseTitleOptions, setCourseTitleOptions] = useState<string[]>([]);
+  const [courseItems, setCourseItems] = useState<Array<{ title: string; code: string }>>([]);
+  const [editCourseTitle, setEditCourseTitle] = useState("");
+  const [editCourseTitleMode, setEditCourseTitleMode] = useState<"pick" | "new">("pick");
+  const [newCourseTitleInput, setNewCourseTitleInput] = useState("");
+  const [editKind, setEditKind] = useState<"theory" | "lab">("theory");
+  const [courseMenuOpen, setCourseMenuOpen] = useState(false);
+  const [kindMenuOpen, setKindMenuOpen] = useState(false);
+  /** True only while global Save runs (upsert + timetable refresh). */
+  const [savingGlobalModification, setSavingGlobalModification] = useState(false);
+  /**
+   * Merged timetable snapshot after successful global Save — in-memory only; cleared on full page reload.
+   * Covers the gap where client cache refresh returns before the worker merges modifications into user_cache.
+   */
+  const [sessionSavedTimetableOverride, setSessionSavedTimetableOverride] = useState<TimetableData | null>(null);
+  const courseMenuRef = useRef<HTMLDivElement | null>(null);
+  const kindMenuRef = useRef<HTMLDivElement | null>(null);
+
+  /*
+  // --- Customise timetable hint (disabled): DB status + replay nonce + fade dismiss ---
+  const [hasModificationRecordInDb, setHasModificationRecordInDb] = useState<boolean | null>(null);
+  const [hintNonce, setHintNonce] = useState(0);
+  const [hintDismissed, setHintDismissed] = useState(false);
+  const modificationStatusFetchedRef = useRef(false);
+  const handleHintFadeComplete = useCallback(() => {
+    setHintDismissed(true);
+  }, []);
+  useEffect(() => {
+    setHintDismissed(false);
+  }, [hintNonce]);
+  useEffect(() => {
+    if (loading) {
+      modificationStatusFetchedRef.current = false;
+    }
+  }, [loading]);
+  useEffect(() => {
+    if (loading || !rawTimetableData) {
+      return;
+    }
+    if (modificationStatusFetchedRef.current) {
+      return;
+    }
+    modificationStatusFetchedRef.current = true;
+    const access_token = getStorageItem("access_token");
+    if (!access_token) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await trackPostRequest("/api/timetable/modification", {
+          action: "timetable_modification_status",
+          dataType: "timetable",
+          payload: { access_token, action: "status" },
+          omitPayloadKeys: ["access_token"],
+        });
+        const data = (await response.json()) as {
+          success?: boolean;
+          has_modification_record?: boolean;
+        };
+        if (cancelled || !data.success) {
+          return;
+        }
+        const has = Boolean(data.has_modification_record);
+        setHasModificationRecordInDb(has);
+        if (!has) {
+          setHintNonce((n) => n + 1);
+        }
+      } catch (e) {
+        console.warn("[Timetable] modification status failed", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, rawTimetableData]);
+  */
 
   // For the left "day meter" depletion bar.
   const [now, setNow] = useState<Date | null>(null);
@@ -410,22 +719,23 @@ export default function TimetablePage() {
       console.log('[Timetable] Refresh API response data:', result.data);
       console.log('[Timetable] Refresh API response data type:', typeof result.data);
 
+      // Do not throw when refresh returns 502 (e.g. Go backend unreachable): still hydrate from cache below.
       if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to refresh timetable data');
+        console.warn(
+          '[Timetable] Refresh API did not complete successfully; continuing with unified cache fetch:',
+          result.error
+        );
+      } else {
+        console.log('[Timetable] ✅ Refresh completed, updating local state...');
       }
 
-      // Refresh API returns data directly from Supabase
-      // Update local state with the returned data
-      console.log('[Timetable] ✅ Refresh completed, updating local state...');
-
-      // After successful refresh, re-fetch data from Supabase cache
-      console.log('[Timetable] ✅ Refresh completed, now fetching fresh data from Supabase...');
+      // Same next step as a successful refresh: pull timetable from Supabase/client cache (fetchUnifiedData).
+      console.log('[Timetable] Fetching timetable state after refresh step...');
       await fetchUnifiedData(false);
     } catch (err) {
-      console.error('[Timetable] Error refreshing data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to refresh timetable data');
-      setLoading(false);
-      setIsRefreshing(false);
+      // trackPostRequest or JSON parse failed — still run unified fetch (it handles errors internally).
+      console.warn('[Timetable] Refresh step threw; attempting unified cache fetch:', err);
+      await fetchUnifiedData(false);
     }
   };
 
@@ -1078,8 +1388,32 @@ export default function TimetablePage() {
     return { start, end };
   }, [slotTimeToMinutes]);
 
+  /**
+   * Single source for the timetable object the UI should render: live edit merge, post-save session snapshot, or cache.
+   */
+  const displayRawTimetableData = useMemo((): TimetableData | null => {
+    if (!rawTimetableData) {
+      return null;
+    }
+    if (timetableEditMode && pendingModificationDoc) {
+      return applyModificationPreviewToTimetableData(rawTimetableData, pendingModificationDoc);
+    }
+    if (sessionSavedTimetableOverride) {
+      return sessionSavedTimetableOverride;
+    }
+    return rawTimetableData;
+  }, [rawTimetableData, timetableEditMode, pendingModificationDoc, sessionSavedTimetableOverride]);
+
+  /** Slot grid rows from displayRawTimetableData (includes session-only merged view after Save). */
+  const timetableSlotsForDisplay = useMemo(() => {
+    if (!displayRawTimetableData) {
+      return timetableData;
+    }
+    return convertTimetableDataToTimeSlots(displayRawTimetableData);
+  }, [displayRawTimetableData, timetableData]);
+
   const slotsForActiveDo = useMemo(() => {
-    if (!timetableData.length) {
+    if (!timetableSlotsForDisplay.length) {
       return [];
     }
     const dayIndex = TIMETABLE_DAY_LABELS.indexOf(
@@ -1089,7 +1423,7 @@ export default function TimetablePage() {
       return [];
     }
     const dayKey = TIMETABLE_DAY_KEYS[dayIndex];
-    return timetableData.map((slot) => {
+    return timetableSlotsForDisplay.map((slot) => {
       const cellData = slot[dayKey];
       const isObject = typeof cellData === "object" && cellData !== null;
       const courseName = isObject
@@ -1098,7 +1432,7 @@ export default function TimetablePage() {
 
       let slotType = "";
       let slotCode = "";
-      const dayOrderData = rawTimetableData?.timetable?.[activeDayOrder];
+      const dayOrderData = displayRawTimetableData?.timetable?.[activeDayOrder];
       const ts = dayOrderData?.time_slots?.[slot.time];
       if (ts) {
         slotType = ts.slot_type || "";
@@ -1124,7 +1458,314 @@ export default function TimetablePage() {
         slotEndMinutes: minutes?.end ?? null,
       };
     });
-  }, [timetableData, rawTimetableData, activeDayOrder, parseSlotRangeToMinutes]);
+  }, [timetableSlotsForDisplay, displayRawTimetableData, activeDayOrder, parseSlotRangeToMinutes]);
+
+  /**
+   * Quick stats: recomputed when the visible grid is a preview (editing) or post-save session merge.
+   */
+  const slotOccurrencesForUi = useMemo(() => {
+    if (!displayRawTimetableData) {
+      return slotOccurrences;
+    }
+    const useComputedOccurrences =
+      sessionSavedTimetableOverride != null ||
+      (timetableEditMode && pendingModificationDoc != null);
+    if (useComputedOccurrences) {
+      return getSlotOccurrences(displayRawTimetableData);
+    }
+    return slotOccurrences;
+  }, [
+    displayRawTimetableData,
+    sessionSavedTimetableOverride,
+    timetableEditMode,
+    pendingModificationDoc,
+    slotOccurrences,
+  ]);
+
+  useEffect(() => {
+    if (!courseMenuOpen && !kindMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (courseMenuRef.current && !courseMenuRef.current.contains(t)) {
+        setCourseMenuOpen(false);
+      }
+      if (kindMenuRef.current && !kindMenuRef.current.contains(t)) {
+        setKindMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [courseMenuOpen, kindMenuOpen]);
+
+  const parseModificationDoc = useCallback((raw: unknown): TimetableModificationDoc | null => {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const o = raw as TimetableModificationDoc;
+    if (typeof o.batch !== "string" || typeof o.regNumber !== "string" || !Array.isArray(o.schedule)) {
+      return null;
+    }
+    return o;
+  }, []);
+
+  /** Header "Edit": load courses + existing DB patch once, then show pencils on each row. */
+  const startTimetableEditMode = useCallback(async () => {
+    const access_token = getStorageItem("access_token");
+    if (!access_token) {
+      setError("Please sign in to edit your timetable");
+      return;
+    }
+    setEditorContextLoading(true);
+    setError(null);
+    try {
+      const response = await trackPostRequest("/api/timetable/modification", {
+        action: "timetable_modification_load",
+        dataType: "timetable",
+        payload: { access_token, action: "load" },
+        omitPayloadKeys: ["access_token"],
+      });
+      const data = (await response.json()) as {
+        success?: boolean;
+        modified_json?: unknown;
+        has_modification_record?: boolean;
+        batch?: string;
+        regNumber?: string;
+        courseTitles?: string[];
+        courseItems?: Array<{ title: string; code: string }>;
+      };
+      if (!response.ok || !data.success) {
+        console.error("[Timetable] modification load failed", data);
+        setError("Could not load timetable editor");
+        return;
+      }
+      // if (typeof data.has_modification_record === "boolean") {
+      //   setHasModificationRecordInDb(data.has_modification_record);
+      // }
+      setEditorBatch(data.batch ?? "2");
+      setEditorRegNumber(data.regNumber ?? "");
+      setCourseTitleOptions(data.courseTitles ?? []);
+      setCourseItems(data.courseItems ?? []);
+      setPendingModificationDoc(
+        parseModificationDoc(data.modified_json) ?? {
+          batch: data.batch ?? "2",
+          regNumber: data.regNumber ?? "",
+          schedule: [],
+        }
+      );
+      setEditorContextLoaded(true);
+      setTimetableEditMode(true);
+    } catch (e) {
+      console.error("[Timetable] modification load error", e);
+      setError("Could not load timetable editor");
+    } finally {
+      setEditorContextLoading(false);
+    }
+  }, [parseModificationDoc]);
+
+  /** Header "Cancel": discard session preview (no API). */
+  const cancelTimetableEditMode = useCallback(() => {
+    setTimetableEditMode(false);
+    setPendingModificationDoc(null);
+    setEditorContextLoaded(false);
+    setEditModalOpen(false);
+    setEditTarget(null);
+  }, []);
+
+  /** Header "Save": upsert patch, then timetable refresh so Go backend merges into user_cache. */
+  const commitGlobalTimetableSave = useCallback(async () => {
+    if (!pendingModificationDoc) {
+      return;
+    }
+    const access_token = getStorageItem("access_token");
+    if (!access_token) {
+      setError("Please sign in to save");
+      return;
+    }
+    setSavingGlobalModification(true);
+    setError(null);
+    try {
+      const pruned = pruneModificationDoc(pendingModificationDoc);
+      const response = await trackPostRequest("/api/timetable/modification", {
+        action: "timetable_modification_save",
+        dataType: "timetable",
+        payload: { access_token, action: "save", modified_json: pruned },
+        omitPayloadKeys: ["access_token"],
+      });
+      const result = (await response.json()) as { success?: boolean; error?: string };
+      if (!response.ok || !result.success) {
+        throw new Error(result.error ?? "Save failed");
+      }
+      // setHasModificationRecordInDb(true); // hint disabled
+      // Session-only merged view until reload (cache refresh may still be pre-worker-merge).
+      if (rawTimetableData) {
+        setSessionSavedTimetableOverride(applyModificationPreviewToTimetableData(rawTimetableData, pruned));
+      }
+      setTimetableEditMode(false);
+      setPendingModificationDoc(null);
+      setEditorContextLoaded(false);
+      setEditModalOpen(false);
+      setEditTarget(null);
+      await refreshTimetableData();
+    } catch (e) {
+      console.error("[Timetable] global save", e);
+      setError(e instanceof Error ? e.message : "Failed to save timetable");
+    } finally {
+      setSavingGlobalModification(false);
+    }
+  }, [pendingModificationDoc, rawTimetableData, refreshTimetableData]);
+
+  const openEditModal = useCallback(
+    (row: (typeof slotsForActiveDo)[number]) => {
+      if (!editorContextLoaded || !timetableEditMode) {
+        return;
+      }
+      const timeOrder = rawTimetableData?.time_slots?.length
+        ? rawTimetableData.time_slots
+        : [...DEFAULT_TIME_SLOT_ORDER];
+      const slotIndex = timeOrder.indexOf(row.timeKey);
+      if (slotIndex < 0) {
+        console.warn("[Timetable] Could not resolve slot index for", row.timeKey);
+        return;
+      }
+      const dayNumber =
+        TIMETABLE_DAY_LABELS.indexOf(activeDayOrder as (typeof TIMETABLE_DAY_LABELS)[number]) + 1;
+      if (dayNumber < 1) {
+        return;
+      }
+      setEditTarget({
+        timeKey: row.timeKey,
+        slotIndex,
+        dayNumber,
+        subject: row.subject,
+        badgeType: row.type,
+      });
+      setEditCourseTitle(row.subject ?? "");
+      setEditKind(row.type === "lab" ? "lab" : "theory");
+      setEditCourseTitleMode("pick");
+      setNewCourseTitleInput("");
+      setCourseMenuOpen(false);
+      setKindMenuOpen(false);
+      setEditModalOpen(true);
+    },
+    [activeDayOrder, editorContextLoaded, rawTimetableData?.time_slots, timetableEditMode]
+  );
+
+  const applyLocalAddFromModal = useCallback(() => {
+    if (!editTarget) {
+      return;
+    }
+    const title =
+      editCourseTitleMode === "new" ? newCourseTitleInput.trim() : editCourseTitle.trim();
+    if (!title) {
+      setError("Choose or enter a course title");
+      return;
+    }
+    setError(null);
+    const slotLetter = getSlotLetterForGrid(editorBatch, editTarget.dayNumber, editTarget.slotIndex);
+    const isLab = editKind === "lab";
+    const found = courseItems.find((c) => c.title.toLowerCase() === title.toLowerCase());
+    const code = found?.code ?? `CUSTOM${Math.floor(100 + Math.random() * 900)}`;
+    const cell: TimetableModCell = {
+      __type: "ADD",
+      data: {
+        code,
+        name: title,
+        slot: slotLetter,
+        online: false,
+        roomNo: "N/A",
+        slotType: isLab ? "Lab" : "Theory",
+        courseType: isLab ? "Practical" : "Theory",
+        isOptional: true,
+      },
+    };
+    const base: TimetableModificationDoc =
+      pendingModificationDoc ?? {
+        batch: editorBatch,
+        regNumber: editorRegNumber,
+        schedule: [],
+      };
+    const merged = mergeCellIntoDoc(
+      base,
+      editTarget.dayNumber,
+      editTarget.slotIndex,
+      cell,
+      editorBatch,
+      editorRegNumber
+    );
+    setPendingModificationDoc(pruneModificationDoc(merged));
+    setEditModalOpen(false);
+    setEditTarget(null);
+  }, [
+    courseItems,
+    editCourseTitle,
+    editCourseTitleMode,
+    editKind,
+    editTarget,
+    editorBatch,
+    editorRegNumber,
+    newCourseTitleInput,
+    pendingModificationDoc,
+  ]);
+
+  const applyLocalRemoveSlot = useCallback(() => {
+    if (!editTarget) {
+      return;
+    }
+    setError(null);
+    const cell: TimetableModCell = { __type: "REMOVE" };
+    const base: TimetableModificationDoc =
+      pendingModificationDoc ?? {
+        batch: editorBatch,
+        regNumber: editorRegNumber,
+        schedule: [],
+      };
+    const merged = mergeCellIntoDoc(
+      base,
+      editTarget.dayNumber,
+      editTarget.slotIndex,
+      cell,
+      editorBatch,
+      editorRegNumber
+    );
+    setPendingModificationDoc(pruneModificationDoc(merged));
+    setEditModalOpen(false);
+    setEditTarget(null);
+  }, [editTarget, editorBatch, editorRegNumber, pendingModificationDoc]);
+
+  const applyLocalClearOverride = useCallback(() => {
+    if (!editTarget) {
+      return;
+    }
+    setError(null);
+    const base: TimetableModificationDoc =
+      pendingModificationDoc ?? {
+        batch: editorBatch,
+        regNumber: editorRegNumber,
+        schedule: [],
+      };
+    const merged = mergeCellIntoDoc(
+      base,
+      editTarget.dayNumber,
+      editTarget.slotIndex,
+      null,
+      editorBatch,
+      editorRegNumber
+    );
+    setPendingModificationDoc(pruneModificationDoc(merged));
+    setEditModalOpen(false);
+    setEditTarget(null);
+  }, [editTarget, editorBatch, editorRegNumber, pendingModificationDoc]);
+
+  const patchCellAtEdit = useMemo(() => {
+    if (!editTarget || !pendingModificationDoc) {
+      return null;
+    }
+    const d = pendingModificationDoc.schedule.find((x) => x.day === editTarget.dayNumber);
+    if (!d?.table || editTarget.slotIndex >= d.table.length) {
+      return null;
+    }
+    return d.table[editTarget.slotIndex] ?? null;
+  }, [editTarget, pendingModificationDoc]);
 
   const nowMinutes = now
     ? now.getHours() * 60 + now.getMinutes()
@@ -1170,6 +1811,7 @@ export default function TimetablePage() {
         />
         <main className="flex flex-col flex-1 items-center justify-center gap-6 px-4 py-8">
           <div className="w-full max-w-xl rounded-[12px] border border-white/[0.08] bg-white/[0.05] p-8 text-center font-sora">
+            {/* Empty state: no slot list — only download in header */}
             <div className="text-sdash-text-primary text-base sm:text-lg">
               No timetable data available
             </div>
@@ -1194,7 +1836,10 @@ export default function TimetablePage() {
       />
 
       <main className="w-full max-w-lg mx-auto flex flex-col gap-6 px-4 pt-4 pb-2">
+        {/* Post-save: merged grid is session-only; disappears on full page reload */}
+        
         {/* DO 1–5 tabs (academic-compass style) */}
+        <div className="flex items-center justify-between gap-2 -mx-4 px-4 pb-1">
         <div className="flex gap-2 overflow-x-auto hide-scrollbar -mx-4 px-4 pb-1">
           {TIMETABLE_DAY_LABELS.map((d) => (
             <button
@@ -1214,6 +1859,51 @@ export default function TimetablePage() {
             </button>
           ))}
         </div>
+
+        {/* Row above slot cards: left-aligned edit toolbar + optional “Customise” hint (no DB row only) */}
+        <div className="relative flex min-h-[40px] flex-wrap items-center gap-2">
+          <div className="flex flex-1 flex-wrap items-center gap-3">
+            {timetableEditMode ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void commitGlobalTimetableSave()}
+                  disabled={savingGlobalModification || !editorContextLoaded}
+                  className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-accent transition-colors hover:bg-white/[0.09] disabled:opacity-40"
+                  title="Save edits and refresh timetable from server"
+                >
+                  {savingGlobalModification ? "…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelTimetableEditMode}
+                  disabled={savingGlobalModification}
+                  className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.04] px-3 py-1.5 text-[12px] font-sora text-sdash-text-secondary transition-colors hover:bg-white/[0.08] disabled:opacity-40"
+                  title="Discard local edits"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                {/* Primary control: left-aligned rounded pill above the cards */}
+                <button
+                  type="button"
+                  onClick={() => void startTimetableEditMode()}
+                  disabled={editorContextLoading}
+                  className="ml-auto touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.09] hover:text-sdash-text-primary disabled:opacity-40"
+                  title="Edit timetable (session preview until you save)"
+                >
+                  <Pencil className="h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={2} />
+                  {editorContextLoading ? "…" : "Edit"}
+                </button>
+                {/* Customise timetable hint disabled — see commented CustomiseTimetableHint + state/effects */}
+              </>
+            )}
+          </div>
+        </div>
+        </div>
+
         <div className="flex flex-col gap-3">
           {slotsForActiveDo.map((row) => {
             let remainingFraction = 1;
@@ -1255,16 +1945,31 @@ export default function TimetablePage() {
 
                 {row.subject ? (
                   <>
+                    {/* Row 1: time (left) | theory/lab label + pencil-only edit (right) */}
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-geist-mono text-sm text-sdash-text-secondary">
                         {row.timeLabel}
                       </span>
-                      {row.type ? (
-                        <span className="text-[11px] font-sora text-sdash-text-muted capitalize">
-                          {row.type}
-                        </span>
-                      ) : null}
+                      <div className="flex items-center gap-2 shrink-0">
+                        {row.type ? (
+                          <span className="text-[11px] font-sora text-sdash-text-muted capitalize">
+                            {row.type}
+                          </span>
+                        ) : null}
+                        {timetableEditMode && editorContextLoaded ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(row)}
+                            className="touch-target p-0.5 text-sdash-text-secondary hover:text-sdash-text-primary"
+                            aria-label="Edit this timetable slot"
+                            title="Edit slot"
+                          >
+                            <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
+                    {/* Row 2: course title */}
                     <p className="font-sora font-semibold text-base text-sdash-text-primary leading-snug">
                       {row.subject}
                     </p>
@@ -1275,12 +1980,28 @@ export default function TimetablePage() {
                     ) : null}
                   </>
                 ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-geist-mono text-sm text-sdash-text-secondary">
-                      {row.timeLabel}
-                    </span>
-                    <span className="text-sm text-sdash-text-muted font-sora">No class</span>
-                  </div>
+                  <>
+                    {/* Free slot: time left | "No class" + optional pencil on the right */}
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-geist-mono text-sm text-sdash-text-secondary">
+                        {row.timeLabel}
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-sm text-sdash-text-muted font-sora">No class</span>
+                        {timetableEditMode && editorContextLoaded ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(row)}
+                            className="touch-target p-0.5 text-sdash-text-secondary hover:text-sdash-text-primary"
+                            aria-label="Edit this timetable slot"
+                            title="Add or edit slot"
+                          >
+                            <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
                 )}
               </GlassCard>
             );
@@ -1310,7 +2031,7 @@ export default function TimetablePage() {
           <div>
             <p className="section-label mb-3">Subject schedule</p>
             <div className="flex flex-col gap-3">
-              {slotOccurrences.map((occurrence, index) => (
+              {slotOccurrencesForUi.map((occurrence, index) => (
                 <GlassCard
                   key={index}
                   subjectCategory={occurrence.category}
@@ -1339,6 +2060,174 @@ export default function TimetablePage() {
       </main>
 
       <PillNav />
+
+      {/* Slot modal: applies changes to pendingModificationDoc only; header Save persists to DB + backend */}
+      {editModalOpen && editTarget ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md rounded-[12px] border border-white/[0.08] bg-sdash-surface-1 p-5 font-sora shadow-xl"
+          >
+            <h2 className="text-lg font-semibold text-sdash-text-primary mb-1">Edit slot</h2>
+            <p className="text-[12px] text-sdash-text-muted mb-4">
+              {activeDayOrder} · {editTarget.timeKey.replace(/-/g, " – ")}
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <p className="text-[11px] text-sdash-text-secondary mb-1.5">Course title</p>
+                <div className="relative" ref={courseMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setCourseMenuOpen((o) => !o)}
+                    className="inline-flex h-9 w-full items-center justify-between rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 px-3 text-left text-[12px] text-sdash-text-secondary"
+                    aria-expanded={courseMenuOpen}
+                    aria-haspopup="listbox"
+                  >
+                    <span className="truncate">
+                      {editCourseTitleMode === "new" ? "New course…" : editCourseTitle || "Select course"}
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 opacity-70" strokeWidth={2} />
+                  </button>
+                  {courseMenuOpen ? (
+                    <div
+                      className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-lg border border-white/[0.08] bg-black/40 py-1 backdrop-blur-md shadow-lg"
+                      role="listbox"
+                    >
+                      <button
+                        type="button"
+                        role="option"
+                        onClick={() => {
+                          setEditCourseTitleMode("new");
+                          setCourseMenuOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-white/70 hover:bg-white/[0.06]"
+                      >
+                        <span className="inline-flex w-3.5 shrink-0 justify-center">
+                          {editCourseTitleMode === "new" ? (
+                            <Check className="h-3 w-3 text-white" strokeWidth={2.5} />
+                          ) : null}
+                        </span>
+                        New course title…
+                      </button>
+                      {courseTitleOptions.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          role="option"
+                          onClick={() => {
+                            setEditCourseTitleMode("pick");
+                            setEditCourseTitle(t);
+                            setCourseMenuOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-white/70 hover:bg-white/[0.06]"
+                        >
+                          <span className="inline-flex w-3.5 shrink-0 justify-center">
+                            {editCourseTitleMode === "pick" && editCourseTitle === t ? (
+                              <Check className="h-3 w-3 text-white" strokeWidth={2.5} />
+                            ) : null}
+                          </span>
+                          <span className="truncate">{t}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                {editCourseTitleMode === "new" ? (
+                  <input
+                    type="text"
+                    value={newCourseTitleInput}
+                    onChange={(e) => setNewCourseTitleInput(e.target.value)}
+                    placeholder="Enter new course title"
+                    className="mt-2 w-full rounded-[8px] border border-white/[0.12] bg-black/20 px-3 py-2 text-[12px] text-sdash-text-primary placeholder:text-sdash-text-muted"
+                  />
+                ) : null}
+              </div>
+
+              <div>
+                <p className="text-[11px] text-sdash-text-secondary mb-1.5">Theory / Lab</p>
+                <div className="relative" ref={kindMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setKindMenuOpen((o) => !o)}
+                    className="inline-flex h-9 w-full items-center justify-between rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 px-3 text-left text-[12px] text-sdash-text-secondary capitalize"
+                    aria-expanded={kindMenuOpen}
+                    aria-haspopup="listbox"
+                  >
+                    {editKind}
+                    <ChevronDown className="h-4 w-4 shrink-0 opacity-70" strokeWidth={2} />
+                  </button>
+                  {kindMenuOpen ? (
+                    <div
+                      className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-white/[0.08] bg-black/40 py-1 backdrop-blur-md shadow-lg"
+                      role="listbox"
+                    >
+                      {(["theory", "lab"] as const).map((k) => (
+                        <button
+                          key={k}
+                          type="button"
+                          role="option"
+                          onClick={() => {
+                            setEditKind(k);
+                            setKindMenuOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-white/70 hover:bg-white/[0.06] capitalize"
+                        >
+                          <span className="inline-flex w-3.5 shrink-0 justify-center">
+                            {editKind === k ? (
+                              <Check className="h-3 w-3 text-sdash-text-muted" strokeWidth={2.5} />
+                            ) : null}
+                          </span>
+                          {k}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => applyLocalAddFromModal()}
+                className="w-full rounded-full bg-sdash-accent py-2.5 text-sm font-medium text-sdash-text-primary touch-target"
+              >
+                Apply
+              </button>
+              {editTarget.subject ? (
+                <button
+                  type="button"
+                  onClick={() => applyLocalRemoveSlot()}
+                  className="w-full rounded-full border border-white/[0.12] py-2.5 text-sm font-medium text-sdash-text-secondary touch-target"
+                >
+                  Mark slot empty
+                </button>
+              ) : null}
+              {patchCellAtEdit ? (
+                <button
+                  type="button"
+                  onClick={() => applyLocalClearOverride()}
+                  className="w-full rounded-full border border-white/[0.12] py-2.5 text-sm font-medium text-sdash-text-secondary touch-target"
+                >
+                  Clear override (use portal default)
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setEditModalOpen(false);
+                  setEditTarget(null);
+                }}
+                className="w-full py-2 text-sm text-sdash-text-muted touch-target"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Re-auth Modal */}
       {showPasswordModal && (
