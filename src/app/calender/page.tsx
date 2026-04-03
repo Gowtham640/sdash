@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import Link from 'next/link';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
-import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { useErrorTracking } from "@/lib/useErrorTracking";
@@ -11,6 +10,7 @@ import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientC
 import { trackPostRequest } from "@/lib/postAnalytics";
 import { getSemesterLastWorkingDayInclusive } from "@/lib/calendarHolidays";
 import TopAppBar from "@/components/sdash/TopAppBar";
+import { CalendarPageSkeleton } from "@/components/sdash/PageSkeletons";
 import PillNav from "@/components/sdash/PillNav";
 import GlassCard from "@/components/sdash/GlassCard";
 import StatChip from "@/components/sdash/StatChip";
@@ -79,7 +79,6 @@ export default function CalendarPage() {
   const initialCalendarCache = useMemo(() => getClientCache<CalendarEvent[]>('calendar') ?? [], []);
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>(initialCalendarCache);
   const [loading, setLoading] = useState(initialCalendarCache.length === 0);
-  const [currentFact, setCurrentFact] = useState(DEFAULT_RANDOM_FACT);
   const [error, setError] = useState<string | null>(null);
 
   // Track errors
@@ -133,18 +132,6 @@ export default function CalendarPage() {
   useEffect(() => {
     void fetchUnifiedDataRef.current?.();
   }, []);
-
-  // Rotate facts every 8 seconds while loading
-  useEffect(() => {
-    if (!loading) return;
-    setCurrentFact(getRandomFact());
-
-    const interval = setInterval(() => {
-      setCurrentFact(getRandomFact());
-    }, 8000);
-
-    return () => clearInterval(interval);
-  }, [loading]);
 
   // Auto-scroll to current date when data loads
   useEffect(() => {
@@ -605,23 +592,7 @@ export default function CalendarPage() {
   );
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col">
-        <TopAppBar title="Calendar" showBack />
-        <main className="flex flex-col flex-1 justify-center gap-6 px-4 py-8">
-          <div className="text-sdash-text-primary text-base font-sora text-center">Loading calendar data...</div>
-          <div className="max-w-2xl mx-auto w-full">
-            <div className="text-sdash-text-primary text-base font-sora font-bold mb-4 text-center">
-              Meanwhile, here are some interesting facts:
-            </div>
-            <div className="text-sdash-text-secondary text-sm font-sora text-center italic">
-              {currentFact}
-            </div>
-          </div>
-        </main>
-        <PillNav />
-      </div>
-    );
+    return <CalendarPageSkeleton />;
   }
 
   return (

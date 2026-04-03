@@ -20,17 +20,26 @@ import {
 } from '@/lib/attendanceDisplayOrder';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { trackFeatureClick } from "@/lib/analytics";
-import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { useQueryClient, useIsFetching } from '@tanstack/react-query';
+import {
+  getClientCache,
+  setClientCache,
+  removeClientCache,
+  getClientCacheUserId,
+  isClientCacheStale,
+} from "@/lib/clientCache";
+import { fetchAttendanceDataFromSupabase, type AttendanceCacheFetchResult } from '@/lib/sdashQuery/attendanceCacheApi';
+import { SDASH_DATA_STALE_TIME_MS } from '@/lib/sdashQuery/constants';
+import { AttendancePageSkeleton } from '@/components/sdash/PageSkeletons';
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { trackPostRequest } from "@/lib/postAnalytics";
 import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, odmlRecordsToLeavePeriods, parseLocalYyyyMmDd, buildOdmlSubjectKey, type OdmlRecord } from '@/lib/odmlStorage';
-import { normalizeAttendanceData } from '@/lib/dataTransformers';
 import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
 import { isDataFresh } from '@/lib/dataExpiry';
 import type { AttendanceData, AttendanceSubject } from '@/lib/apiTypes';
-import { Check, Plus } from 'lucide-react';
+import { ArrowUpDown, Check, Plus } from 'lucide-react';
 import TopAppBar from '@/components/sdash/TopAppBar';
 import PillNav from '@/components/sdash/PillNav';
 import GlassCard from '@/components/sdash/GlassCard';
@@ -313,6 +322,10 @@ export default function AttendancePage() {
     return getClientCache<TimetableData>('timetable') ?? null;
   });
 
+  const queryClient = useQueryClient();
+  const attendanceUserId = getClientCacheUserId();
+  const attendanceNormFetching = useIsFetching({ queryKey: ['sdash', 'attendance', attendanceUserId ?? ''] }) > 0;
+
   const setAttendanceSortMode = useCallback((mode: AttendanceSortMode) => {
     setAttendanceSortModeState(mode);
     setStorageItem(ATTENDANCE_SORT_STORAGE_KEY, mode);
@@ -349,6 +362,15 @@ export default function AttendancePage() {
     setOriginalAttendanceData(payload);
     setSemester(payload.metadata?.semester || 1);
     setClientCache('attendance', payload, { expiresAt: options?.expiresAt ?? null });
+    const uid = getClientCacheUserId();
+    if (uid) {
+      queryClient.setQueryData(['sdash', 'attendance', uid], {
+        data: payload,
+        isExpired: false,
+        expiresAt: options?.expiresAt ?? null,
+        source: 'cache',
+      });
+    }
     setCacheRenderable(isCacheRenderable(payload));
     console.log('[Attendance][Cache] Applied normalized attendance payload:', {
       subjects: payload.all_subjects?.length,
@@ -362,7 +384,12 @@ export default function AttendancePage() {
     options: { maxRetries?: number; retryDelayMs?: number } = {}
   ): Promise<AttendanceCacheFetchResult> => {
     console.log('[Attendance][Cache] Ensuring normalized attendance cache before UI render');
-    const supabaseCache = await fetchAttendanceDataFromSupabase(access_token, options);
+    const uid = getClientCacheUserId();
+    const supabaseCache = await queryClient.fetchQuery({
+      queryKey: ['sdash', 'attendance', uid ?? ''],
+      queryFn: () => fetchAttendanceDataFromSupabase(access_token, options),
+      staleTime: SDASH_DATA_STALE_TIME_MS,
+    });
     console.log('[Attendance][Cache] Normalized cache response', {
       hasData: !!supabaseCache.data,
       isExpired: supabaseCache.isExpired,
@@ -373,114 +400,6 @@ export default function AttendancePage() {
     return supabaseCache;
   };
 
-  type AttendanceCacheFetchResult = {
-    data: AttendanceData;
-    isExpired: boolean;
-    expiresAt: string | null;
-    source: 'cache' | 'fallback';
-  };
-
-  const fetchAttendanceDataFromSupabase = async (
-    access_token: string,
-    options: { maxRetries?: number; retryDelayMs?: number } = {}
-  ): Promise<AttendanceCacheFetchResult> => {
-    const { maxRetries = 1, retryDelayMs = 0 } = options;
-    let reason: string | null = null;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
-      try {
-        console.log(`[Attendance][API] Supabase cache fetch attempt ${attempt}/${maxRetries}`);
-        const response = await trackPostRequest('/api/data/cache', {
-          action: 'cache_fetch',
-          dataType: 'attendance',
-          primary: false,
-          payload: { access_token, data_type: 'attendance' },
-          omitPayloadKeys: ['access_token'],
-        });
-
-        if (!response.ok) {
-          reason = `HTTP ${response.status}`;
-          console.warn('[Attendance] Supabase cache request failed:', response.status, response.statusText);
-        } else {
-          const cacheResult = await response.json();
-
-          console.log('[Attendance][API] Supabase cache response keys:', Object.keys(cacheResult || {}));
-
-          const validation = validateAttendanceCache(cacheResult);
-          if (validation.valid && validation.normalized) {
-            console.log('[Attendance][Cache] Cache hit - using normalized data');
-            return {
-              data: validation.normalized,
-              isExpired: !!cacheResult.isExpired,
-              expiresAt: cacheResult.expiresAt ?? null,
-              source: 'cache',
-            };
-          }
-
-          reason = validation.reason ?? 'cache validation failed';
-          console.warn('[Attendance][Cache] Cache invalid -', reason);
-          break;
-        }
-      } catch (error) {
-        reason = error instanceof Error ? error.message : 'unknown error';
-        console.error('[Attendance][API] ❌ Error fetching attendance cache from Supabase:', error);
-      }
-
-      if (attempt < maxRetries && retryDelayMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-      }
-    }
-
-    console.log(
-      `[Attendance][Cache] Cache miss (reason: ${reason ?? 'unknown'}) — executing fallback fetch`
-    );
-
-    const fallback = await fetchAttendanceDataDirectlyFromSupabase(access_token);
-    return {
-      ...fallback,
-      source: 'fallback',
-    };
-  };
-
-  const validateAttendanceCache = (
-    cacheResult: unknown
-  ): { valid: boolean; normalized?: AttendanceData; reason?: string } => {
-    if (!cacheResult || typeof cacheResult !== 'object' || Array.isArray(cacheResult)) {
-      const reason = 'Cache response missing or malformed';
-      console.warn('[Attendance][Cache] ' + reason);
-      return { valid: false, reason };
-    }
-
-    const { success, data } = cacheResult as { success?: boolean; data?: unknown };
-
-    if (!success) {
-      const reason = 'Cache responded with success=false';
-      console.warn('[Attendance][Cache] ' + reason);
-      return { valid: false, reason };
-    }
-
-    if (!data) {
-      const reason = 'Cache returned empty data payload';
-      console.warn('[Attendance][Cache] ' + reason);
-      return { valid: false, reason };
-    }
-
-    const normalized = normalizeAttendanceData(data);
-    if (!normalized) {
-      const reason = 'Normalization failed for cached attendance payload';
-      console.warn('[Attendance][Cache] ' + reason);
-      return { valid: false, reason };
-    }
-
-    if (!normalized.all_subjects || normalized.all_subjects.length === 0) {
-      const reason = 'Normalized cache contains no subjects';
-      console.warn('[Attendance][Cache] ' + reason);
-      return { valid: false, reason };
-    }
-
-    return { valid: true, normalized };
-  };
-
   const requireApiField = (name: string, value: unknown): unknown => {
     if (value === undefined) {
       const error = new Error(`[Attendance] API response missing "${name}"`);
@@ -488,91 +407,6 @@ export default function AttendancePage() {
       throw error;
     }
     return value;
-  };
-
-  const extractAttendancePayload = (payload: unknown): unknown | null => {
-    if (!payload) {
-      return null;
-    }
-
-    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-      const candidate = payload as { data?: unknown };
-      if ('data' in candidate && candidate.data !== undefined) {
-        return candidate.data;
-      }
-    }
-
-    return payload;
-  };
-
-  const rebuildAttendanceCache = async (
-    access_token: string,
-    normalizedData: AttendanceData
-  ): Promise<{ expiresAt: string | null }> => {
-    const response = await trackPostRequest('/api/data/cache', {
-      action: 'cache_rebuild',
-      dataType: 'attendance',
-      primary: false,
-      payload: {
-        access_token,
-        data_type: 'attendance',
-        normalized_data: normalizedData,
-        expires_in_minutes: 10,
-      },
-      omitPayloadKeys: ['access_token'],
-      payloadSummary: { subjects: normalizedData.all_subjects.length },
-    });
-
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      console.error('[Attendance][Cache] Failed to rebuild normalized cache:', result.error);
-      throw new Error(result.error || 'Failed to rebuild attendance cache');
-    }
-
-    console.log(
-      `[Attendance][Cache] Rebuilt normalized attendance cache with ${normalizedData.all_subjects.length} subjects`
-    );
-
-    return { expiresAt: result.expiresAt ?? null };
-  };
-
-  const fetchAttendanceDataDirectlyFromSupabase = async (
-    access_token: string
-  ): Promise<{ data: AttendanceData; isExpired: boolean; expiresAt: string | null }> => {
-    console.log('[Attendance][Cache] Triggering direct Supabase attendance fetch (fallback)');
-    const response = await trackPostRequest('/api/data/all', {
-      action: 'attendance_direct_fetch',
-      dataType: 'attendance',
-      primary: false,
-      payload: {
-        access_token,
-        types: ['attendance'],
-      },
-      omitPayloadKeys: ['access_token'],
-    });
-
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      console.warn('[Attendance][Cache] Direct fetch failed:', result.error);
-      throw new Error(result.error || 'Failed to fetch attendance from Supabase directly');
-    }
-
-    const attendancePayload = extractAttendancePayload(result.data?.attendance);
-    if (!attendancePayload) {
-      throw new Error('Attendance payload missing from fallback fetch');
-    }
-
-    const normalized = normalizeAttendanceData(attendancePayload);
-    if (!normalized) {
-      throw new Error('Failed to normalize attendance payload from fallback fetch');
-    }
-
-    const rebuildResult = await rebuildAttendanceCache(access_token, normalized);
-    return {
-      data: normalized,
-      isExpired: false,
-      expiresAt: rebuildResult.expiresAt,
-    };
   };
 
   const hydrateCalendarAndTimetableFromCache = () => {
@@ -615,6 +449,23 @@ export default function AttendancePage() {
       }
     }
   };
+
+  // Seed TanStack Query from persistent client cache so fetchQuery can skip network when fresh.
+  useEffect(() => {
+    const uid = getClientCacheUserId();
+    if (!uid) {
+      return;
+    }
+    const cached = getClientCache<AttendanceData>('attendance');
+    if (cached?.all_subjects?.length) {
+      queryClient.setQueryData(['sdash', 'attendance', uid], {
+        data: cached,
+        isExpired: isClientCacheStale('attendance'),
+        expiresAt: null,
+        source: 'cache',
+      });
+    }
+  }, [queryClient]);
 
   useEffect(() => {
     fetchUnifiedDataRef.current = fetchUnifiedData;
@@ -764,9 +615,11 @@ export default function AttendancePage() {
     }
   };
 
-  // Rotate facts every 8 seconds while loading
+  // Rotate facts every 8 seconds while the worst-case skeleton is visible (no cache yet).
   useEffect(() => {
-    if (!loading) return;
+    const blocking =
+      !cacheRenderable && !attendanceData && (loading || attendanceNormFetching);
+    if (!blocking) return;
     setCurrentFact(getRandomFact());
 
     const interval = setInterval(() => {
@@ -774,7 +627,7 @@ export default function AttendancePage() {
     }, 8000);
 
     return () => clearInterval(interval);
-  }, [loading]);
+  }, [cacheRenderable, attendanceData, loading, attendanceNormFetching]);
 
   // Use ref to prevent duplicate calls
   const isCalculatingRef = useRef(false);
@@ -1257,9 +1110,6 @@ export default function AttendancePage() {
 
   const fetchUnifiedData = async (forceRefresh = false) => {
     try {
-      setLoading(true);
-      setError(null);
-
       const access_token = getStorageItem('access_token');
 
       if (!access_token) {
@@ -1267,6 +1117,24 @@ export default function AttendancePage() {
         setError('Please sign in to view attendance');
         setLoading(false);
         return;
+      }
+
+      const hasRenderableCache =
+        !!getClientCache<AttendanceData>('attendance')?.all_subjects?.length || cacheRenderable;
+      if (!hasRenderableCache) {
+        setLoading(true);
+      } else {
+        setLoading(false);
+      }
+      setError(null);
+
+      if (forceRefresh) {
+        const uid = getClientCacheUserId();
+        if (uid) {
+          await queryClient.invalidateQueries({ queryKey: ['sdash', 'attendance', uid] });
+        }
+        removeClientCache('attendance');
+        console.log('[Attendance] 🗑️ Cleared client + query cache for force refresh');
       }
 
       const supabaseCache = await ensureNormalizedAttendanceCache(access_token, {
@@ -1294,8 +1162,6 @@ export default function AttendancePage() {
           console.log(`[Attendance] ⚡ Client cache empty, using ${supabaseSourceDescription}`);
         }
       } else {
-        removeClientCache('attendance');
-        console.log('[Attendance] 🗑️ Cleared client cache for force refresh');
         cachedAttendance = supabaseCache.data;
       }
 
@@ -1901,24 +1767,11 @@ export default function AttendancePage() {
   };
 
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col">
-        <TopAppBar title="Attendance" showBack onRefresh={() => void refreshAttendanceData()} isRefreshing={loading || isRefreshing} />
-        <main className="flex flex-col justify-center flex-1 gap-6 px-4 py-8">
-          <div className="text-sdash-text-primary font-sora text-xl font-bold text-center">Loading attendance data...</div>
-          <div className="max-w-2xl mx-auto w-full">
-            <div className="text-sdash-text-primary text-base font-sora font-bold mb-4 text-center">
-              Meanwhile, here are some interesting facts:
-            </div>
-            <div className="text-sdash-text-secondary text-sm font-sora text-center italic">
-              {currentFact}
-            </div>
-          </div>
-        </main>
-        <PillNav />
-      </div>
-    );
+  const showBlockingSkeleton =
+    !cacheRenderable && !attendanceData && (loading || attendanceNormFetching);
+
+  if (showBlockingSkeleton) {
+    return <AttendancePageSkeleton />;
   }
 
   if (!attendanceData) {
@@ -2073,14 +1926,16 @@ export default function AttendancePage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <div className="relative" ref={sortMenuRef}>
+            {/* Sort: icon control (matches Cards/List chrome) */}
             <button
               type="button"
               onClick={() => setSortMenuOpen((o) => !o)}
-              className="text-[11px] font-sora text-sdash-text-muted hover:text-sdash-text-secondary/90"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 text-sdash-text-secondary transition-colors hover:text-sdash-text-primary"
+              aria-label="Sort subjects"
               aria-expanded={sortMenuOpen}
               aria-haspopup="menu"
             >
-              sort
+              <ArrowUpDown className="h-4 w-4" strokeWidth={2} />
             </button>
             {sortMenuOpen ? (
               <div
