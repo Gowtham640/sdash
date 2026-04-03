@@ -7,6 +7,7 @@ import SessionRefresher from "@/components/SessionRefresher";
 import { AppProviders } from "@/components/AppProviders";
 import PWARegister from "@/components/PWARegister";
 import PWAOnlyGate from "@/components/PWAOnlyGate";
+import RouteTracker from "@/components/RouteTracker";
 
 // Circular Std Medium — single TTF; map common weights so Tailwind utilities resolve
 const circularStd = localFont({
@@ -53,6 +54,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${circularStd.variable} ${geistMono.variable} antialiased`}>
+        <RouteTracker />
         <AppProviders>
           <AnalyticsProvider>
             <PWARegister />

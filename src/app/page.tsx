@@ -3,8 +3,19 @@
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
+
+  useEffect(() => {
+    const lastRoute = localStorage.getItem("lastRoute");
+    if (lastRoute && lastRoute !== "/") {
+      router.replace(lastRoute);
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-sdash-bg flex flex-col items-center justify-center px-8 text-center">
       <motion.div
