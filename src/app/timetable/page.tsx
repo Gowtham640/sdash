@@ -619,6 +619,8 @@ export default function TimetablePage() {
   const [sessionSavedTimetableOverride, setSessionSavedTimetableOverride] = useState<TimetableData | null>(null);
   const courseMenuRef = useRef<HTMLDivElement | null>(null);
   const kindMenuRef = useRef<HTMLDivElement | null>(null);
+  /** Deferred post-save Supabase cache rebuild (clears optimistic override when hydrate succeeds). */
+  const postSaveCacheRebuildTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /*
   // --- Customise timetable hint (disabled): DB status + replay nonce + fade dismiss ---
@@ -686,6 +688,16 @@ export default function TimetablePage() {
     setMounted(true);
   }, []);
 
+  // Avoid calling setState after unmount when a delayed post-save cache rebuild was scheduled.
+  useEffect(() => {
+    return () => {
+      if (postSaveCacheRebuildTimeoutRef.current != null) {
+        clearTimeout(postSaveCacheRebuildTimeoutRef.current);
+        postSaveCacheRebuildTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!mounted) return;
     setNow(new Date());
@@ -717,8 +729,13 @@ export default function TimetablePage() {
     setActiveDayOrder(todayDayOrderLabel);
   }, [todayDayOrderLabel, hasUserSelectedDayOrder]);
 
-  const refreshTimetableData = async (options?: { afterModificationSave?: boolean }) => {
+  const refreshTimetableData = async (options?: {
+    afterModificationSave?: boolean;
+    /** When true, skip full-page loading flags (background rebuild after Save). */
+    silent?: boolean;
+  }) => {
     const afterModificationSave = options?.afterModificationSave === true;
+    const silent = options?.silent === true;
 
     const hydrateTimetableFromSupabaseUserCache = async (token: string) => {
       const cacheResponse = await trackPostRequest("/api/data/cache", {
@@ -766,22 +783,30 @@ export default function TimetablePage() {
     };
 
     try {
-      setLoading(true);
-      setError(null);
-      setIsRefreshing(true);
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+        setIsRefreshing(true);
+      }
 
       const access_token = getStorageItem("access_token");
 
       if (!access_token) {
         console.error("[Timetable] No access token found");
-        setError("Please sign in to view your timetable");
+        if (!silent) {
+          setError("Please sign in to view your timetable");
+        }
         return;
       }
 
       if (afterModificationSave) {
         removeClientCache("timetable");
-        console.log("[Timetable] Cleared timetable client cache before post-save backend refresh");
-      } else {
+        console.log(
+          silent
+            ? "[Timetable] Cleared timetable client cache before silent post-save rebuild"
+            : "[Timetable] Cleared timetable client cache before post-save backend refresh"
+        );
+      } else if (!silent) {
         console.log("[Timetable] 🔄 Force refreshing timetable data...");
       }
 
@@ -834,8 +859,10 @@ export default function TimetablePage() {
       }
       await fetchUnifiedData(false);
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      if (!silent) {
+        setLoading(false);
+        setIsRefreshing(false);
+      }
     }
   };
 
@@ -1681,10 +1708,25 @@ export default function TimetablePage() {
       setError("Please sign in to save");
       return;
     }
+    const pruned = pruneModificationDoc(pendingModificationDoc);
+    // Immediate session-only merged grid (same semantics as applyModificationPreviewToTimetableData); survives API/cache lag.
+    if (rawTimetableData) {
+      setSessionSavedTimetableOverride(applyModificationPreviewToTimetableData(rawTimetableData, pruned));
+    }
+    setTimetableEditMode(false);
+    setPendingModificationDoc(null);
+    setEditorContextLoaded(false);
+    setEditModalOpen(false);
+    setEditTarget(null);
+
+    if (postSaveCacheRebuildTimeoutRef.current != null) {
+      clearTimeout(postSaveCacheRebuildTimeoutRef.current);
+      postSaveCacheRebuildTimeoutRef.current = null;
+    }
+
     setSavingGlobalModification(true);
     setError(null);
     try {
-      const pruned = pruneModificationDoc(pendingModificationDoc);
       const response = await trackPostRequest("/api/timetable/modification", {
         action: "timetable_modification_save",
         dataType: "timetable",
@@ -1696,22 +1738,18 @@ export default function TimetablePage() {
         throw new Error(result.error ?? "Save failed");
       }
       // setHasModificationRecordInDb(true); // hint disabled
-      // Session-only merged view until reload (cache refresh may still be pre-worker-merge).
-      if (rawTimetableData) {
-        setSessionSavedTimetableOverride(applyModificationPreviewToTimetableData(rawTimetableData, pruned));
-      }
-      setTimetableEditMode(false);
-      setPendingModificationDoc(null);
-      setEditorContextLoaded(false);
-      setEditModalOpen(false);
-      setEditTarget(null);
-      await refreshTimetableData({ afterModificationSave: true });
     } catch (e) {
       console.error("[Timetable] global save", e);
       setError(e instanceof Error ? e.message : "Failed to save timetable");
     } finally {
       setSavingGlobalModification(false);
     }
+
+    // Rebuild client cache + raw state from user_cache after worker merge; keep optimistic UI until then.
+    postSaveCacheRebuildTimeoutRef.current = setTimeout(() => {
+      postSaveCacheRebuildTimeoutRef.current = null;
+      void refreshTimetableData({ afterModificationSave: true, silent: true });
+    }, 5000);
   }, [pendingModificationDoc, rawTimetableData, refreshTimetableData]);
 
   const openEditModal = useCallback(
@@ -1986,7 +2024,7 @@ export default function TimetablePage() {
               <button
                 type="button"
                 onClick={() => void startTimetableEditMode()}
-                disabled={editorContextLoading}
+                disabled={editorContextLoading || savingGlobalModification}
                 className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.09] hover:text-sdash-text-primary disabled:opacity-40"
                 title="Edit timetable (session preview until you save)"
               >
