@@ -1937,71 +1937,64 @@ export default function TimetablePage() {
 
       <main className="w-full max-w-lg mx-auto flex flex-col gap-6 px-4 pt-4 pb-2">
         {/* Post-save: merged grid is session-only; disappears on full page reload */}
-        
-        {/* DO 1–5 tabs (academic-compass style) */}
-        <div className="flex items-center justify-between gap-2 -mx-4 px-4 pb-1">
-        <div className="flex gap-2 overflow-x-auto hide-scrollbar -mx-4 px-4 pb-1">
-          {TIMETABLE_DAY_LABELS.map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => {
-                setHasUserSelectedDayOrder(true);
-                setActiveDayOrder(d);
-              }}
-              className={`shrink-0 rounded-[6px] px-2 py-0 text-md font-sora font-medium transition-colors h-7 min-h-0 leading-none !touch-manipulation ${
-                activeDayOrder === d
-                  ? "bg-sdash-accent text-sdash-text-primary"
-                  : "bg-sdash-surface-1 border border-white/[0.08] text-sdash-text-secondary"
-              }`}
-            >
-              {d}
-            </button>
-          ))}
-        </div>
 
-        {/* Row above slot cards: left-aligned edit toolbar + optional “Customise” hint (no DB row only) */}
-        <div className="relative flex min-h-[40px] flex-wrap items-center gap-2">
-          <div className="flex flex-1 flex-wrap items-center gap-3">
-            {timetableEditMode ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void commitGlobalTimetableSave()}
-                  disabled={savingGlobalModification || !editorContextLoaded}
-                  className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-accent transition-colors hover:bg-white/[0.09] disabled:opacity-40"
-                  title="Save edits and refresh timetable from server"
-                >
-                  {savingGlobalModification ? "…" : "Save"}
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelTimetableEditMode}
-                  disabled={savingGlobalModification}
-                  className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.04] px-3 py-1.5 text-[12px] font-sora text-sdash-text-secondary transition-colors hover:bg-white/[0.08] disabled:opacity-40"
-                  title="Discard local edits"
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <>
-                {/* Primary control: left-aligned rounded pill above the cards */}
-                <button
-                  type="button"
-                  onClick={() => void startTimetableEditMode()}
-                  disabled={editorContextLoading}
-                  className="ml-auto touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.09] hover:text-sdash-text-primary disabled:opacity-40"
-                  title="Edit timetable (session preview until you save)"
-                >
-                  <Pencil className="h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={2} />
-                  {editorContextLoading ? "…" : "Edit"}
-                </button>
-                {/* Customise timetable hint disabled — see commented CustomiseTimetableHint + state/effects */}
-              </>
-            )}
+        {/* DO 1–5 tabs, then Save/Cancel (edit) or Edit — then slot cards */}
+        <div className="flex flex-col gap-3 -mx-4 px-4">
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar">
+            {TIMETABLE_DAY_LABELS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => {
+                  setHasUserSelectedDayOrder(true);
+                  setActiveDayOrder(d);
+                }}
+                className={`shrink-0 rounded-[6px] px-2 py-0 text-md font-sora font-medium transition-colors h-7 min-h-0 leading-none !touch-manipulation ${
+                  activeDayOrder === d
+                    ? "bg-sdash-accent text-sdash-text-primary"
+                    : "bg-sdash-surface-1 border border-white/[0.08] text-sdash-text-secondary"
+                }`}
+              >
+                {d}
+              </button>
+            ))}
           </div>
-        </div>
+
+          {timetableEditMode ? (
+            <div className="flex w-full gap-2">
+              <button
+                type="button"
+                onClick={() => void commitGlobalTimetableSave()}
+                disabled={savingGlobalModification || !editorContextLoaded}
+                className="touch-target flex min-h-[40px] min-w-0 flex-1 basis-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[12px] font-sora font-medium text-sdash-accent/90 transition-colors hover:bg-white/[0.07] disabled:opacity-40"
+                title="Save edits and refresh timetable from server"
+              >
+                {savingGlobalModification ? "…" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={cancelTimetableEditMode}
+                disabled={savingGlobalModification}
+                className="touch-target flex min-h-[40px] min-w-0 flex-1 basis-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.06] disabled:opacity-40"
+                title="Discard local edits"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex w-full justify-end">
+              <button
+                type="button"
+                onClick={() => void startTimetableEditMode()}
+                disabled={editorContextLoading}
+                className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.09] hover:text-sdash-text-primary disabled:opacity-40"
+                title="Edit timetable (session preview until you save)"
+              >
+                <Pencil className="h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={2} />
+                {editorContextLoading ? "…" : "Edit"}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col gap-3">
