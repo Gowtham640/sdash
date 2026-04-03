@@ -24,10 +24,16 @@ export const SwipeableCards = ({ children, className = "" }: SwipeableCardsProps
     else if (info.offset.x > threshold) paginate(-1);
   };
 
+  // Short tween + small slide offset: keeps fade in/out but feels immediate
   const variants = {
-    enter: (d: number) => ({ x: d > 0 ? 300 : -300, opacity: 0 }),
+    enter: (d: number) => ({ x: d > 0 ? 72 : -72, opacity: 0 }),
     center: { x: 0, opacity: 1 },
-    exit: (d: number) => ({ x: d > 0 ? -300 : 300, opacity: 0 }),
+    exit: (d: number) => ({ x: d > 0 ? -72 : 72, opacity: 0 }),
+  };
+
+  const snapTransition = {
+    opacity: { duration: 0.09, ease: "easeOut" as const },
+    x: { type: "tween" as const, duration: 0.11, ease: [0.4, 0, 0.2, 1] as const },
   };
 
   return (
@@ -41,7 +47,7 @@ export const SwipeableCards = ({ children, className = "" }: SwipeableCardsProps
             initial="enter"
             animate="center"
             exit="exit"
-            transition={{ type: "spring", stiffness: 320, damping: 32, duration: 0.18 }}
+            transition={snapTransition}
             drag="x"
             dragConstraints={{ left: 0, right: 0 }}
             dragElastic={0.12}

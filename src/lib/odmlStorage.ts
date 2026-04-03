@@ -21,6 +21,23 @@ export interface LeavePeriod {
   id: string;
 }
 
+/** Local calendar date as YYYY-MM-DD (avoids UTC shift from toISOString()). */
+export function formatLocalDateYyyyMmDd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Parse YYYY-MM-DD as local midnight (avoids Date('YYYY-MM-DD') UTC interpretation). */
+export function parseLocalYyyyMmDd(s: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.trim());
+  if (!m) {
+    return new Date(s);
+  }
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
 /**
  * Fetch all ODML records for the current user
  */
@@ -62,8 +79,8 @@ export async function saveOdmlRecord(
       action: 'odml_save',
       dataType: 'user',
       payload: {
-        period_from: period_from.toISOString().split('T')[0],
-        period_to: period_to.toISOString().split('T')[0],
+        period_from: formatLocalDateYyyyMmDd(period_from),
+        period_to: formatLocalDateYyyyMmDd(period_to),
         subject_hours
       },
       headers: {
@@ -136,10 +153,10 @@ export function aggregateOdmlHours(records: OdmlRecord[]): Record<string, number
  * Convert ODML records to LeavePeriod format for calculation
  */
 export function odmlRecordsToLeavePeriods(records: OdmlRecord[]): LeavePeriod[] {
-  return records.map(record => ({
-    from: new Date(record.period_from),
-    to: new Date(record.period_to),
-    id: record.id
+  return records.map((record) => ({
+    from: parseLocalYyyyMmDd(record.period_from),
+    to: parseLocalYyyyMmDd(record.period_to),
+    id: record.id,
   }));
 }
 

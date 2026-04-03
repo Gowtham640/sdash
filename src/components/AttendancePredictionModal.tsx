@@ -1,9 +1,13 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Calendar } from '@/components/ui/calendar';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { DateRange } from 'react-day-picker';
+import {
+  CalendarMonthGrid,
+  parseDdMmYyyy,
+  type CalendarMonthGridEvent,
+} from '@/components/sdash/CalendarMonthGrid';
 import { 
   calculatePredictedAttendance, 
   formatDateRange, 
@@ -14,6 +18,7 @@ import {
   type LeavePeriod
 } from '@/lib/attendancePrediction';
 import { type SlotOccurrence } from '@/lib/timetableUtils';
+import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 
 interface AttendancePredictionModalProps {
   attendanceData: AttendanceData | null;
@@ -44,6 +49,76 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
     to: undefined
   });
   const [isCompact, setIsCompact] = useState(false);
+  const [viewMonth, setViewMonth] = useState(() => {
+    const n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1);
+  });
+
+  const [fetchedCalendarFallback, setFetchedCalendarFallback] = useState<CalendarMonthGridEvent[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const fromProps = (calendarData ?? []) as CalendarMonthGridEvent[];
+    if (fromProps.length > 0) {
+      setFetchedCalendarFallback([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const fresh = await fetchCalendarFromSupabase();
+      if (!cancelled) {
+        setFetchedCalendarFallback(fresh as CalendarMonthGridEvent[]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, calendarData]);
+
+  const sortedGridEvents = useMemo(() => {
+    const raw = (calendarData?.length ? calendarData : fetchedCalendarFallback) ?? [];
+    const list = raw as CalendarMonthGridEvent[];
+    return [...list].sort((a, b) => {
+      if (!a.date || !b.date) return 0;
+      const da = parseDdMmYyyy(a.date);
+      const db = parseDdMmYyyy(b.date);
+      if (!da || !db) return 0;
+      return da.getTime() - db.getTime();
+    });
+  }, [calendarData, fetchedCalendarFallback]);
+
+  const todayDdMmYyyy = useMemo(() => {
+    const now = new Date();
+    const day = now.getDate().toString().padStart(2, '0');
+    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+    const year = now.getFullYear();
+    return `${day}/${month}/${year}`;
+  }, []);
+
+  const handleMonthDayClick = (d: Date) => {
+    setCurrentDateRange((prev) => {
+      // First click → set both from and to
+      if (!prev?.from && !prev?.to) {
+        return { from: d, to: d };
+      }
+  
+      // If already single-day selected → expand range
+      if (prev.from && prev.to && prev.from.getTime() === prev.to.getTime()) {
+        if (d.getTime() < prev.from.getTime()) {
+          return { from: d, to: prev.from };
+        } else {
+          return { from: prev.from, to: d };
+        }
+      }
+  
+      // If full range already exists → reset
+      return { from: d, to: d };
+    });
+  
+    setError(null);
+  };
 
   useEffect(() => {
     const checkSize = () => {
@@ -117,7 +192,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[110] p-4">
       <div className={`bg-black border border-white/20 rounded-3xl ${isCompact ? 'p-4' : 'p-6'} max-w-6xl w-auto max-h-[90vh] items-center overflow-y-auto`}>
         <div className="flex justify-between items-center mb-6">
           <h2 className={`text-white font-sora font-bold ${isCompact ? 'text-xl' : 'text-2xl'}`}>Attendance Prediction</h2>
@@ -136,33 +211,14 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
             Add Leave Period:
           </label>
           <div className={`bg-white/10 border border-white/20 rounded-2xl ${isCompact ? 'p-3' : 'p-4'}`}>
-            <Calendar
-              mode="range"
-              selected={currentDateRange}
-              onSelect={(range) => setCurrentDateRange(range)}
-              className="text-white bg-transparent font-sora"
-              classNames={{
-                root: "bg-transparent text-white",
-                months: "bg-transparent",
-                month: "bg-transparent",
-                nav: "bg-transparent",
-                button_previous: "text-white hover:bg-white/20",
-                button_next: "text-white hover:bg-white/20",
-                month_caption: "text-white",
-                caption_label: "text-white font-sora",
-                table: "bg-transparent",
-                weekdays: "bg-transparent",
-                weekday: "text-white/70 font-sora",
-                week: "bg-transparent",
-                day: "text-white hover:bg-white/20 hover:text-white",
-                day_selected: "bg-green-500/80 text-white hover:bg-green-600",
-                day_range_start: "bg-green-500/80 text-white hover:bg-green-600",
-                day_range_end: "bg-green-500/80 text-white hover:bg-green-600",
-                day_range_middle: "bg-green-500/60 text-white hover:bg-green-500/70",
-                day_today: "bg-white/20 text-black font-bold hover:bg-white/30",
-                day_outside: "text-white/50 hover:text-white/70",
-                day_disabled: "text-white/30 hover:text-white/30",
-              }}
+            <CalendarMonthGrid
+              sortedEvents={sortedGridEvents}
+              viewMonth={viewMonth}
+              onViewMonthChange={setViewMonth}
+              todayDateStr={todayDdMmYyyy}
+              selectedRange={currentDateRange}
+              onDayClick={handleMonthDayClick}
+              className="text-sdash-text-primary"
             />
           </div>
           

@@ -14,6 +14,7 @@ import TopAppBar from "@/components/sdash/TopAppBar";
 import PillNav from "@/components/sdash/PillNav";
 import GlassCard from "@/components/sdash/GlassCard";
 import StatChip from "@/components/sdash/StatChip";
+import { CalendarMonthGrid } from "@/components/sdash/CalendarMonthGrid";
 import { Check } from "lucide-react";
 
 interface CalendarEvent {
@@ -751,103 +752,12 @@ export default function CalendarPage() {
           </div>
         ) : (
           <GlassCard className="p-3 flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                className="rounded-[8px] border border-white/[0.08] px-2 py-2 text-md font-sora text-sdash-text-secondary min-h-0 h-auto"
-                style={{ lineHeight: 1.1 }}
-                onClick={() =>
-                  setViewMonth((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))
-                }
-              >
-                Prev
-              </button>
-              <span className="text-2xl font-sora font-semibold text-sdash-text-primary">
-                {viewMonth.toLocaleString(undefined, { month: "long", year: "numeric" })}
-              </span>
-              <button
-                type="button"
-                className="rounded-[8px] border border-white/[0.08] px-2 py-2 text-md font-sora text-sdash-text-secondary min-h-0 h-auto"
-                style={{ lineHeight: 1.1 }}
-                onClick={() =>
-                  setViewMonth((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))
-                }
-              >
-                Next
-              </button>
-            </div>
-            <div className="grid grid-cols-7 gap-1 text-center text-sm font-sora text-sdash-text-secondary uppercase tracking-wider">
-              {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => (
-                <span key={d}>{d}</span>
-              ))}
-            </div>
-            <div className="grid grid-cols-7 gap-1">
-              {(() => {
-                const y = viewMonth.getFullYear();
-                const m = viewMonth.getMonth();
-                const first = new Date(y, m, 1);
-                const startPad = (first.getDay() + 6) % 7;
-                const daysInMonth = new Date(y, m + 1, 0).getDate();
-                const cells: React.ReactNode[] = [];
-                for (let i = 0; i < startPad; i++) {
-                  cells.push(<div key={`pad-${i}`} className="aspect-square" />);
-                }
-                for (let day = 1; day <= daysInMonth; day++) {
-                  const dd = day.toString().padStart(2, "0");
-                  const mm = (m + 1).toString().padStart(2, "0");
-                  const dateStr = `${dd}/${mm}/${y}`;
-                  const dayEvents = sortedEvents.filter((e) => e.date === dateStr);
-                  const isToday = dateStr === getCurrentDateString();
-                  // Month cell: show DO-n (accent, muted except on today) or HD (red) when no valid day order (incl. holidays)
-                  const primary = dayEvents[0];
-                  const isHolidayLike =
-                    primary &&
-                    (primary.day_order === "-" ||
-                      primary.day_order === "DO -" ||
-                      primary.day_order === "Holiday" ||
-                      (primary.content &&
-                        primary.content.toLowerCase().includes("holiday")));
-                  const trimmedDo = primary?.day_order?.trim() ?? "";
-                  const doNum = Number(trimmedDo);
-                  const hasValidDayOrder =
-                    primary &&
-                    trimmedDo !== "" &&
-                    !isHolidayLike &&
-                    !Number.isNaN(doNum) &&
-                    doNum >= 1 &&
-                    doNum <= 5;
-                  cells.push(
-                    <div
-                      key={dateStr}
-                      data-date={dateStr}
-                      className={`aspect-square rounded-[8px] border text-lg font-sora flex flex-col items-center justify-start p-1 gap-0.5 overflow-hidden ${
-                        isToday
-                          ? "border-sdash-accent bg-sdash-accent/10 text-sdash-text-primary"
-                          : "border-white/[0.06] text-sdash-text-primary"
-                      }`}
-                    >
-                      <span className="font-semibold">{day}</span>
-                      {dayEvents.length > 0 && hasValidDayOrder ? (
-                        <span
-                          className={`text-xs font-sora font-bold -mt-2 ${
-                            isToday
-                              ? "text-sdash-accent"
-                              : "text-sdash-accent/50"
-                          }`}
-                        >
-                          DO-{primary.day_order}
-                        </span>
-                      ) : dayEvents.length > 0 ? (
-                        <span className="text-xs font-sora font-bold text-sdash-danger -mt-2">
-                          HD
-                        </span>
-                      ) : null}
-                    </div>
-                  );
-                }
-                return cells;
-              })()}
-            </div>
+            <CalendarMonthGrid
+              sortedEvents={sortedEvents}
+              viewMonth={viewMonth}
+              onViewMonthChange={(next) => setViewMonth(next)}
+              todayDateStr={getCurrentDateString()}
+            />
           </GlassCard>
         )}
 
