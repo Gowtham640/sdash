@@ -342,6 +342,37 @@ function applyModificationPreviewToTimetableData(
   return clone;
 }
 
+/**
+ * Normalizes user_cache timetable payload from POST /api/data/cache (matches shapes handled in fetchUnifiedData).
+ */
+function parseUserCacheTimetablePayload(
+  cachedData: unknown,
+  transformGoSchedule: (goData: Record<string, unknown>) => TimetableData
+): TimetableData | null {
+  if (!cachedData || typeof cachedData !== "object") {
+    return null;
+  }
+  const obj = cachedData as Record<string, unknown>;
+
+  if ("data" in obj && obj.data && typeof obj.data === "object" && obj.data !== null) {
+    const inner = obj.data as Record<string, unknown>;
+    if ("schedule" in inner && Array.isArray(inner.schedule)) {
+      return transformGoSchedule(inner);
+    }
+    if ("timetable" in inner || "time_slots" in inner) {
+      return obj.data as TimetableData;
+    }
+  }
+
+  if ("schedule" in obj && Array.isArray(obj.schedule)) {
+    return transformGoSchedule(obj);
+  }
+  if ("timetable" in obj || "time_slots" in obj) {
+    return cachedData as TimetableData;
+  }
+  return null;
+}
+
 const normalizeDayKey = (value: string): string => value.replace(/\s+/g, '').toLowerCase();
 
 const findDayOrderEntry = (
@@ -686,56 +717,125 @@ export default function TimetablePage() {
     setActiveDayOrder(todayDayOrderLabel);
   }, [todayDayOrderLabel, hasUserSelectedDayOrder]);
 
-  const refreshTimetableData = async () => {
+  const refreshTimetableData = async (options?: { afterModificationSave?: boolean }) => {
+    const afterModificationSave = options?.afterModificationSave === true;
+
+    const hydrateTimetableFromSupabaseUserCache = async (token: string) => {
+      const cacheResponse = await trackPostRequest("/api/data/cache", {
+        action: "cache_fetch",
+        dataType: "timetable",
+        primary: false,
+        payload: { access_token: token, data_type: "timetable" },
+        omitPayloadKeys: ["access_token"],
+      });
+      const cacheResult = (await cacheResponse.json()) as {
+        success?: boolean;
+        data?: unknown;
+        error?: string;
+      };
+
+      if (!cacheResult.success) {
+        console.warn("[Timetable] Supabase timetable user_cache read failed:", cacheResult.error);
+        return;
+      }
+
+      const timetableDataToUse = parseUserCacheTimetablePayload(
+        cacheResult.data,
+        transformGoBackendTimetableToOldFormat
+      );
+
+      if (timetableDataToUse && timetableDataToUse.timetable) {
+        setClientCache("timetable", timetableDataToUse);
+        setRawTimetableData(timetableDataToUse);
+        const convertedData = convertTimetableDataToTimeSlots(timetableDataToUse);
+        setTimetableData(convertedData);
+        const occurrences = getSlotOccurrences(timetableDataToUse);
+        setSlotOccurrences(occurrences);
+        try {
+          localStorage.setItem("sdash_slotOccurrences", JSON.stringify(occurrences));
+        } catch (e) {
+          console.warn("[Timetable] Failed to cache slot occurrences:", e);
+        }
+        setSessionSavedTimetableOverride(null);
+        console.log("[Timetable] Rebuilt client timetable cache from Supabase user_cache row");
+      } else if (cacheResult.data == null) {
+        console.warn("[Timetable] No timetable row in Supabase user_cache");
+      } else {
+        console.warn("[Timetable] Supabase timetable payload could not be parsed to TimetableData");
+      }
+    };
+
     try {
       setLoading(true);
       setError(null);
       setIsRefreshing(true);
 
-      const access_token = getStorageItem('access_token');
+      const access_token = getStorageItem("access_token");
 
       if (!access_token) {
-        console.error('[Timetable] No access token found');
-        setError('Please sign in to view your timetable');
-        setLoading(false);
-        setIsRefreshing(false);
+        console.error("[Timetable] No access token found");
+        setError("Please sign in to view your timetable");
         return;
       }
 
-      console.log('[Timetable] 🔄 Force refreshing timetable data...');
-
-      const response = await trackPostRequest('/api/data/refresh', {
-        action: 'data_refresh',
-        dataType: 'timetable',
-        payload: {
-          ...getRequestBodyWithPassword(access_token, false),
-          data_type: 'timetable'
-        },
-        omitPayloadKeys: ['password', 'access_token'],
-      });
-
-      const result = await response.json();
-      console.log('[Timetable] Refresh API response:', result);
-      console.log('[Timetable] Refresh API response data:', result.data);
-      console.log('[Timetable] Refresh API response data type:', typeof result.data);
-
-      // Do not throw when refresh returns 502 (e.g. Go backend unreachable): still hydrate from cache below.
-      if (!response.ok || !result.success) {
-        console.warn(
-          '[Timetable] Refresh API did not complete successfully; continuing with unified cache fetch:',
-          result.error
-        );
+      if (afterModificationSave) {
+        removeClientCache("timetable");
+        console.log("[Timetable] Cleared timetable client cache before post-save backend refresh");
       } else {
-        console.log('[Timetable] ✅ Refresh completed, updating local state...');
+        console.log("[Timetable] 🔄 Force refreshing timetable data...");
       }
 
-      // Same next step as a successful refresh: pull timetable from Supabase/client cache (fetchUnifiedData).
-      console.log('[Timetable] Fetching timetable state after refresh step...');
+      try {
+        const response = await trackPostRequest("/api/data/refresh", {
+          action: "data_refresh",
+          dataType: "timetable",
+          payload: {
+            ...getRequestBodyWithPassword(access_token, false),
+            data_type: "timetable",
+          },
+          omitPayloadKeys: ["password", "access_token"],
+        });
+
+        const result = await response.json();
+        console.log("[Timetable] Refresh API response:", result);
+
+        if (!response.ok || !result.success) {
+          console.warn(
+            "[Timetable] Refresh API did not complete successfully;",
+            afterModificationSave ? "still rebuilding from Supabase user_cache:" : "continuing with unified fetch:",
+            result.error
+          );
+        } else {
+          console.log("[Timetable] ✅ Refresh completed, updating local state...");
+        }
+      } catch (refreshErr) {
+        console.warn(
+          "[Timetable] Refresh request threw;",
+          afterModificationSave ? "still rebuilding from Supabase user_cache:" : "attempting unified cache fetch:",
+          refreshErr
+        );
+      }
+
+      if (afterModificationSave) {
+        await hydrateTimetableFromSupabaseUserCache(access_token);
+        return;
+      }
+
+      console.log("[Timetable] Fetching timetable state after refresh step...");
       await fetchUnifiedData(false);
     } catch (err) {
-      // trackPostRequest or JSON parse failed — still run unified fetch (it handles errors internally).
-      console.warn('[Timetable] Refresh step threw; attempting unified cache fetch:', err);
+      console.warn("[Timetable] Refresh pipeline error:", err);
+      if (afterModificationSave) {
+        const token = getStorageItem("access_token");
+        if (token) {
+          await hydrateTimetableFromSupabaseUserCache(token);
+        }
+        return;
+      }
       await fetchUnifiedData(false);
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -1605,7 +1705,7 @@ export default function TimetablePage() {
       setEditorContextLoaded(false);
       setEditModalOpen(false);
       setEditTarget(null);
-      await refreshTimetableData();
+      await refreshTimetableData({ afterModificationSave: true });
     } catch (e) {
       console.error("[Timetable] global save", e);
       setError(e instanceof Error ? e.message : "Failed to save timetable");
