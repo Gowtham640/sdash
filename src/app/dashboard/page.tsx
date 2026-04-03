@@ -375,6 +375,11 @@ export default function Dashboard() {
         omitPayloadKeys: ['access_token'],
       });
 
+      if (!response.ok) {
+        setIsAdmin(false);
+        return;
+      }
+
       const result = await response.json();
       setIsAdmin(result.success === true && result.isAdmin === true);
     } catch (err) {
@@ -1257,7 +1262,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-sdash-bg pb-28">
-      <header className="sticky top-0 z-40 backdrop-blur-md bg-sdash-bg/80 border-b border-white/[0.06] px-4 py-3 flex items-center gap-3">
+      <header className="fixed top-0 left-0 right-0 z-40 backdrop-blur-md bg-sdash-bg/80 border-b border-white/[0.06] px-4 pb-3 flex items-center gap-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <div className="w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 overflow-hidden">
             <Image
@@ -1279,26 +1284,28 @@ export default function Dashboard() {
         >
           <RotateCw size={18} className={isRefreshing ? "animate-spin-slow" : ""} />
         </button>
-        {isAdmin && (
-          <Link
-            href="/admin"
-            aria-label="Admin"
-            className="touch-target text-sdash-text-secondary shrink-0"
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isAdmin && (
+            <Link
+              href="/admin"
+              aria-label="Admin"
+              className="touch-target text-sdash-text-secondary"
+            >
+              <Settings size={18} />
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            className="rounded-full border border-white/[0.1] px-3 py-1.5 text-xs font-sora font-semibold text-sdash-danger hover:bg-sdash-danger/10 disabled:opacity-50"
           >
-            <Settings size={18} />
-          </Link>
-        )}
-        <button
-          type="button"
-          onClick={handleLogout}
-          disabled={isLoggingOut}
-          className="shrink-0 rounded-full border border-white/[0.1] px-3 py-1.5 text-xs font-sora font-semibold text-sdash-danger hover:bg-sdash-danger/10 disabled:opacity-50"
-        >
-          {isLoggingOut ? "…" : "Log out"}
-        </button>
+            {isLoggingOut ? "…" : "Log out"}
+          </button>
+        </div>
       </header>
 
-      <main className="px-4 pt-2 space-y-2">
+      <main className="px-4 pt-2 space-y-2 mt-[calc(3.75rem+max(0px,env(safe-area-inset-top)-0.75rem))]">
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
