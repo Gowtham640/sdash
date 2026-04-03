@@ -54,7 +54,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (data.role !== 'admin') {
+    // Normalize role so casing in public.users does not mismatch strict 'admin'
+    const roleNormalized =
+      typeof data.role === "string" ? data.role.trim().toLowerCase() : "";
+
+    if (roleNormalized !== "admin") {
       return NextResponse.json(
         { success: false, error: "Access denied. Admin privileges required." },
         { status: 403 }
