@@ -2,20 +2,18 @@
 
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
-import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
+import { useQueryClient } from '@tanstack/react-query';
 import { getStorageItem, setStorageItem } from "@/lib/browserStorage";
 import { useErrorTracking } from "@/lib/useErrorTracking";
-import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
-import { deduplicateRequest } from "@/lib/requestDeduplication";
-import { registerAttendanceFetch } from "@/lib/attendancePrefetchScheduler";
 import TopAppBar from '@/components/sdash/TopAppBar';
 import PillNav from '@/components/sdash/PillNav';
 import GlassCard from '@/components/sdash/GlassCard';
 import StatChip from '@/components/sdash/StatChip';
 import SwipeableCards from '@/components/sdash/SwipeableCards';
-import { trackPostRequest } from "@/lib/postAnalytics";
-import { Check } from 'lucide-react';
+import { ArrowUpDown, Check } from 'lucide-react';
+import { useSdashMarksQuery, refetchMarksWithForce } from '@/hooks/useSdashMarksQuery';
+import { MarksPageSkeleton } from '@/components/sdash/PageSkeletons';
+import type { MarksPayload, MarksEntry } from '@/lib/sdashQuery/fetchMarksPayload';
 
 interface Assessment {
   max: number;
@@ -23,22 +21,6 @@ interface Assessment {
   score: number | null;
 }
 
-interface MarksEntry {
-  total: number | null;
-  courseCode: string;
-  assessments: Assessment[];
-  courseTitle: string;
-  /** Credits when provided by API (e.g. marks scraper middle column). */
-  credit?: string;
-}
-
-interface MarksPayload {
-  url: string;
-  entries: MarksEntry[];
-  fetched_at: string;
-}
-
-const MARKS_CACHE_KEY = 'marks';
 const MARKS_VIEW_STORAGE_KEY = 'sdash_marks_view_mode';
 const MARKS_SORT_STORAGE_KEY = 'sdash_marks_sort_mode';
 
@@ -58,38 +40,16 @@ function readMarksSortMode(): MarksSortMode {
   return 'general';
 }
 
-const extractMarksPayload = (value: unknown): MarksPayload | null => {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-
-  const candidate = value as { entries?: unknown; url?: string; fetched_at?: string };
-  if (!Array.isArray(candidate.entries)) {
-    return null;
-  }
-
-  return {
-    url: typeof candidate.url === 'string' ? candidate.url : '',
-    fetched_at: typeof candidate.fetched_at === 'string' ? candidate.fetched_at : '',
-    entries: candidate.entries as MarksEntry[],
-  };
-};
-
-const getInitialMarksPayload = (): MarksPayload | null => {
-  const cached = getClientCache<MarksPayload>(MARKS_CACHE_KEY);
-  if (!cached) {
-    return null;
-  }
-  return extractMarksPayload(cached);
-};
-
 export default function MarksPage() {
-  const initialMarksPayload = useMemo(() => getInitialMarksPayload(), []);
-  const [marksPayload, setMarksPayload] = useState<MarksPayload | null>(initialMarksPayload);
-  const [loading, setLoading] = useState(!initialMarksPayload);
-  const [error, setError] = useState<string | null>(null);
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [currentFact, setCurrentFact] = useState(DEFAULT_RANDOM_FACT);
+  const queryClient = useQueryClient();
+  const {
+    data: marksQueryData,
+    isFetching,
+    isPending,
+    error: marksQueryError,
+  } = useSdashMarksQuery();
+
+  const marksPayload = marksQueryData ?? null;
   const [marksViewMode, setMarksViewModeState] = useState<'cards' | 'list'>(readMarksViewMode);
   const [marksSortMode, setMarksSortModeState] = useState<MarksSortMode>(readMarksSortMode);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -104,7 +64,6 @@ export default function MarksPage() {
     setMarksSortModeState(mode);
     setStorageItem(MARKS_SORT_STORAGE_KEY, mode);
   }, []);
-  const fetchMarksDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
 
   const entries = useMemo(() => marksPayload?.entries ?? [], [marksPayload?.entries]);
 
@@ -403,145 +362,48 @@ export default function MarksPage() {
     );
   };
 
-  useErrorTracking(error, '/marks');
+  const errorMessage = useMemo(() => {
+    if (!marksQueryError) {
+      return null;
+    }
+    return marksQueryError instanceof Error
+      ? marksQueryError.message
+      : 'Failed to fetch marks data';
+  }, [marksQueryError]);
 
-  useEffect(() => {
-    fetchMarksDataRef.current = fetchMarksData;
-  });
-
-  useEffect(() => {
-    void fetchMarksDataRef.current?.();
-  }, []);
-
-  useEffect(() => {
-    if (!loading) return;
-    setCurrentFact(getRandomFact());
-    const interval = setInterval(() => {
-      setCurrentFact(getRandomFact());
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [loading]);
-
-  const handleReAuthenticate = () => {
-    setShowPasswordModal(false);
-  };
+  useErrorTracking(errorMessage, '/marks');
 
   const refreshMarksData = () => {
-    fetchMarksData(true);
+    void refetchMarksWithForce(queryClient).catch((err) => {
+      console.error('[Marks] Force refresh failed:', err);
+    });
   };
 
-  const fetchMarksData = async (forceRefresh = false) => {
-    try {
-      const shouldShowLoading = forceRefresh || !marksPayload;
-      setLoading(shouldShowLoading);
-      setError(null);
+  const showBlockingSkeleton = (isPending || isFetching) && !marksPayload;
 
-      const access_token = getStorageItem('access_token');
-      if (!access_token) {
-        setError('Please sign in to view marks');
-        return;
-      }
-
-      if (forceRefresh) {
-        removeClientCache(MARKS_CACHE_KEY);
-      }
-
-      let cachedPayload: MarksPayload | null = null;
-      let needsBackgroundRefresh = forceRefresh;
-
-      if (!forceRefresh) {
-        cachedPayload = getClientCache<MarksPayload>(MARKS_CACHE_KEY);
-
-        if (!cachedPayload) {
-          try {
-            const cacheResponse = await trackPostRequest('/api/data/cache', {
-              action: 'cache_fetch',
-              dataType: 'marks',
-              primary: false,
-              payload: { access_token, data_type: 'marks' },
-              omitPayloadKeys: ['access_token'],
-            });
-            const cacheResult = await cacheResponse.json();
-            if (cacheResult.success && cacheResult.data) {
-              const extracted = extractMarksPayload(cacheResult.data);
-              if (extracted) {
-                cachedPayload = extracted;
-                setMarksPayload(extracted);
-                if (cacheResult.isExpired) {
-                  needsBackgroundRefresh = true;
-                }
-              }
-            }
-          } catch (cacheError) {
-            console.error('[Marks] ❌ Error fetching cache:', cacheError);
-          }
-        } else {
-          setMarksPayload(cachedPayload);
-        }
-      }
-
-      if (!cachedPayload || forceRefresh || needsBackgroundRefresh) {
-        const requestKey = `fetch_marks_${access_token.substring(0, 10)}`;
-        const apiResult = await deduplicateRequest(requestKey, async () => {
-          const response = await trackPostRequest('/api/data/all', {
-            action: 'data_unified_fetch',
-            dataType: 'marks',
-            payload: getRequestBodyWithPassword(access_token, forceRefresh),
-            omitPayloadKeys: ['password', 'access_token'],
-          });
-          const result = await response.json();
-          return { response, result };
-        });
-
-        const { response, result } = apiResult;
-        if (!response.ok || result.error === 'session_expired') {
-          setError('Your session has expired. Please re-enter your password.');
-          setShowPasswordModal(true);
-          return;
-        }
-
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to fetch marks data');
-        }
-
-        const payloadCandidate = extractMarksPayload(result.data?.marks ?? result.data);
-        if (!payloadCandidate) {
-          throw new Error('Marks data missing from response');
-        }
-
-        setMarksPayload(payloadCandidate);
-        setClientCache(MARKS_CACHE_KEY, payloadCandidate);
-        registerAttendanceFetch();
-      }
-    } catch (err) {
-      console.error('[Marks] Error fetching data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch marks data');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const renderLoading = () => (
-    <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col">
-      <TopAppBar title="Marks" showBack onRefresh={refreshMarksData} isRefreshing={loading} />
-      <main className="flex flex-col justify-center flex-1 gap-6 px-4 py-8">
-        <div className="text-sdash-text-primary font-sora text-lg font-bold text-center">Loading marks data...</div>
-        <div className="max-w-2xl mx-auto w-full text-center">
-          <div className="text-sdash-text-primary text-base font-sora font-bold mb-4">
-            Meanwhile, here are some interesting facts:
-          </div>
-          <div className="text-sdash-text-secondary text-sm font-sora italic">
-            {currentFact}
-          </div>
+  if (errorMessage === 'SESSION_EXPIRED') {
+    return (
+      <div className="min-h-screen bg-sdash-bg flex flex-col items-center justify-center px-4 pb-28">
+        <div className="bg-sdash-surface-1 border border-white/[0.08] rounded-[20px] p-8 max-w-md w-full mx-4">
+          <h2 className="text-xl font-sora font-semibold text-sdash-text-primary mb-4">Session expired</h2>
+          <p className="text-sdash-text-secondary text-sm mb-6">
+            Your portal session has expired. Please sign in again to continue.
+          </p>
+          <Link
+            href="/auth"
+            className="block w-full text-center bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full py-3 touch-target"
+          >
+            Sign in
+          </Link>
         </div>
-      </main>
-      <PillNav />
-    </div>
-  );
+        <PillNav />
+      </div>
+    );
+  }
 
   const renderEmpty = () => (
     <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col">
-      <TopAppBar title="Marks" showBack onRefresh={refreshMarksData} isRefreshing={loading} />
+      <TopAppBar title="Marks" showBack onRefresh={refreshMarksData} isRefreshing={isFetching} />
       <main className="flex flex-col items-center justify-center flex-1 gap-4 px-4 py-8 text-center">
         <div className="text-sdash-text-primary text-base sm:text-lg font-sora">
           No marks data available
@@ -554,8 +416,8 @@ export default function MarksPage() {
     </div>
   );
 
-  if (loading && !marksPayload) {
-    return renderLoading();
+  if (showBlockingSkeleton) {
+    return <MarksPageSkeleton />;
   }
 
   if (!marksPayload) {
@@ -564,7 +426,7 @@ export default function MarksPage() {
 
   return (
     <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col overflow-y-auto">
-      <TopAppBar title="Marks" showBack onRefresh={refreshMarksData} isRefreshing={loading} />
+      <TopAppBar title="Marks" showBack onRefresh={refreshMarksData} isRefreshing={isFetching} />
 
       <main className="px-4 pt-3 w-full max-w-lg mx-auto">
         <div className="flex items-center justify-between gap-3 -mx-4 px-4">
@@ -608,14 +470,16 @@ export default function MarksPage() {
 
         <div className="mt-2 flex justify-end">
           <div className="relative inline-flex" ref={sortMenuRef}>
+            {/* Sort: icon control (matches Cards/List chrome) */}
             <button
               type="button"
               onClick={() => setSortMenuOpen((o) => !o)}
-              className="text-[11px] font-sora text-sdash-text-muted hover:text-sdash-text-secondary/90"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 text-sdash-text-secondary transition-colors hover:text-sdash-text-primary"
+              aria-label="Sort marks"
               aria-expanded={sortMenuOpen}
               aria-haspopup="menu"
             >
-              sort
+              <ArrowUpDown className="h-4 w-4" strokeWidth={2} />
             </button>
             {sortMenuOpen ? (
               <div
@@ -716,24 +580,6 @@ export default function MarksPage() {
       </main>
 
       <PillNav />
-
-      {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-sdash-surface-1 border border-white/[0.08] rounded-[20px] p-8 max-w-md w-full mx-4">
-            <h2 className="text-xl font-sora font-semibold text-sdash-text-primary mb-4">Session expired</h2>
-            <p className="text-sdash-text-secondary text-sm mb-6">
-              Your portal session has expired. Please sign in again to continue.
-            </p>
-            <Link
-              href="/auth"
-              onClick={handleReAuthenticate}
-              className="block w-full text-center bg-sdash-accent text-sdash-text-primary font-sora font-medium text-sm rounded-full py-3 touch-target"
-            >
-              Sign in
-            </Link>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

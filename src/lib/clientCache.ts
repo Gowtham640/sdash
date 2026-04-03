@@ -1,4 +1,4 @@
-import { getStorageItem } from './browserStorage';
+import { getStorageItem, setStorageItem, removeStorageItem } from './browserStorage';
 
 /** Supported cache keys shared between in-memory storage and Supabase user_cache */
 export type CacheDataType = 'attendance' | 'marks' | 'calendar' | 'timetable' | 'unified';
@@ -20,6 +20,15 @@ let cachedUserId: string | null = null;
 let cachedTokenForUserId: string | null = null;
 
 const ACCESS_TOKEN_KEY = 'access_token';
+
+/** localStorage key: sdash_cache_${userId}:${dataType} */
+export function buildClientCacheStorageKey(userId: string, dataType: CacheDataType): string {
+  return `sdash_cache_${userId}:${dataType}`;
+}
+
+export function resetClientCacheUserIdMemory(): void {
+  resetUserIdCache();
+}
 
 function resetUserIdCache() {
   cachedUserId = null;
@@ -53,6 +62,13 @@ function decodeJwt(token: string): Record<string, unknown> | null {
     console.warn('[ClientCache] Failed to decode JWT payload', error);
     return null;
   }
+}
+
+/**
+ * Current user id (JWT sub) for cache namespacing. Never use for storage keys without a token present.
+ */
+export function getClientCacheUserId(): string | null {
+  return getCurrentUserId();
 }
 
 function getCurrentUserId(): string | null {
@@ -100,32 +116,135 @@ function hasExpired(expiresAt: string | null): boolean {
   return Date.now() >= parsed;
 }
 
-function persistEntry(key: string, entry: ClientCacheEntry): void {
+function parseStoredEntry(raw: string | null): ClientCacheEntry | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const o = parsed as Record<string, unknown>;
+    if (!('data' in o)) {
+      return null;
+    }
+    return {
+      data: o.data,
+      expiresAt: typeof o.expiresAt === 'string' || o.expiresAt === null ? (o.expiresAt as string | null) : null,
+    };
+  } catch (error) {
+    console.warn('[ClientCache] Failed to parse stored cache entry', error);
+    return null;
+  }
+}
+
+function persistEntryToDisk(userId: string, dataType: CacheDataType, entry: ClientCacheEntry): void {
+  const storageKey = buildClientCacheStorageKey(userId, dataType);
+  try {
+    const ok = setStorageItem(storageKey, JSON.stringify(entry));
+    if (!ok) {
+      console.warn('[ClientCache] Failed to persist entry to storage:', storageKey);
+    }
+  } catch (error) {
+    console.warn('[ClientCache] persistEntryToDisk error:', error);
+  }
+}
+
+function removeEntryFromDisk(userId: string, dataType: CacheDataType): void {
+  const storageKey = buildClientCacheStorageKey(userId, dataType);
+  try {
+    removeStorageItem(storageKey);
+  } catch (error) {
+    console.warn('[ClientCache] removeEntryFromDisk error:', error);
+  }
+}
+
+function hydrateFromDisk(userId: string, dataType: CacheDataType): ClientCacheEntry | null {
+  const storageKey = buildClientCacheStorageKey(userId, dataType);
+  const raw = getStorageItem(storageKey);
+  const entry = parseStoredEntry(raw);
+  return entry;
+}
+
+function persistEntry(key: string, entry: ClientCacheEntry, userId: string, dataType: CacheDataType): void {
   cacheStore.set(key, entry);
+  persistEntryToDisk(userId, dataType, entry);
 }
 
-function dropEntry(key: string): void {
+function dropEntry(key: string, userId: string, dataType: CacheDataType): void {
   cacheStore.delete(key);
+  removeEntryFromDisk(userId, dataType);
 }
 
+/**
+ * Returns cached payload if present, even when past expiresAt (stale).
+ * Order: memory Map, then localStorage hydration into Map.
+ */
 export function getClientCache<T>(dataType: CacheDataType): T | null {
   const key = getCacheKeyForType(dataType);
   if (!key) {
     return null;
   }
 
-  const entry = cacheStore.get(key);
+  const userId = getCurrentUserId();
+  if (!userId) {
+    return null;
+  }
+
+  let entry = cacheStore.get(key);
+  if (!entry) {
+    const fromDisk = hydrateFromDisk(userId, dataType);
+    if (fromDisk) {
+      cacheStore.set(key, fromDisk);
+      entry = fromDisk;
+    }
+  }
+
   if (!entry) {
     return null;
   }
 
+  // Stale entries are kept for SWR; do not delete on read.
   if (CACHE_TYPES_WITH_SUPABASE_EXPIRY.has(dataType) && hasExpired(entry.expiresAt)) {
-    dropEntry(key);
-    console.log(`[ClientCache] Cached ${dataType} expired and was cleared`);
-    return null;
+    console.log(`[ClientCache] Cached ${dataType} is stale (past expiresAt) but retained for instant UI`);
   }
 
   return entry.data as T;
+}
+
+/**
+ * True when an entry exists for the current user and is past expiresAt (attendance/marks/timetable only).
+ */
+export function isClientCacheStale(dataType: CacheDataType): boolean {
+  const key = getCacheKeyForType(dataType);
+  if (!key) {
+    return false;
+  }
+
+  const userId = getCurrentUserId();
+  if (!userId) {
+    return false;
+  }
+
+  let entry = cacheStore.get(key);
+  if (!entry) {
+    const fromDisk = hydrateFromDisk(userId, dataType);
+    if (fromDisk) {
+      cacheStore.set(key, fromDisk);
+      entry = fromDisk;
+    }
+  }
+
+  if (!entry) {
+    return false;
+  }
+
+  if (!CACHE_TYPES_WITH_SUPABASE_EXPIRY.has(dataType)) {
+    return false;
+  }
+
+  return hasExpired(entry.expiresAt);
 }
 
 export function setClientCache<T>(dataType: CacheDataType, data: T, options?: CacheSetOptions): boolean {
@@ -134,14 +253,24 @@ export function setClientCache<T>(dataType: CacheDataType, data: T, options?: Ca
     return false;
   }
 
+  const userId = getCurrentUserId();
+  if (!userId) {
+    return false;
+  }
+
   const existing = cacheStore.get(key);
   const expiresAt =
     options?.expiresAt ?? existing?.expiresAt ?? (CACHE_TYPES_WITH_SUPABASE_EXPIRY.has(dataType) ? null : null);
 
-  persistEntry(key, {
-    data,
-    expiresAt,
-  });
+  persistEntry(
+    key,
+    {
+      data,
+      expiresAt,
+    },
+    userId,
+    dataType
+  );
 
   return true;
 }
@@ -152,30 +281,81 @@ export function removeClientCache(dataType: CacheDataType): void {
     return;
   }
 
-  dropEntry(key);
+  const userId = getCurrentUserId();
+  if (!userId) {
+    cacheStore.delete(key);
+    return;
+  }
+
+  dropEntry(key, userId, dataType);
 }
 
+/**
+ * Clears memory and all sdash_cache_* keys in browser storage (current storage backend).
+ */
 export function clearAllClientCache(): void {
   cacheStore.clear();
   resetUserIdCache();
+
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const storage = window.localStorage;
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (k && k.startsWith('sdash_cache_')) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => storage.removeItem(k));
+  } catch (error) {
+    console.warn('[ClientCache] clearAllClientCache localStorage scan failed', error);
+  }
 }
 
+/**
+ * True when a usable entry exists and expiresAt has not passed (same intent as before persistence).
+ * Does not delete entries on read.
+ */
 export function isClientCacheValid(dataType: CacheDataType): boolean {
   const key = getCacheKeyForType(dataType);
   if (!key) {
     return false;
   }
 
-  const entry = cacheStore.get(key);
+  const userId = getCurrentUserId();
+  if (!userId) {
+    return false;
+  }
+
+  let entry = cacheStore.get(key);
+  if (!entry) {
+    const fromDisk = hydrateFromDisk(userId, dataType);
+    if (fromDisk) {
+      cacheStore.set(key, fromDisk);
+      entry = fromDisk;
+    }
+  }
+
   if (!entry) {
     return false;
   }
 
   if (CACHE_TYPES_WITH_SUPABASE_EXPIRY.has(dataType) && hasExpired(entry.expiresAt)) {
-    dropEntry(key);
     return false;
   }
 
   return true;
 }
 
+export function getClientCacheWithMeta<T>(dataType: CacheDataType): {
+  data: T | null;
+  isStale: boolean;
+} {
+  const data = getClientCache<T>(dataType);
+  const stale = isClientCacheStale(dataType);
+  return { data, isStale: stale };
+}

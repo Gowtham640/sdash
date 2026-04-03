@@ -11,7 +11,6 @@ import {
   type TimetableDayOrder,
 } from "@/lib/timetableUtils";
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
-import { getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { useErrorTracking } from "@/lib/useErrorTracking";
@@ -19,6 +18,7 @@ import type html2canvas from 'html2canvas';
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import TopAppBar from "@/components/sdash/TopAppBar";
+import { TimetablePageSkeleton } from "@/components/sdash/PageSkeletons";
 import PillNav from "@/components/sdash/PillNav";
 import GlassCard from "@/components/sdash/GlassCard";
 import StatChip from "@/components/sdash/StatChip";
@@ -335,7 +335,6 @@ export default function TimetablePage() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [currentFact, setCurrentFact] = useState<string>("");
   const fetchUnifiedDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
   /** Active day order tab for compass-style slot list */
   const [activeDayOrder, setActiveDayOrder] = useState<string>("DO 1");
@@ -377,20 +376,6 @@ export default function TimetablePage() {
     if (!todayDayOrderLabel) return;
     setActiveDayOrder(todayDayOrderLabel);
   }, [todayDayOrderLabel, hasUserSelectedDayOrder]);
-
-  // Rotate facts every 8 seconds while loading
-  useEffect(() => {
-    if (!mounted) return;
-    if (!loading) return;
-
-    // Set an initial fact once hydration is complete
-    setCurrentFact(getRandomFact());
-    const interval = setInterval(() => {
-      setCurrentFact(getRandomFact());
-    }, 8000);
-
-    return () => clearInterval(interval);
-  }, [loading, mounted]);
 
   const refreshTimetableData = async () => {
     try {
@@ -1169,23 +1154,7 @@ export default function TimetablePage() {
   );
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col">
-        <TopAppBar title="Timetable" showBack />
-        <main className="flex flex-col justify-center flex-1 gap-6 px-4 py-8">
-          <div className="text-sdash-text-primary font-sora text-lg font-bold text-center">Loading timetable data...</div>
-          <div className="max-w-2xl mx-auto w-full">
-            <div className="text-sdash-text-primary text-base font-sora font-bold mb-4 text-center">
-              Meanwhile, here are some interesting facts:
-            </div>
-            <div className="text-sdash-text-secondary text-sm font-sora text-center italic">
-              {currentFact}
-            </div>
-          </div>
-        </main>
-        <PillNav />
-      </div>
-    );
+    return <TimetablePageSkeleton />;
   }
 
   // Show empty state if no timetable data but no error (allows refresh button to work)

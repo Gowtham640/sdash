@@ -10,8 +10,9 @@ import { setStorageItem, getStorageItem, removeStorageItem } from "@/lib/browser
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
-import { SkeletonLoader } from "@/components/ui/loading";
-import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
+import { DashboardPageSkeleton } from "@/components/sdash/PageSkeletons";
+import { useQueryClient } from "@tanstack/react-query";
+import { getClientCache, setClientCache, removeClientCache, clearAllClientCache } from "@/lib/clientCache";
 import { normalizeAttendanceData, normalizeMarksData } from "@/lib/dataTransformers";
 import PwaInstallPrompt from '@/components/PwaInstallPrompt';
 import { useRouter } from "next/navigation";
@@ -157,6 +158,7 @@ interface CalendarEvent {
 type CachePayloadType = 'attendance' | 'marks' | 'timetable';
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
   // SSR + first client paint must match: do not read storage until mount (see mount effect)
   const [calendarData, setCalendarData] = useState<CalendarEvent[]>([]);
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
@@ -167,7 +169,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [showSkeleton, setShowSkeleton] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const fetchUnifiedDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
@@ -382,32 +383,6 @@ export default function Dashboard() {
     }
   };
 
-  // Handle skeleton display with 2s delay when no cache found
-  useEffect(() => {
-    if (!loading) {
-      setShowSkeleton(false);
-      return;
-    }
-
-    // Check if we have any cache
-    const cachedAttendance = getClientCache('attendance');
-    const cachedMarks = getClientCache('marks');
-    const cachedTimetable = getClientCache('timetable');
-    const hasAnyCache = !!(cachedAttendance || cachedMarks || cachedTimetable);
-
-    if (!hasAnyCache) {
-      // Wait 2 seconds before showing skeleton
-      const timer = setTimeout(() => {
-        setShowSkeleton(true);
-      }, 2000);
-
-      return () => clearTimeout(timer);
-    } else {
-      // If cache exists, show skeleton immediately
-      setShowSkeleton(true);
-    }
-  }, [loading]);
-
   const handleReAuthenticate = () => {
     setShowPasswordModal(false);
   };
@@ -423,6 +398,8 @@ export default function Dashboard() {
       console.error('[Dashboard] Logout failed:', err);
     } finally {
       clearPortalPassword();
+      clearAllClientCache();
+      queryClient.clear();
       removeStorageItem('access_token');
       removeStorageItem('refresh_token');
       removeStorageItem('user');
@@ -1097,32 +1074,15 @@ export default function Dashboard() {
     console.log('[Dashboard] 💾 Saved to client-side cache (1 hour TTL) - calendar excluded (always fresh)');
   };
 
-  const renderDashboardSkeleton = () => (
-    <div className="min-h-screen bg-sdash-bg pb-28 flex flex-col gap-6 px-4 pt-6">
-      <div className="flex items-center gap-3">
-        <SkeletonLoader className="h-9 w-9 rounded-lg" />
-        <SkeletonLoader className="h-6 flex-1 rounded-lg max-w-[140px]" />
-      </div>
-      <SkeletonLoader className="h-8 w-2/3 rounded-lg" />
-      <div className="flex gap-3 overflow-x-auto">
-        <SkeletonLoader className="h-10 w-28 shrink-0 rounded-full" />
-        <SkeletonLoader className="h-10 w-28 shrink-0 rounded-full" />
-        <SkeletonLoader className="h-10 w-28 shrink-0 rounded-full" />
-      </div>
-      <SkeletonLoader className="h-40 w-full rounded-[20px]" />
-      <SkeletonLoader className="h-48 w-full rounded-[20px]" />
-    </div>
-  );
-
   if (loading) {
-    return renderDashboardSkeleton();
+    return <DashboardPageSkeleton />;
   }
 
   const isSessionError = error ? /(session|sign in)/i.test(error) : false;
 
   if (error) {
     if (!isSessionError) {
-      return renderDashboardSkeleton();
+      return <DashboardPageSkeleton />;
     }
 
     return (
