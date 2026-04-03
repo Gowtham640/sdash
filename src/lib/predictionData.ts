@@ -1,4 +1,9 @@
-import { normalizeCalendarDayOrder, type CalendarEvent, type DayOrderStats, type SlotOccurrence } from './timetableUtils';
+import {
+  buildDayOrderLookupConsolidated,
+  type CalendarEvent,
+  type DayOrderStats,
+  type SlotOccurrence,
+} from './timetableUtils';
 
 let sharedSlotOccurrences: SlotOccurrence[] = [];
 let sharedCalendarSnapshot: CalendarEvent[] = [];
@@ -8,37 +13,6 @@ const formatDateKey = (date: Date) => {
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear().toString();
     return `${day}/${month}/${year}`;
-};
-
-const parseCalendarDate = (dateStr: string): Date | null => {
-    if (!dateStr) return null;
-
-    // DD/MM/YYYY format
-    if (dateStr.includes('/')) {
-        const parts = dateStr.split('/').map(part => parseInt(part, 10));
-        if (parts.length === 3 && !parts.some(isNaN)) {
-            const [day, month, year] = parts;
-            return new Date(year, month - 1, day);
-        }
-    }
-
-    // ISO or other parsable formats
-    const isoDate = new Date(dateStr);
-    return isNaN(isoDate.getTime()) ? null : isoDate;
-};
-
-const buildDayOrderLookup = (calendarData: CalendarEvent[]): Record<string, number> => {
-    const lookup: Record<string, number> = {};
-    calendarData.forEach(event => {
-        if (!event?.date) return;
-        const normalizedOrder = normalizeCalendarDayOrder(event.day_order);
-        if (!normalizedOrder) return;
-        const eventDate = parseCalendarDate(event.date);
-        if (!eventDate) return;
-        const key = formatDateKey(eventDate);
-        lookup[key] = normalizedOrder;
-    });
-    return lookup;
 };
 
 const iterateDateRange = (startDate: Date, endDate: Date, callback: (date: Date) => void) => {
@@ -79,7 +53,7 @@ export const getDayOrderStatsFromSharedData = (
         console.warn('[PredictionData] No calendar data available to calculate day order stats');
         return { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     }
-    const lookup = buildDayOrderLookup(calendarSource);
+    const lookup = buildDayOrderLookupConsolidated(calendarSource);
     console.log(`[PredictionData] Built day order lookup with ${Object.keys(lookup).length} entries`);
     const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     iterateDateRange(startDate, endDate, date => {

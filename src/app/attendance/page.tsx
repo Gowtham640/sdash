@@ -18,7 +18,7 @@ import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientC
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { trackPostRequest } from "@/lib/postAnalytics";
-import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, aggregateOdmlHours, type OdmlRecord } from '@/lib/odmlStorage';
+import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, odmlRecordsToLeavePeriods, parseLocalYyyyMmDd, type OdmlRecord } from '@/lib/odmlStorage';
 import { normalizeAttendanceData } from '@/lib/dataTransformers';
 import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
@@ -606,7 +606,7 @@ export default function AttendancePage() {
         const currentShowOdmlApplied = showOdmlAppliedRef.current;
 
         if (savedRecords.length > 0 && currentShowOdmlApplied) {
-          applySavedOdml(savedRecords);
+          await applySavedOdml(savedRecords);
         } else if (savedRecords.length === 0 && currentShowOdmlApplied && isOdmlMode) {
           // No saved records but was in ODML mode, restore original
           setAttendanceData(originalAttendanceData);
@@ -623,74 +623,82 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [originalAttendanceData, slotOccurrences, calendarData, showOdmlApplied]);
 
-  // Apply saved ODML to attendance data
-  const applySavedOdml = (records: OdmlRecord[]) => {
-    if (!attendanceData || !originalAttendanceData || records.length === 0) {
+  /**
+   * Merge precomputed ODML rows into UI state (single source for list + predictionResults).
+   * Always keys off originalAttendanceData so we never double-adjust portal numbers.
+   */
+  const applyOdmlPredictionResults = useCallback(
+    (odmlResults: PredictionResult[]) => {
+      if (!originalAttendanceData) {
+        return;
+      }
+
+      const resultByCode = new Map<string, PredictionResult>();
+      odmlResults.forEach((row) => {
+        if (row.subject?.subject_code) {
+          resultByCode.set(row.subject.subject_code, row);
+        }
+      });
+
+      const adjustedData: AttendanceData = {
+        ...originalAttendanceData,
+        all_subjects: originalAttendanceData.all_subjects.map((subject) => {
+          if (!subject) return subject;
+          const pred = resultByCode.get(subject.subject_code);
+          if (!pred) {
+            return subject;
+          }
+          const adjustedAbsent =
+            pred.odmlAdjustedTotalAbsent ?? pred.absentHoursDuringLeave;
+          const clampedPct = pred.predictedAttendance;
+          return {
+            ...subject,
+            hours_absent: String(adjustedAbsent),
+            attendance: clampedPct.toFixed(2),
+            attendance_percentage: clampedPct.toFixed(2),
+          };
+        }),
+      };
+
+      const adjustedByCode = new Map(
+        adjustedData.all_subjects
+          .filter((s): s is AttendanceSubject => Boolean(s))
+          .map((s) => [s.subject_code, s])
+      );
+      const resultsForDisplay = odmlResults.map((row) => ({
+        ...row,
+        subject: adjustedByCode.get(row.subject.subject_code) ?? row.subject,
+      }));
+
+      setAttendanceData(adjustedData);
+      setPredictionResults(resultsForDisplay);
+      setIsOdmlMode(true);
+      setIsPredictionMode(false);
+    },
+    [originalAttendanceData]
+  );
+
+  // Apply saved ODML using the same calendar + slot math as "Calculate ODML" (not stored subject_hours sums)
+  const applySavedOdml = async (records: OdmlRecord[]) => {
+    if (!originalAttendanceData || records.length === 0) {
+      return;
+    }
+    if (!slotOccurrences.length) {
+      console.warn('[Attendance] applySavedOdml: skipping — no slot occurrences yet');
       return;
     }
 
-    // Aggregate hours across all periods
-    const aggregatedHours = aggregateOdmlHours(records);
-
-    // Create adjusted attendance data
-    const adjustedData: AttendanceData = {
-      ...originalAttendanceData,
-      all_subjects: originalAttendanceData.all_subjects.map(subject => {
-        if (!subject) return subject;
-
-        const odmlHours = aggregatedHours[subject.subject_code] || 0;
-        const currentConducted = parseInt(subject.hours_conducted) || 0;
-        const currentAbsent = parseInt(subject.hours_absent) || 0;
-        const currentPresent = currentConducted - currentAbsent;
-
-        // Apply ODML adjustments
-        const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
-        const adjustedPresent = currentPresent + odmlHours;
-        const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
-        const clampedAttendance = clampAttendance(adjustedAttendance);
-
-        return {
-          ...subject,
-          hours_absent: adjustedAbsent.toString(),
-          attendance: clampedAttendance.toFixed(2),
-          attendance_percentage: clampedAttendance.toFixed(2)
-        };
-      })
-    };
-
-    // Calculate prediction results for display
-    const results: PredictionResult[] = adjustedData.all_subjects.map(subject => {
-      if (!subject) return null as any;
-
-      const odmlHours = aggregatedHours[subject.subject_code] || 0;
-      const currentConducted = parseInt(originalAttendanceData.all_subjects.find(s => s?.subject_code === subject.subject_code)?.hours_conducted || '0') || 0;
-      const currentAbsent = parseInt(originalAttendanceData.all_subjects.find(s => s?.subject_code === subject.subject_code)?.hours_absent || '0') || 0;
-      const currentPresent = currentConducted - currentAbsent;
-      const currentAttendance = currentConducted > 0 ? (currentPresent / currentConducted) * 100 : 0;
-
-      const adjustedAbsent = Math.max(0, currentAbsent - odmlHours);
-      const adjustedPresent = currentPresent + odmlHours;
-      const adjustedAttendance = currentConducted > 0 ? (adjustedPresent / currentConducted) * 100 : 0;
-      const clampedPredictedAttendance = clampAttendance(adjustedAttendance);
-
-      return {
-        subject,
-        currentAttendance,
-        predictedAttendance: clampedPredictedAttendance,
-        totalHoursTillEndDate: 0,
-        presentHoursTillStartDate: adjustedPresent,
-        absentHoursDuringLeave: adjustedAbsent,
-        leavePeriods: [],
-        leavePeriod: 'OD/ML Adjusted',
-        odmlPeriods: [],
-        odmlReductionHours: odmlHours
-      };
-    }).filter(r => r !== null);
-
-    setAttendanceData(adjustedData);
-    setPredictionResults(results);
-    setIsOdmlMode(true);
-    setIsPredictionMode(false);
+    try {
+      const periods = odmlRecordsToLeavePeriods(records);
+      const odmlResults = await calculateODMLAdjustedAttendance(
+        originalAttendanceData,
+        slotOccurrences,
+        periods
+      );
+      applyOdmlPredictionResults(odmlResults);
+    } catch (error) {
+      console.error('[Attendance] applySavedOdml failed:', error);
+    }
   };
 
   // Rotate facts every 8 seconds while loading
@@ -940,7 +948,8 @@ export default function AttendancePage() {
       return;
     }
 
-    if (!attendanceData) {
+    // Always base ODML on raw portal snapshot to avoid double-adjusting displayed rows
+    if (!originalAttendanceData) {
       return;
     }
 
@@ -952,7 +961,7 @@ export default function AttendancePage() {
       await ensureUnifiedCalendarCache();
       const calendarForOdml = await fetchCalendarFromSupabase();
       const results = await calculateODMLAdjustedAttendance(
-        attendanceData,
+        originalAttendanceData,
         slotOccurrences,
         periods
       );
@@ -964,8 +973,8 @@ export default function AttendancePage() {
         for (const period of periods) {
           const subjectHours: Record<string, number> = {};
 
-          if (attendanceData && attendanceData.all_subjects) {
-            attendanceData.all_subjects.forEach(subject => {
+          if (originalAttendanceData.all_subjects) {
+            originalAttendanceData.all_subjects.forEach(subject => {
               if (!subject) return;
               const periodHours = calculateSubjectHoursInDateRange(
                 subject,
@@ -999,16 +1008,17 @@ export default function AttendancePage() {
         const savedRecords = await fetchOdmlRecords(access_token);
         setSavedOdmlRecords(savedRecords);
         if (savedRecords.length > 0) {
-          applySavedOdml(savedRecords);
+          await applySavedOdml(savedRecords);
           setShowOdmlApplied(true);
+        } else {
+          // Saves failed or nothing persisted: still show this session’s calculation from portal baseline
+          applyOdmlPredictionResults(results);
         }
       } else {
         toast.error('Sign in required to save OD/ML.');
+        applyOdmlPredictionResults(results);
       }
 
-      setPredictionResults(results);
-      setIsOdmlMode(true);
-      setIsPredictionMode(false);
       setShowODMLModal(false);
     } catch (err) {
       console.error('OD/ML calculation error:', err);
@@ -1052,9 +1062,7 @@ export default function AttendancePage() {
       handleExitOdmlView();
     } else {
       setShowOdmlApplied(true);
-      applySavedOdml(savedOdmlRecords);
-      setIsOdmlMode(true);
-      setIsPredictionMode(false);
+      void applySavedOdml(savedOdmlRecords);
     }
   };
 
@@ -1074,7 +1082,7 @@ export default function AttendancePage() {
   };
 
   const formatOdmlDate = (value: string) => {
-    const date = new Date(value);
+    const date = parseLocalYyyyMmDd(value);
     if (Number.isNaN(date.getTime())) {
       return value;
     }
@@ -1099,7 +1107,7 @@ export default function AttendancePage() {
       setSavedOdmlRecords(updatedRecords);
 
       if (updatedRecords.length > 0 && showOdmlApplied) {
-        applySavedOdml(updatedRecords);
+        await applySavedOdml(updatedRecords);
       } else if (updatedRecords.length === 0) {
         setShowOdmlApplied(false);
         if (originalAttendanceData) {
@@ -1414,7 +1422,7 @@ export default function AttendancePage() {
     }
   };
 
-  // Calculate predicted margin: simply subtract absent hours during leave from current margin
+  // Predicted margin: prediction uses future absent slice; ODML uses only odmlReductionHours (never total adjusted absent)
   const getPredictedMargin = useCallback((
     subject: AttendanceSubject,
     prediction: PredictionResult,
@@ -1423,17 +1431,15 @@ export default function AttendancePage() {
     // Get current margin value (positive for margin, negative for required)
     const currentMarginValue = requiredMargin.type === 'margin' ? requiredMargin.value : -requiredMargin.value;
 
-    // Get absent hours during leave period
-    const absentHoursDuringLeave = prediction.absentHoursDuringLeave || 0;
-
-    // For OD/ML mode, we might have reduction hours (absences reduced), so adjust accordingly
-    let adjustment = absentHoursDuringLeave;
-    if (isOdmlMode && prediction.odmlReductionHours) {
-      // OD/ML reduces absences, so margin should increase
-      adjustment = -prediction.odmlReductionHours;
+    let adjustment: number;
+    if (isOdmlMode) {
+      // ODML: 0 credit must stay 0 (never fall back to absentHoursDuringLeave — that is total adjusted absent there)
+      adjustment = -(prediction.odmlReductionHours ?? 0);
+    } else {
+      const absentHoursDuringLeave = prediction.absentHoursDuringLeave || 0;
+      adjustment = absentHoursDuringLeave;
     }
 
-    // Calculate new margin: current margin minus absent hours
     const newMargin = currentMarginValue - adjustment;
 
     if (newMargin < 0) {
@@ -1569,7 +1575,9 @@ export default function AttendancePage() {
         ? (isOdmlMode ? baseConducted : baseConducted + prediction.totalHoursTillEndDate)
         : baseConducted;
       const displayAbsent = prediction
-        ? (isOdmlMode ? prediction.absentHoursDuringLeave : baseAbsent + prediction.absentHoursDuringLeave)
+        ? (isOdmlMode
+            ? (prediction.odmlAdjustedTotalAbsent ?? prediction.absentHoursDuringLeave)
+            : baseAbsent + prediction.absentHoursDuringLeave)
         : baseAbsent;
       const displayPresent = prediction
         ? (isOdmlMode
@@ -1577,8 +1585,9 @@ export default function AttendancePage() {
             : (baseConducted + prediction.totalHoursTillEndDate) - (baseAbsent + prediction.absentHoursDuringLeave))
         : basePresent;
 
+      const effectiveMarginType = predictedMargin ? predictedMargin.type : requiredMarginActual.type;
       const marginLabel = predictedMargin
-        ? (predictedMargin.type === "required" ? "Required" : "Margin")
+        ? (predictedMargin.type === "required" ? "New required" : "New margin")
         : (requiredMarginActual.type === "required" ? "Required" : "Margin");
       const marginValue = predictedMargin ? predictedMargin.value : requiredMarginActual.value;
       const marginValueClass = (predictedMargin ? predictedMargin.type : requiredMarginActual.type) === "required"
@@ -1612,16 +1621,17 @@ export default function AttendancePage() {
         currentMarginLabel,
         currentMarginValue,
         currentMarginClass,
+        effectiveMarginType,
       };
     });
   }, [sortedAttendanceSubjects, isPredictionMode, isOdmlMode, predictionResults, getPredictedMargin, originalAttendanceData]);
 
   const criticalSubjectRows = useMemo(
-    () => subjectDisplayRows.filter((row) => row.marginLabel === "Required" && row.marginValue > 0),
+    () => subjectDisplayRows.filter((row) => row.effectiveMarginType === "required" && row.marginValue > 0),
     [subjectDisplayRows]
   );
   const nonCriticalSubjectRows = useMemo(
-    () => subjectDisplayRows.filter((row) => !(row.marginLabel === "Required" && row.marginValue > 0)),
+    () => subjectDisplayRows.filter((row) => !(row.effectiveMarginType === "required" && row.marginValue > 0)),
     [subjectDisplayRows]
   );
 
@@ -1931,6 +1941,7 @@ export default function AttendancePage() {
             </div>
           </details>
         )}
+        {savedOdmlRecords.length > 0 && (
         <details className="mt-2 w-full rounded-xl border border-white/[0.12] bg-sdash-surface-1 px-3 py-2">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-sora text-sm text-sdash-text-primary [&::-webkit-details-marker]:hidden">
             <span>
@@ -1951,10 +1962,7 @@ export default function AttendancePage() {
             </button>
           </summary>
           <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.08] pt-3">
-            {savedOdmlRecords.length === 0 ? (
-              <p className="text-xs font-sora text-sdash-text-muted">No saved periods. Tap + to add.</p>
-            ) : (
-              savedOdmlRecords.map((record) => (
+              {savedOdmlRecords.map((record) => (
                 <div
                   key={record.id}
                   className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.08] bg-black/10 px-3 py-2 text-xs font-sora text-sdash-text-primary"
@@ -1971,10 +1979,10 @@ export default function AttendancePage() {
                     {deletingRecordId === record.id ? '…' : 'Delete'}
                   </button>
                 </div>
-              ))
-            )}
+              ))}
           </div>
         </details>
+        )}
       </>
     ) : null;
 
@@ -2172,7 +2180,7 @@ export default function AttendancePage() {
               setSavedOdmlRecords(savedRecords);
               // Re-apply if showing with ODML
               if (showOdmlApplied && savedRecords.length > 0 && originalAttendanceData) {
-                applySavedOdml(savedRecords);
+                await applySavedOdml(savedRecords);
               } else if (showOdmlApplied && savedRecords.length === 0 && originalAttendanceData) {
                 // No more saved records, show without ODML
                 setAttendanceData(originalAttendanceData);

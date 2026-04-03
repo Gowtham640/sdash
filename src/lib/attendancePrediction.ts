@@ -1,10 +1,20 @@
 // Attendance prediction utility functions
 
-import { parseDate, getCurrentDateString, normalizeCalendarDayOrder, type CalendarEvent, type DayOrderStats, type SlotOccurrence } from './timetableUtils';
+import {
+  parseDate,
+  getCurrentDateString,
+  normalizeCalendarDayOrder,
+  buildDayOrderLookupConsolidated,
+  type CalendarEvent,
+  type DayOrderStats,
+  type SlotOccurrence,
+} from './timetableUtils';
 import { type AttendanceData, type AttendanceSubject, type LeavePeriod } from '@/lib/apiTypes';
 import { fetchCalendarFromSupabase } from './calendarFetcher';
 
 export type { AttendanceData, AttendanceSubject, LeavePeriod } from '@/lib/apiTypes';
+
+const isDev = process.env.NODE_ENV === 'development';
 
 export interface PredictionResult {
   subject: AttendanceSubject;
@@ -12,11 +22,18 @@ export interface PredictionResult {
   predictedAttendance: number;
   totalHoursTillEndDate: number;
   presentHoursTillStartDate: number;
+  /**
+   * Prediction: projected absent hours during configured leave window(s) only.
+   * ODML: kept equal to odmlAdjustedTotalAbsent for legacy UI paths (prefer odmlAdjustedTotalAbsent in ODML mode).
+   */
   absentHoursDuringLeave: number;
   leavePeriods: LeavePeriod[];
   leavePeriod: string;
   odmlPeriods?: LeavePeriod[];
+  /** Hours credited as OD/ML (always a number; use 0 not undefined for ODML rows). */
   odmlReductionHours?: number;
+  /** ODML only: total absent count after applying OD/ML credit (distinct from prediction’s future-absent slice). */
+  odmlAdjustedTotalAbsent?: number;
 }
 
 // Calculate day order statistics for a custom date range
@@ -27,8 +44,8 @@ export const getDayOrderStatsForDateRange = (
 ): DayOrderStats => {
   const normalizedStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
   const normalizedEnd = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-  console.log(`[DEBUG] Calculating day order stats for range: ${normalizedStart.toLocaleDateString()} to ${normalizedEnd.toLocaleDateString()}`);
-  const lookup = buildDayOrderLookup(calendarData);
+  // Inclusive [startDate, endDate]: count each calendar day once with correct DO (see buildDayOrderLookupConsolidated).
+  const lookup = buildDayOrderLookupConsolidated(calendarData);
   const stats: DayOrderStats = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   iterateDateRange(normalizedStart, normalizedEnd, date => {
     const key = formatDateKey(date);
@@ -37,7 +54,6 @@ export const getDayOrderStatsForDateRange = (
       stats[dayOrder]++;
     }
   });
-  console.log(`[DEBUG] Day order stats result:`, stats);
   return stats;
 };
 
@@ -62,32 +78,6 @@ const formatDateKey = (date: Date) => {
   const month = (date.getMonth() + 1).toString().padStart(2, '0');
   const year = date.getFullYear().toString();
   return `${day}/${month}/${year}`;
-};
-
-const parseCalendarDate = (dateStr: string): Date | null => {
-  if (!dateStr) return null;
-  if (dateStr.includes('/')) {
-    const parts = dateStr.split('/').map(part => parseInt(part, 10));
-    if (parts.length === 3 && !parts.some(isNaN)) {
-      const [day, month, year] = parts;
-      return new Date(year, month - 1, day);
-    }
-  }
-  const iso = new Date(dateStr);
-  return isNaN(iso.getTime()) ? null : iso;
-};
-
-const buildDayOrderLookup = (calendarData: CalendarEvent[]): Record<string, number> => {
-  const lookup: Record<string, number> = {};
-  calendarData.forEach(event => {
-    if (!event?.date) return;
-    const normalizedOrder = normalizeCalendarDayOrder(event.day_order);
-    if (!normalizedOrder) return;
-    const eventDate = parseCalendarDate(event.date);
-    if (!eventDate) return;
-    lookup[formatDateKey(eventDate)] = normalizedOrder;
-  });
-  return lookup;
 };
 
 const iterateDateRange = (startDate: Date, endDate: Date, callback: (date: Date) => void) => {
@@ -156,11 +146,8 @@ export const debugDataStructures = (attendanceData: AttendanceData, slotOccurren
   }
 };
 
-// Find slot data for a subject with improved matching logic
+// Find slot data for a subject with improved matching logic (no console noise; see calculateSubjectHoursInDateRange for dev logs)
 const findSlotData = (subject: AttendanceSubject, slotOccurrences: SlotOccurrence[]): SlotOccurrence | null => {
-  console.log(`[DEBUG] Finding slot data for: "${subject.course_title}" (${subject.category})`);
-  console.log(`[DEBUG] Available slot occurrences:`, slotOccurrences.map(s => `"${s.courseTitle}" (${s.category})`));
-
   // Try exact match first
   let slotData = slotOccurrences.find(occurrence =>
     occurrence.courseTitle.toLowerCase().trim() === subject.course_title.toLowerCase().trim() &&
@@ -168,7 +155,6 @@ const findSlotData = (subject: AttendanceSubject, slotOccurrences: SlotOccurrenc
   );
 
   if (slotData) {
-    console.log(`[DEBUG] Exact match found: "${slotData.courseTitle}" (${slotData.category})`);
     return slotData;
   }
 
@@ -183,7 +169,6 @@ const findSlotData = (subject: AttendanceSubject, slotOccurrences: SlotOccurrenc
   );
 
   if (hasBothVersions) {
-    console.log(`[DEBUG] Subject "${subject.course_title}" has both Theory and Lab versions - requiring EXACT match`);
     // For subjects with both versions, require EXACT title match
     slotData = slotOccurrences.find(occurrence =>
       occurrence.courseTitle.toLowerCase().trim() === subjectTitle &&
@@ -191,12 +176,10 @@ const findSlotData = (subject: AttendanceSubject, slotOccurrences: SlotOccurrenc
     );
 
     if (slotData) {
-      console.log(`[DEBUG] Exact match for dual-version subject: "${slotData.courseTitle}" (${slotData.category})`);
       return slotData;
     }
 
     // If no exact match found for dual-version subject, return null to prevent wrong matches
-    console.warn(`[DEBUG] No exact match found for dual-version subject "${subject.course_title}" (${subject.category}) - returning null`);
     return null;
   }
 
@@ -224,17 +207,8 @@ const findSlotData = (subject: AttendanceSubject, slotOccurrences: SlotOccurrenc
     const overlapPercentage = (overlapCount / longerTitle.length) * 100;
     const courseTitleMatch = overlapPercentage >= 90 && Math.abs(subjectTitle.length - occurrenceTitle.length) <= 1;
 
-    if (courseTitleMatch) {
-      console.log(`[DEBUG] Fuzzy match found: "${occurrence.courseTitle}" (${occurrence.category}) - ${overlapPercentage.toFixed(1)}% overlap`);
-    }
-
     return courseTitleMatch;
   });
-
-  if (!slotData) {
-    console.warn(`[DEBUG] No slot data found for: "${subject.course_title}" (${subject.category})`);
-    console.warn(`[DEBUG] Searched ${slotOccurrences.length} occurrences`);
-  }
 
   return slotData || null;
 };
@@ -249,36 +223,55 @@ export const calculateSubjectHoursInDateRange = (
   const slotData = findSlotData(subject, slotOccurrences);
 
   if (!slotData) {
-    console.warn(`No slot data found for subject: ${subject.course_title} (${subject.category})`);
     return 0;
   }
 
-  // Calculate total hours using the same logic as remaining hours calculation
+  // ODML / leave: dayOrderStats counts how many in-range calendar days fall on each DO.
+  // Only DO keys present in the timetable for this subject get non-zero contribution when that DO occurs in the period.
   let totalHours = 0;
   Object.entries(slotData.dayOrderHours).forEach(([dayOrder, hoursPerDay]) => {
-    const doNumber = parseInt(dayOrder);
+    const doNumber = parseInt(dayOrder, 10);
+    if (Number.isNaN(doNumber) || doNumber < 1 || doNumber > 5) {
+      return;
+    }
     const dayCount = dayOrderStats[doNumber] || 0;
+    if (dayCount === 0) {
+      return;
+    }
     totalHours += dayCount * hoursPerDay;
   });
+
+  // Dev-only: log slot match + DO stats only when this subject actually has hours in the range (reduces console noise)
+  if (isDev && totalHours > 0) {
+    console.log(
+      `[attendancePrediction] Hours in range: ${totalHours} for "${subject.course_title}" (${subject.category}) ` +
+        `-> timetable "${slotData.courseTitle}" (${slotData.category}) | DO counts: ${JSON.stringify(dayOrderStats)}`
+    );
+  }
 
   return totalHours;
 };
 
-// Calculate OD/ML adjusted attendance
+/**
+ * OD/ML adjustment from portal-reported hours. Callers must pass unmodified portal snapshot (`originalAttendanceData`)
+ * so repeated runs do not double-subtract absences.
+ */
 export const calculateODMLAdjustedAttendance = async (
-  attendanceData: AttendanceData,
+  portalAttendanceData: AttendanceData,
   slotOccurrences: SlotOccurrence[],
   odmlPeriods: LeavePeriod[]
 ): Promise<PredictionResult[]> => {
   const results: PredictionResult[] = [];
-  if (!attendanceData || !attendanceData.all_subjects || !Array.isArray(attendanceData.all_subjects)) {
+  if (!portalAttendanceData || !portalAttendanceData.all_subjects || !Array.isArray(portalAttendanceData.all_subjects)) {
     return results;
   }
 
   const calendarData = await fetchCalendarFromSupabase();
-  console.log(`[attendancePrediction] ODML calendar fetched (course=Default, semester=0): ${calendarData.length} events`);
+  if (isDev) {
+    console.log(`[attendancePrediction] ODML calendar fetched (course=Default, semester=0): ${calendarData.length} events`);
+  }
 
-  attendanceData.all_subjects.forEach(subject => {
+  portalAttendanceData.all_subjects.forEach(subject => {
     if (!subject) return;
     const currentConducted = parseInt(subject.hours_conducted) || 0;
     const currentAbsent = parseInt(subject.hours_absent) || 0;
@@ -307,11 +300,13 @@ export const calculateODMLAdjustedAttendance = async (
       predictedAttendance: clampedAttendance,
       totalHoursTillEndDate: 0,
       presentHoursTillStartDate: adjustedPresent,
+      // Legacy field: mirror odmlAdjustedTotalAbsent so older UI still reads adjusted absent
       absentHoursDuringLeave: adjustedAbsent,
       leavePeriods: [],
       leavePeriod: 'OD/ML Adjusted',
       odmlPeriods,
-      odmlReductionHours: totalOdmlReductionHours
+      odmlReductionHours: totalOdmlReductionHours,
+      odmlAdjustedTotalAbsent: adjustedAbsent,
     });
   });
 
@@ -328,7 +323,9 @@ export const calculatePredictedAttendance = async (
   const currentDate = parseDate(getCurrentDateString());
   const results: PredictionResult[] = [];
   const calendarData = await fetchCalendarFromSupabase();
-  console.log(`[attendancePrediction] Prediction calendar fetched (course=Default, semester=0): ${calendarData.length} events`);
+  if (isDev) {
+    console.log(`[attendancePrediction] Prediction calendar fetched (course=Default, semester=0): ${calendarData.length} events`);
+  }
 
   // Debug data structures
   debugDataStructures(attendanceData, slotOccurrences);
@@ -409,9 +406,11 @@ export const calculatePredictedAttendance = async (
         lastEndDate = new Date(leavePeriod.to.getFullYear(), leavePeriod.to.getMonth(), leavePeriod.to.getDate() + 1);
       }
 
-      console.log(`[DEBUG] Leave period ${leavePeriod.from.toLocaleDateString()} - ${leavePeriod.to.toLocaleDateString()}:`);
-      console.log(`  Absent hours in period: ${absentHoursInPeriod}`);
-      console.log(`  Next lastEndDate: ${lastEndDate.toLocaleDateString()}`);
+      if (isDev) {
+        console.log(`[DEBUG] Leave period ${leavePeriod.from.toLocaleDateString()} - ${leavePeriod.to.toLocaleDateString()}:`);
+        console.log(`  Absent hours in period: ${absentHoursInPeriod}`);
+        console.log(`  Next lastEndDate: ${lastEndDate.toLocaleDateString()}`);
+      }
     });
 
     // Calculate present hours from last leave period end to final end date
@@ -465,10 +464,12 @@ export const calculatePredictedAttendance = async (
     const predictedAttendance = predictedConducted > 0 ? (predictedPresent / predictedConducted) * 100 : 0;
     const clampedPredictedAttendance = clampAttendance(predictedAttendance);
 
-    console.log(`[DEBUG] ${subject.course_title} (${subject.category}):`);
-    console.log(`  Current: Conducted=${currentConducted}, Absent=${currentAbsent}, Present=${currentPresent}`);
-    console.log(`  Future: Total=${totalHoursTillEndDate}, Present=${totalPresentHours}, Absent=${totalAbsentHours}`);
-    console.log(`  Predicted: Conducted=${predictedConducted}, Absent=${predictedAbsent}, Present=${predictedPresent}`);
+    if (isDev) {
+      console.log(`[DEBUG] ${subject.course_title} (${subject.category}):`);
+      console.log(`  Current: Conducted=${currentConducted}, Absent=${currentAbsent}, Present=${currentPresent}`);
+      console.log(`  Future: Total=${totalHoursTillEndDate}, Present=${totalPresentHours}, Absent=${totalAbsentHours}`);
+      console.log(`  Predicted: Conducted=${predictedConducted}, Absent=${predictedAbsent}, Present=${predictedPresent}`);
+    }
 
     results.push({
       subject,
@@ -476,11 +477,11 @@ export const calculatePredictedAttendance = async (
       predictedAttendance: clampedPredictedAttendance,
       totalHoursTillEndDate,
       presentHoursTillStartDate: totalPresentHours, // Future present hours only
-      absentHoursDuringLeave: totalAbsentHours,     // Future absent hours only
+      absentHoursDuringLeave: totalAbsentHours,     // Future absent hours only (prediction semantics)
       leavePeriods: sortedLeavePeriods,
       leavePeriod: sortedLeavePeriods.map(p => `${p.from.toLocaleDateString()} - ${p.to.toLocaleDateString()}`).join(', '),
       odmlPeriods,
-      odmlReductionHours
+      odmlReductionHours: odmlReductionHours,
     });
   });
 

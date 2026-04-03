@@ -117,7 +117,7 @@ export const PillNav = () => {
             />
             <span
               className={`relative z-10 max-w-[4.5rem] truncate text-[9px] font-sora font-medium leading-none tracking-tight ${
-                isActive ? "text-sdash-accent/90" : "text-sdash-text-white/60"
+                isActive ? "text-sdash-accent/90" : "text-white/60"
               }`}
             >
               {tab.shortLabel}

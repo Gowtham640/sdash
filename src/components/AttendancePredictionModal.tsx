@@ -18,6 +18,7 @@ import {
   type LeavePeriod
 } from '@/lib/attendancePrediction';
 import { type SlotOccurrence } from '@/lib/timetableUtils';
+import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 
 interface AttendancePredictionModalProps {
   attendanceData: AttendanceData | null;
@@ -53,8 +54,32 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
     return new Date(n.getFullYear(), n.getMonth(), 1);
   });
 
+  const [fetchedCalendarFallback, setFetchedCalendarFallback] = useState<CalendarMonthGridEvent[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const fromProps = (calendarData ?? []) as CalendarMonthGridEvent[];
+    if (fromProps.length > 0) {
+      setFetchedCalendarFallback([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const fresh = await fetchCalendarFromSupabase();
+      if (!cancelled) {
+        setFetchedCalendarFallback(fresh as CalendarMonthGridEvent[]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, calendarData]);
+
   const sortedGridEvents = useMemo(() => {
-    const list = (calendarData ?? []) as CalendarMonthGridEvent[];
+    const raw = (calendarData?.length ? calendarData : fetchedCalendarFallback) ?? [];
+    const list = raw as CalendarMonthGridEvent[];
     return [...list].sort((a, b) => {
       if (!a.date || !b.date) return 0;
       const da = parseDdMmYyyy(a.date);
@@ -62,7 +87,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
       if (!da || !db) return 0;
       return da.getTime() - db.getTime();
     });
-  }, [calendarData]);
+  }, [calendarData, fetchedCalendarFallback]);
 
   const todayDdMmYyyy = useMemo(() => {
     const now = new Date();

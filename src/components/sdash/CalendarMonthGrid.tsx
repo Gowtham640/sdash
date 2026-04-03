@@ -29,6 +29,25 @@ const isHolidayEvent = (event: CalendarMonthGridEvent): boolean =>
   event.day_order === "Holiday" ||
   Boolean(event.content && event.content.toLowerCase().includes("holiday"));
 
+/** Prefer a row with valid DO 1–5 when multiple rows share the same date (matches calendar page intent). */
+function primaryEventForDate(dayEvents: CalendarMonthGridEvent[]): CalendarMonthGridEvent | undefined {
+  if (dayEvents.length === 0) {
+    return undefined;
+  }
+  const withValidDo = dayEvents.find((e) => {
+    const trimmed = e.day_order?.trim() ?? "";
+    const n = Number(trimmed);
+    return (
+      !isHolidayEvent(e) &&
+      trimmed !== "" &&
+      !Number.isNaN(n) &&
+      n >= 1 &&
+      n <= 5
+    );
+  });
+  return withValidDo ?? dayEvents[0];
+}
+
 const startOfLocalDay = (d: Date): number => {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -96,7 +115,7 @@ export function CalendarMonthGrid({
     const dateStr = dateStrFromLocal(cellDate);
     const dayEvents = sortedEvents.filter((e) => e.date === dateStr);
     const isToday = dateStr === todayDateStr;
-    const primary = dayEvents[0];
+    const primary = primaryEventForDate(dayEvents);
     const isHolidayLike =
       primary &&
       (primary.day_order === "-" ||

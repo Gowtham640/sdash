@@ -553,23 +553,6 @@ export default function MarksPage() {
           </div>
         </div>
 
-        {marksViewMode === 'list' && entries.length > 0 && (
-          <div className="mt-3 flex w-full gap-2">
-            <Link
-              href="/attendance?openTool=predict"
-              className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
-            >
-              Predict attendance
-            </Link>
-            <Link
-              href="/attendance?openTool=odml"
-              className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
-            >
-              Calculate ODML
-            </Link>
-          </div>
-        )}
-
         {entries.length === 0 ? (
           <GlassCard className="p-6 text-center">
             <p className="text-sm text-sdash-text-secondary font-sora">
@@ -598,20 +581,6 @@ export default function MarksPage() {
                     </GlassCard>
                   ))}
                 </SwipeableCards>
-                <div className="mt-3 flex w-full gap-2">
-                  <Link
-                    href="/attendance?openTool=predict"
-                    className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
-                  >
-                    Predict attendance
-                  </Link>
-                  <Link
-                    href="/attendance?openTool=odml"
-                    className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
-                  >
-                    Calculate ODML
-                  </Link>
-                </div>
               </>
             ) : (
               <div className="flex flex-col gap-3">

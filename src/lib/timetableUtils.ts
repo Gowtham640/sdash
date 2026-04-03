@@ -138,6 +138,61 @@ export const normalizeCalendarDayOrder = (dayOrder?: string | number): number | 
   return parsed;
 };
 
+/**
+ * Parse a calendar row date (DD/MM/YYYY or ISO). Used for ODML / prediction lookups
+ * where strict parseDate() would reject ISO-shaped strings from storage.
+ */
+export const parseCalendarEventDate = (dateStr: string): Date | null => {
+  if (!dateStr || typeof dateStr !== 'string') {
+    return null;
+  }
+  if (dateStr.includes('/')) {
+    const parts = dateStr.split('/').map(part => parseInt(part, 10));
+    if (parts.length === 3 && !parts.some(isNaN)) {
+      const [day, month, year] = parts;
+      return new Date(year, month - 1, day);
+    }
+  }
+  const iso = new Date(dateStr);
+  return Number.isNaN(iso.getTime()) ? null : iso;
+};
+
+/**
+ * Map each calendar day to a single day order (1–5). Multiple portal rows per date
+ * would otherwise overwrite each other; we keep the first row with a valid teaching DO,
+ * matching the calendar grid’s intent (one working DO per date).
+ */
+export const buildDayOrderLookupConsolidated = (calendarData: CalendarEvent[]): Record<string, number> => {
+  const byDate = new Map<string, CalendarEvent[]>();
+  for (const event of calendarData) {
+    if (!event?.date) continue;
+    const eventDate = parseCalendarEventDate(event.date);
+    if (!eventDate) continue;
+    const key = formatDateKey(eventDate);
+    const list = byDate.get(key);
+    if (list) {
+      list.push(event);
+    } else {
+      byDate.set(key, [event]);
+    }
+  }
+  const lookup: Record<string, number> = {};
+  byDate.forEach((dayEvents, key) => {
+    const primary = dayEvents.find(e => {
+      const n = normalizeCalendarDayOrder(e.day_order);
+      return n !== null && n >= 1 && n <= 5;
+    });
+    if (!primary) {
+      return;
+    }
+    const n = normalizeCalendarDayOrder(primary.day_order);
+    if (n) {
+      lookup[key] = n;
+    }
+  });
+  return lookup;
+};
+
 export const buildCalendarDayOrderMap = (calendarData: CalendarEvent[]): Record<string, number> => {
   const dayOrderMap: Record<string, number> = {};
 
