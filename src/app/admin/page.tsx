@@ -19,7 +19,7 @@ import {
   Legend,
 } from 'recharts';
 
-type PageType = 'analytics' | 'modifications';
+type PageType = 'analytics' | 'modifications' | 'backend-analytics';
 
 interface CalendarEvent {
   date: string;
@@ -52,6 +52,46 @@ interface CalendarResponse {
   index: number;
   calendar: CalendarMonth[];
 }
+
+/** Aggregated public.jobs metrics for the backend analytics admin tab */
+interface BackendJobsAnalyticsPayload {
+  summary: {
+    total_jobs: number;
+    internal_jobs: number;
+    external_jobs: number;
+    failures_total: number;
+    internal_login_triggers: number;
+    jobs_with_duration_sample: number;
+  };
+  avgDurationByDataType: Array<{ data_type: string; avg_ms: number; count: number }>;
+  failuresByDataType: Array<{ data_type: string; count: number }>;
+  failureReasons: Array<{ reason: string; count: number }>;
+  missingTokensWhenFailed: Array<{ token_label: string; count: number }>;
+  jobsPerUser: Array<{ user_id: string; email: string; count: number }>;
+  trafficOverall: Array<{ date: string; count: number }>;
+  trafficByDataTypeSeries: Array<Record<string, string | number>>;
+  dataTypesInRange: string[];
+  failureRateByUser: Array<{
+    user_id: string;
+    email: string;
+    total: number;
+    failed: number;
+    rate_pct: number;
+  }>;
+}
+
+const BACKEND_CHART_COLORS = [
+  '#60a5fa',
+  '#a78bfa',
+  '#34d399',
+  '#fbbf24',
+  '#f472b6',
+  '#94a3b8',
+  '#fb923c',
+  '#38bdf8',
+  '#c084fc',
+  '#2dd4bf',
+];
 
 export default function AdminPage() {
   const [activePage, setActivePage] = useState<PageType>('analytics');
@@ -123,6 +163,10 @@ export default function AdminPage() {
     type ? type.replace(/_/g, " ") : "N/A";
   const requestAnalyticsData = analyticsData?.requestAnalytics;
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
+
+  // Backend jobs (public.jobs) analytics
+  const [backendJobsData, setBackendJobsData] = useState<BackendJobsAnalyticsPayload | null>(null);
+  const [backendJobsLoading, setBackendJobsLoading] = useState(false);
 
   // Modal state for stat card details
   const [modalOpen, setModalOpen] = useState(false);
@@ -232,6 +276,8 @@ export default function AdminPage() {
     } else if (activePage === 'modifications' && isAdmin && selectedCourses.length > 0 && selectedSemesters.length > 0) {
       // Fetch for first selected course and semester (or handle multiple)
       fetchCalendarForEditing();
+    } else if (activePage === 'backend-analytics' && isAdmin) {
+      fetchBackendJobsAnalytics();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePage, isAdmin, selectedCourses, selectedSemesters, analyticsSemester, analyticsTimeRange]);
@@ -316,6 +362,27 @@ export default function AdminPage() {
       console.error('[Admin] Error fetching analytics:', err);
     } finally {
       setAnalyticsLoading(false);
+    }
+  };
+
+  const fetchBackendJobsAnalytics = async () => {
+    try {
+      setBackendJobsLoading(true);
+      const params = new URLSearchParams();
+      params.append('timeRange', analyticsTimeRange);
+      const response = await fetch(`/api/admin/backend-jobs-analytics?${params.toString()}`);
+      const result = await response.json();
+      if (result.success && result.data) {
+        setBackendJobsData(result.data as BackendJobsAnalyticsPayload);
+      } else {
+        setBackendJobsData(null);
+        console.error('[Admin] backend-jobs-analytics:', result?.error);
+      }
+    } catch (err) {
+      console.error('[Admin] Error fetching backend job analytics:', err);
+      setBackendJobsData(null);
+    } finally {
+      setBackendJobsLoading(false);
     }
   };
 
@@ -804,6 +871,16 @@ export default function AdminPage() {
             }`}
           >
             <div className="text-base font-sora font-semibold">Modifications</div>
+          </button>
+          <button
+            onClick={() => setActivePage('backend-analytics')}
+            className={`relative p-4 rounded-2xl backdrop-blur border border-white/20 text-left transition-all duration-200 ${
+              activePage === 'backend-analytics'
+                ? 'bg-white/20 text-white shadow-lg shadow-white/10'
+                : 'bg-white/10 text-white/70 hover:bg-white/15 hover:text-white hover:shadow-md hover:shadow-white/5 hover:scale-[1.02]'
+            }`}
+          >
+            <div className="text-base font-sora font-semibold">Backend analytics</div>
           </button>
         </div>
       </div>
@@ -1770,6 +1847,347 @@ export default function AdminPage() {
                  </div>
                </div>
              )}
+          </div>
+        )}
+
+        {activePage === 'backend-analytics' && (
+          <div className="flex flex-col gap-4 sm:gap-6 max-w-[1600px] mx-auto w-full">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="text-white text-xl sm:text-2xl md:text-3xl font-sora font-bold">
+                Backend analytics
+              </div>
+              {backendJobsLoading && (
+                <div className="text-white/70 text-sm font-sora">Loading jobs…</div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-3 items-center">
+              <label className="text-white/70 text-sm font-sora whitespace-nowrap">Time range</label>
+              <select
+                value={analyticsTimeRange}
+                onChange={(e) => setAnalyticsTimeRange(e.target.value)}
+                className="px-3 sm:px-4 py-2 rounded-lg font-sora text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-teal-400/50"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(45, 212, 191, 0.35) 0%, rgba(15, 118, 110, 0.45) 100%)',
+                  border: '1px solid rgba(45, 212, 191, 0.35)',
+                  color: '#ffffff',
+                }}
+              >
+                <option value="1h" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 1 Hour</option>
+                <option value="24h" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 24 Hours</option>
+                <option value="48h" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 48 Hours</option>
+                <option value="7d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past Week</option>
+                <option value="30d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past Month</option>
+                <option value="180d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 6 Months</option>
+                <option value="365d" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>Past 1 Year</option>
+                <option value="all" style={{ background: 'rgba(30, 27, 75, 0.95)', color: '#ffffff' }}>From the Start</option>
+              </select>
+            </div>
+
+            {!backendJobsLoading && backendJobsData && (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                  {[
+                    { label: 'Total jobs', value: backendJobsData.summary.total_jobs },
+                    { label: 'Internal', value: backendJobsData.summary.internal_jobs },
+                    { label: 'External', value: backendJobsData.summary.external_jobs },
+                    { label: 'Failures', value: backendJobsData.summary.failures_total },
+                    { label: 'Internal logins', value: backendJobsData.summary.internal_login_triggers },
+                    { label: 'With duration', value: backendJobsData.summary.jobs_with_duration_sample },
+                  ].map((card) => (
+                    <div
+                      key={card.label}
+                      className="p-4 rounded-2xl border border-white/15 backdrop-blur bg-white/5"
+                    >
+                      <div className="text-white/60 text-xs font-sora mb-1">{card.label}</div>
+                      <div className="text-white text-xl font-sora font-semibold tabular-nums">{card.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                    <div className="text-white font-sora font-semibold mb-3 text-sm">Internal vs external</div>
+                    <div className="h-[220px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={[
+                              { name: 'Internal', value: backendJobsData.summary.internal_jobs },
+                              { name: 'External', value: backendJobsData.summary.external_jobs },
+                            ]}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={48}
+                            outerRadius={80}
+                            paddingAngle={2}
+                          >
+                            <Cell fill="#5eead4" />
+                            <Cell fill="#818cf8" />
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 8,
+                            }}
+                          />
+                          <Legend />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                    <div className="text-white font-sora font-semibold mb-3 text-sm">
+                      Avg duration by data type (ms)
+                    </div>
+                    <div className="h-[220px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={backendJobsData.avgDurationByDataType.map((d) => ({
+                            ...d,
+                            label: formatDataTypeLabel(d.data_type),
+                          }))}
+                          margin={{ bottom: 8, left: 4, right: 8 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                          <XAxis dataKey="label" tick={{ fill: '#ffffff90', fontSize: 11 }} interval={0} angle={-20} height={70} textAnchor="end" />
+                          <YAxis tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 8,
+                            }}
+                          />
+                          <Bar dataKey="avg_ms" fill="#5eead4" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                    <div className="text-white font-sora font-semibold mb-3 text-sm">Failures by data type</div>
+                    <div className="h-[240px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={backendJobsData.failuresByDataType.map((d) => ({
+                            ...d,
+                            label: formatDataTypeLabel(d.data_type),
+                          }))}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                          <XAxis dataKey="label" tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                          <YAxis tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 8,
+                            }}
+                          />
+                          <Bar dataKey="count" fill="#f87171" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                    <div className="text-white font-sora font-semibold mb-3 text-sm">Top failure reasons</div>
+                    <div className="h-[280px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          layout="vertical"
+                          data={backendJobsData.failureReasons.map((r) => ({
+                            ...r,
+                            short:
+                              r.reason.length > 42 ? `${r.reason.slice(0, 40)}…` : r.reason,
+                          }))}
+                          margin={{ left: 8, right: 12 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                          <XAxis type="number" tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                          <YAxis
+                            type="category"
+                            dataKey="short"
+                            width={120}
+                            tick={{ fill: '#ffffff90', fontSize: 10 }}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 8,
+                            }}
+                            formatter={(value: number, _n, item) => [value, (item?.payload as { reason?: string })?.reason || '']}
+                          />
+                          <Bar dataKey="count" fill="#c084fc" radius={[0, 4, 4, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                  <div className="text-white font-sora font-semibold mb-3 text-sm">
+                    Missing token labels (on failed fetch jobs)
+                  </div>
+                  <div className="h-[260px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={backendJobsData.missingTokensWhenFailed}
+                        margin={{ bottom: 8 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                        <XAxis
+                          dataKey="token_label"
+                          tick={{ fill: '#ffffff90', fontSize: 10 }}
+                          interval={0}
+                          angle={-25}
+                          height={70}
+                          textAnchor="end"
+                        />
+                        <YAxis tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 8,
+                          }}
+                        />
+                        <Bar dataKey="count" fill="#fbbf24" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                    <div className="text-white font-sora font-semibold mb-3 text-sm">Jobs per user (top)</div>
+                    <div className="h-[280px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          layout="vertical"
+                          data={backendJobsData.jobsPerUser.map((r) => ({
+                            ...r,
+                            short: r.email.length > 28 ? `${r.email.slice(0, 26)}…` : r.email,
+                          }))}
+                          margin={{ left: 8, right: 12 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                          <XAxis type="number" tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                          <YAxis type="category" dataKey="short" width={130} tick={{ fill: '#ffffff90', fontSize: 10 }} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 8,
+                            }}
+                          />
+                          <Bar dataKey="count" fill="#38bdf8" radius={[0, 4, 4, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                    <div className="text-white font-sora font-semibold mb-3 text-sm">Failure rate by user (%)</div>
+                    <div className="h-[280px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          layout="vertical"
+                          data={backendJobsData.failureRateByUser.map((r) => ({
+                            ...r,
+                            short: r.email.length > 28 ? `${r.email.slice(0, 26)}…` : r.email,
+                          }))}
+                          margin={{ left: 8, right: 12 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                          <XAxis type="number" domain={[0, 100]} tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                          <YAxis type="category" dataKey="short" width={130} tick={{ fill: '#ffffff90', fontSize: 10 }} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 8,
+                            }}
+                            formatter={(v: number, _k, item) => [
+                              `${v}% (${(item?.payload as { failed?: number })?.failed} / ${(item?.payload as { total?: number })?.total})`,
+                              'Rate',
+                            ]}
+                          />
+                          <Bar dataKey="rate_pct" fill="#fb7185" radius={[0, 4, 4, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                  <div className="text-white font-sora font-semibold mb-3 text-sm">Overall traffic (jobs / day)</div>
+                  <div className="h-[260px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={backendJobsData.trafficOverall}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                        <XAxis dataKey="date" tick={{ fill: '#ffffff90', fontSize: 10 }} />
+                        <YAxis tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 8,
+                          }}
+                        />
+                        <Line type="monotone" dataKey="count" stroke="#94a3b8" strokeWidth={2} dot={false} name="Jobs" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="p-4 sm:p-5 rounded-3xl border border-white/15 backdrop-blur bg-white/5">
+                  <div className="text-white font-sora font-semibold mb-3 text-sm">Traffic by data type (per day)</div>
+                  <div className="h-[300px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={backendJobsData.trafficByDataTypeSeries}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                        <XAxis dataKey="date" tick={{ fill: '#ffffff90', fontSize: 10 }} />
+                        <YAxis tick={{ fill: '#ffffff90', fontSize: 11 }} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 8,
+                          }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        {backendJobsData.dataTypesInRange.map((dt, i) => (
+                          <Line
+                            key={dt}
+                            type="monotone"
+                            dataKey={dt}
+                            stroke={BACKEND_CHART_COLORS[i % BACKEND_CHART_COLORS.length]}
+                            strokeWidth={1.5}
+                            dot={false}
+                            name={formatDataTypeLabel(dt)}
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {!backendJobsLoading && !backendJobsData && (
+              <div className="text-white/70 text-center py-12 font-sora">
+                Could not load job analytics. Apply the DB migration and ensure the service role can read public.jobs.
+              </div>
+            )}
           </div>
         )}
       </div>

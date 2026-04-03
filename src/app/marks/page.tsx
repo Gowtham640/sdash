@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
-import { getStorageItem } from "@/lib/browserStorage";
+import { getStorageItem, setStorageItem } from "@/lib/browserStorage";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { getClientCache, removeClientCache, setClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
@@ -15,6 +15,7 @@ import GlassCard from '@/components/sdash/GlassCard';
 import StatChip from '@/components/sdash/StatChip';
 import SwipeableCards from '@/components/sdash/SwipeableCards';
 import { trackPostRequest } from "@/lib/postAnalytics";
+import { Check } from 'lucide-react';
 
 interface Assessment {
   max: number;
@@ -38,6 +39,24 @@ interface MarksPayload {
 }
 
 const MARKS_CACHE_KEY = 'marks';
+const MARKS_VIEW_STORAGE_KEY = 'sdash_marks_view_mode';
+const MARKS_SORT_STORAGE_KEY = 'sdash_marks_sort_mode';
+
+type MarksSortMode = 'general' | 'lowToHigh';
+
+function readMarksViewMode(): 'cards' | 'list' {
+  if (typeof window === 'undefined') return 'cards';
+  const raw = getStorageItem(MARKS_VIEW_STORAGE_KEY);
+  if (raw === 'list' || raw === 'cards') return raw;
+  return 'cards';
+}
+
+function readMarksSortMode(): MarksSortMode {
+  if (typeof window === 'undefined') return 'general';
+  const raw = getStorageItem(MARKS_SORT_STORAGE_KEY);
+  if (raw === 'lowToHigh') return 'lowToHigh';
+  return 'general';
+}
 
 const extractMarksPayload = (value: unknown): MarksPayload | null => {
   if (!value || typeof value !== 'object') {
@@ -71,7 +90,20 @@ export default function MarksPage() {
   const [error, setError] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentFact, setCurrentFact] = useState(DEFAULT_RANDOM_FACT);
-  const [marksViewMode, setMarksViewMode] = useState<'cards' | 'list'>('cards');
+  const [marksViewMode, setMarksViewModeState] = useState<'cards' | 'list'>(readMarksViewMode);
+  const [marksSortMode, setMarksSortModeState] = useState<MarksSortMode>(readMarksSortMode);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const sortMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const setMarksViewMode = useCallback((mode: 'cards' | 'list') => {
+    setMarksViewModeState(mode);
+    setStorageItem(MARKS_VIEW_STORAGE_KEY, mode);
+  }, []);
+
+  const setMarksSortMode = useCallback((mode: MarksSortMode) => {
+    setMarksSortModeState(mode);
+    setStorageItem(MARKS_SORT_STORAGE_KEY, mode);
+  }, []);
   const fetchMarksDataRef = useRef<((forceRefresh?: boolean) => Promise<void>) | null>(null);
 
   const entries = useMemo(() => marksPayload?.entries ?? [], [marksPayload?.entries]);
@@ -147,8 +179,19 @@ export default function MarksPage() {
     return value.toFixed(1);
   };
 
+  useEffect(() => {
+    if (!sortMenuOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target as Node)) {
+        setSortMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [sortMenuOpen]);
+
   const marksRows = useMemo(() => {
-    return entries.map((entry, index) => {
+    const baseRows = entries.map((entry, index) => {
       const courseTitle = entry.courseTitle?.trim() || entry.courseCode?.trim() || `Course ${index + 1}`;
       const key = `marks-row-${index}-${entry.courseCode ?? "na"}-${courseTitle}`;
       const normalizedAssessments = Array.isArray(entry.assessments) ? entry.assessments : [];
@@ -167,6 +210,7 @@ export default function MarksPage() {
 
       return {
         key,
+        originalIndex: index,
         entry,
         courseTitle,
         normalizedAssessments,
@@ -177,7 +221,16 @@ export default function MarksPage() {
         creditLabel,
       };
     });
-  }, [entries]);
+
+    if (marksSortMode === 'general') {
+      return baseRows;
+    }
+
+    return [...baseRows].sort((a, b) => {
+      if (a.pct !== b.pct) return a.pct - b.pct; // low -> high
+      return a.originalIndex - b.originalIndex; // stable order for ties
+    });
+  }, [entries, marksSortMode]);
 
   const renderAssessmentRows = (assessments: Assessment[]) => {
     if (!assessments.length) {
@@ -550,6 +603,51 @@ export default function MarksPage() {
             >
               List
             </button>
+          </div>
+        </div>
+
+        <div className="mt-2 flex justify-end">
+          <div className="relative inline-flex" ref={sortMenuRef}>
+            <button
+              type="button"
+              onClick={() => setSortMenuOpen((o) => !o)}
+              className="text-[11px] font-sora text-sdash-text-muted hover:text-sdash-text-secondary/90"
+              aria-expanded={sortMenuOpen}
+              aria-haspopup="menu"
+            >
+              sort
+            </button>
+            {sortMenuOpen ? (
+              <div
+                className="absolute right-0 top-full z-50 mt-1 min-w-[190px] rounded-lg border border-white/[0.08] bg-black/40 py-1 backdrop-blur-md shadow-lg"
+                role="menu"
+              >
+                {(
+                  [
+                    { id: 'lowToHigh' as const, label: 'Sort by low to high' },
+                    { id: 'general' as const, label: 'General order' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMarksSortMode(opt.id);
+                      setSortMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-sora text-sdash-text-muted hover:bg-white/[0.06]"
+                  >
+                    <span className="inline-flex w-3.5 justify-center shrink-0">
+                      {marksSortMode === opt.id ? (
+                        <Check className="h-3 w-3 text-sdash-text-muted" strokeWidth={2.5} />
+                      ) : null}
+                    </span>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
 

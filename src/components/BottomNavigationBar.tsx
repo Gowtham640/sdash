@@ -2,9 +2,10 @@
 
 import type { ComponentProps, ComponentType } from 'react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { BookOpen, CalendarDays, ListCheck, ClipboardList, MoreHorizontal, Calculator, Home } from 'lucide-react';
+import { BookOpen, CalendarDays, ListCheck, ClipboardList, MoreHorizontal, Calculator, Home, Settings } from 'lucide-react';
+import { getStorageItem } from "@/lib/browserStorage";
 
 const DATA_NAV_ORDER = ['attendance', 'timetable', 'marks', 'calender'] as const;
 
@@ -41,7 +42,39 @@ const shouldShowBottomNav = (pathname: string | null | undefined) => {
 const BottomNavigationBar = () => {
     const pathname = usePathname();
     const [moreOpen, setMoreOpen] = useState(false);
+    const [isAdmin, setIsAdmin] = useState(false);
     const visible = shouldShowBottomNav(pathname);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const checkAdmin = async () => {
+            const access_token = getStorageItem('access_token');
+            if (!access_token) {
+                if (!cancelled) setIsAdmin(false);
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/admin/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ access_token }),
+                });
+
+                const result = await res.json();
+                if (!cancelled) setIsAdmin(result?.success === true && result?.isAdmin === true);
+            } catch (e) {
+                console.error('[BottomNavigationBar] admin check failed:', e);
+                if (!cancelled) setIsAdmin(false);
+            }
+        };
+
+        void checkAdmin();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     if (!visible) return null;
 
@@ -90,6 +123,16 @@ const BottomNavigationBar = () => {
                             {moreOpen && (
                                 /* Dropup matches width so it never overflows */
                                 <div className="absolute bottom-full mb-2 w-48 max-w-[90vw] right-1 rounded-2xl border border-white/20 bg-black p-3 text-white shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
+                                    {isAdmin && (
+                                        <Link
+                                            href="/admin"
+                                            className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm font-semibold tracking-tight text-white transition-colors duration-150 hover:bg-white/10 mb-2"
+                                            onClick={() => setMoreOpen(false)}
+                                        >
+                                            <Settings className="h-4 w-4" />
+                                            Admin
+                                        </Link>
+                                    )}
                                     <Link
                                         href="/sgpa-calculator"
                                         className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm font-semibold tracking-tight text-white transition-colors duration-150 hover:bg-white/10"

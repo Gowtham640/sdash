@@ -10,9 +10,35 @@ export interface OdmlRecord {
   user_id: string;
   period_from: string; // ISO date string
   period_to: string; // ISO date string
-  subject_hours: Record<string, number>; // { "MA101": 4, "CS101": 2, ... }
+  /** Per-period hours keyed by `buildOdmlSubjectKey(code, category)` so theory/practical do not collide. */
+  subject_hours: Record<string, number>;
   created_at?: string;
   updated_at?: string;
+}
+
+/** Separates subject code from normalized category bucket in stored `subject_hours` keys. */
+const ODML_SUBJECT_KEY_SEP = '|';
+
+/**
+ * Normalize portal category to a stable bucket (matches theory vs practical/lab split).
+ * Purpose: same code + different buckets get distinct keys when saving ODML hours.
+ */
+export function normalizeOdmlCategory(category: string): string {
+  const n = category.toLowerCase().trim();
+  if (n.includes('lab') || n.includes('practical')) {
+    return 'practical';
+  }
+  if (n.includes('theory')) {
+    return 'theory';
+  }
+  return n.replace(/\s+/g, '_');
+}
+
+/**
+ * Stable key for one attendance row (code + category). Impact: theory and practical rows no longer overwrite each other.
+ */
+export function buildOdmlSubjectKey(subjectCode: string, category: string): string {
+  return `${subjectCode.trim()}${ODML_SUBJECT_KEY_SEP}${normalizeOdmlCategory(category)}`;
 }
 
 export interface LeavePeriod {
@@ -134,15 +160,14 @@ export async function deleteOdmlRecord(access_token: string, recordId: string): 
 }
 
 /**
- * Convert ODML records to aggregated subject hours
- * Sums hours across all periods for each subject
+ * Sums hours across all periods per `subject_hours` key (composite code|category or legacy plain code).
  */
 export function aggregateOdmlHours(records: OdmlRecord[]): Record<string, number> {
   const aggregated: Record<string, number> = {};
 
   records.forEach(record => {
-    Object.entries(record.subject_hours).forEach(([subjectCode, hours]) => {
-      aggregated[subjectCode] = (aggregated[subjectCode] || 0) + hours;
+    Object.entries(record.subject_hours).forEach(([key, hours]) => {
+      aggregated[key] = (aggregated[key] || 0) + hours;
     });
   });
 

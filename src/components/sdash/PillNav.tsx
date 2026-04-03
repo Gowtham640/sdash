@@ -1,10 +1,11 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { Home, Clock, BarChart3, Award, CalendarDays, Calculator } from "lucide-react";
+import { Home, Clock, BarChart3, Award, CalendarDays, Calculator, Settings } from "lucide-react";
 import { motion } from "framer-motion";
-import { useMemo, useEffect, useRef, useCallback, useSyncExternalStore, type CSSProperties } from "react";
+import { useMemo, useEffect, useRef, useCallback, useSyncExternalStore, useState, type CSSProperties } from "react";
 import { LiquidGlass, type LiquidGlassRef } from "@specy/liquid-glass-react";
+import { getStorageItem } from "@/lib/browserStorage";
 
 const tabs = [
   { path: "/dashboard", icon: Home, label: "Home", shortLabel: "home" },
@@ -18,7 +19,51 @@ const tabs = [
 export const PillNav = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const activeIndex = tabs.findIndex((t) => pathname === t.path || pathname?.startsWith(`${t.path}/`));
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkAdmin = async () => {
+      const access_token = getStorageItem("access_token");
+      if (!access_token) {
+        if (!cancelled) setIsAdmin(false);
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/admin/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ access_token }),
+        });
+
+        const result = await res.json();
+        if (!cancelled) setIsAdmin(result?.success === true && result?.isAdmin === true);
+      } catch (e) {
+        console.error("[PillNav] admin check failed:", e);
+        if (!cancelled) setIsAdmin(false);
+      }
+    };
+
+    void checkAdmin();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const adminTab = useMemo(
+    () => ({ path: "/admin", icon: Settings, label: "Admin", shortLabel: "admin" }),
+    []
+  );
+
+  const visibleTabs = useMemo(() => {
+    return isAdmin ? [...tabs, adminTab] : tabs;
+  }, [isAdmin, adminTab]);
+
+  const activeIndex = visibleTabs.findIndex(
+    (t) => pathname === t.path || pathname?.startsWith(`${t.path}/`)
+  );
 
   // LiquidGlass uses WebGL — mount only on client without effect-driven setState
   const mounted = useSyncExternalStore(
@@ -89,7 +134,7 @@ export const PillNav = () => {
 
   const tabButtons = (
     <>
-      {tabs.map((tab, i) => {
+      {visibleTabs.map((tab, i) => {
         const isActive = i === activeIndex;
         const Icon = tab.icon;
         return (
