@@ -12,19 +12,25 @@ import { getRequestBodyWithPassword } from "@/lib/passwordStorage";
 import { toast } from 'sonner';
 import { DEFAULT_RANDOM_FACT, getRandomFact } from "@/lib/randomFacts";
 import { setStorageItem, getStorageItem } from "@/lib/browserStorage";
+import {
+  getCurrentDayOrderFromCalendar,
+  getTodaysTimetableCourseSlots,
+  isHolidayDayOrder,
+  orderAttendanceSubjectsTodayFirstThenJson,
+} from '@/lib/attendanceDisplayOrder';
 import { registerAttendanceFetch } from '@/lib/attendancePrefetchScheduler';
 import { trackFeatureClick } from "@/lib/analytics";
 import { getClientCache, setClientCache, removeClientCache } from "@/lib/clientCache";
 import { deduplicateRequest } from "@/lib/requestDeduplication";
 import { useErrorTracking } from "@/lib/useErrorTracking";
 import { trackPostRequest } from "@/lib/postAnalytics";
-import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, odmlRecordsToLeavePeriods, parseLocalYyyyMmDd, type OdmlRecord } from '@/lib/odmlStorage';
+import { fetchOdmlRecords, saveOdmlRecord, deleteOdmlRecord, odmlRecordsToLeavePeriods, parseLocalYyyyMmDd, buildOdmlSubjectKey, type OdmlRecord } from '@/lib/odmlStorage';
 import { normalizeAttendanceData } from '@/lib/dataTransformers';
 import { fetchCalendarFromSupabase } from '@/lib/calendarFetcher';
 import { canMakeRequest, recordRequest, RateLimitError } from '@/lib/backendRequestLimiter';
 import { isDataFresh } from '@/lib/dataExpiry';
 import type { AttendanceData, AttendanceSubject } from '@/lib/apiTypes';
-import { Plus } from 'lucide-react';
+import { Check, Plus } from 'lucide-react';
 import TopAppBar from '@/components/sdash/TopAppBar';
 import PillNav from '@/components/sdash/PillNav';
 import GlassCard from '@/components/sdash/GlassCard';
@@ -37,6 +43,25 @@ interface AttendanceApiResponse {
   data?: AttendanceData;
   error?: string;
   count?: number;
+}
+
+const ATTENDANCE_SORT_STORAGE_KEY = 'sdash_attendance_sort_mode';
+const ATTENDANCE_VIEW_STORAGE_KEY = 'sdash_attendance_view_mode';
+
+type AttendanceSortMode = 'general' | 'today' | 'lowToHigh';
+
+function readAttendanceSortMode(): AttendanceSortMode {
+  if (typeof window === 'undefined') return 'general';
+  const raw = getStorageItem(ATTENDANCE_SORT_STORAGE_KEY);
+  if (raw === 'today' || raw === 'lowToHigh' || raw === 'general') return raw;
+  return 'general';
+}
+
+function readAttendanceViewMode(): 'cards' | 'list' {
+  if (typeof window === 'undefined') return 'cards';
+  const raw = getStorageItem(ATTENDANCE_VIEW_STORAGE_KEY);
+  if (raw === 'list' || raw === 'cards') return raw;
+  return 'cards';
 }
 
 // Component for displaying remaining hours (using proven utility functions)
@@ -280,7 +305,34 @@ export default function AttendancePage() {
   const [currentFact, setCurrentFact] = useState(DEFAULT_RANDOM_FACT);
   const [savedOdmlRecords, setSavedOdmlRecords] = useState<OdmlRecord[]>([]);
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
-  const [attendanceViewMode, setAttendanceViewMode] = useState<'cards' | 'list'>('cards');
+  const [attendanceSortMode, setAttendanceSortModeState] = useState<AttendanceSortMode>(readAttendanceSortMode);
+  const [attendanceViewMode, setAttendanceViewModeState] = useState<'cards' | 'list'>(readAttendanceViewMode);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const sortMenuRef = useRef<HTMLDivElement | null>(null);
+  const [timetableForOrder, setTimetableForOrder] = useState<TimetableData | null>(() => {
+    return getClientCache<TimetableData>('timetable') ?? null;
+  });
+
+  const setAttendanceSortMode = useCallback((mode: AttendanceSortMode) => {
+    setAttendanceSortModeState(mode);
+    setStorageItem(ATTENDANCE_SORT_STORAGE_KEY, mode);
+  }, []);
+
+  const setAttendanceViewMode = useCallback((mode: 'cards' | 'list') => {
+    setAttendanceViewModeState(mode);
+    setStorageItem(ATTENDANCE_VIEW_STORAGE_KEY, mode);
+  }, []);
+
+  useEffect(() => {
+    if (!sortMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target as Node)) {
+        setSortMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [sortMenuOpen]);
   const [showOdmlApplied, setShowOdmlApplied] = useState(true); // Toggle to show with/without ODML
   const [originalAttendanceData, setOriginalAttendanceData] = useState<AttendanceData | null>(
     initialRenderable ? initialAttendanceCache.attendanceData : null
@@ -535,6 +587,7 @@ export default function AttendancePage() {
     if (!slotOccurrences.length) {
       const cachedTimetable = getClientCache<TimetableData>('timetable');
       if (cachedTimetable && cachedTimetable.timetable && Object.keys(cachedTimetable.timetable).length > 0) {
+        setTimetableForOrder(cachedTimetable);
         const occurrences = getSlotOccurrences(cachedTimetable);
         if (occurrences.length) {
           setSlotOccurrences(occurrences);
@@ -542,6 +595,7 @@ export default function AttendancePage() {
       } else if (cachedTimetable) {
         console.warn('[Attendance] ❌ Invalid cached timetable data detected, clearing entry');
         removeClientCache('timetable');
+        setTimetableForOrder(null);
       }
     }
 
@@ -633,10 +687,14 @@ export default function AttendancePage() {
         return;
       }
 
-      const resultByCode = new Map<string, PredictionResult>();
+      // One entry per attendance row: subject_code alone collides for theory + practical of same course
+      const resultByRowKey = new Map<string, PredictionResult>();
       odmlResults.forEach((row) => {
         if (row.subject?.subject_code) {
-          resultByCode.set(row.subject.subject_code, row);
+          resultByRowKey.set(
+            buildOdmlSubjectKey(row.subject.subject_code, row.subject.category),
+            row
+          );
         }
       });
 
@@ -644,7 +702,9 @@ export default function AttendancePage() {
         ...originalAttendanceData,
         all_subjects: originalAttendanceData.all_subjects.map((subject) => {
           if (!subject) return subject;
-          const pred = resultByCode.get(subject.subject_code);
+          const pred = resultByRowKey.get(
+            buildOdmlSubjectKey(subject.subject_code, subject.category)
+          );
           if (!pred) {
             return subject;
           }
@@ -660,14 +720,17 @@ export default function AttendancePage() {
         }),
       };
 
-      const adjustedByCode = new Map(
+      const adjustedByRowKey = new Map(
         adjustedData.all_subjects
           .filter((s): s is AttendanceSubject => Boolean(s))
-          .map((s) => [s.subject_code, s])
+          .map((s) => [buildOdmlSubjectKey(s.subject_code, s.category), s])
       );
       const resultsForDisplay = odmlResults.map((row) => ({
         ...row,
-        subject: adjustedByCode.get(row.subject.subject_code) ?? row.subject,
+        subject:
+          adjustedByRowKey.get(
+            buildOdmlSubjectKey(row.subject.subject_code, row.subject.category)
+          ) ?? row.subject,
       }));
 
       setAttendanceData(adjustedData);
@@ -801,6 +864,7 @@ export default function AttendancePage() {
 
       if (parsedTimetable) {
         setClientCache('timetable', parsedTimetable, { expiresAt: null });
+        setTimetableForOrder(parsedTimetable);
         const occurrences = getSlotOccurrences(parsedTimetable);
         setSlotOccurrences(occurrences);
         try {
@@ -982,7 +1046,8 @@ export default function AttendancePage() {
                 getDayOrderStatsForDateRange(calendarForOdml, period.from, period.to)
               );
               if (periodHours > 0) {
-                subjectHours[subject.subject_code] = periodHours;
+                subjectHours[buildOdmlSubjectKey(subject.subject_code, subject.category)] =
+                  periodHours;
               }
             });
           }
@@ -1335,6 +1400,7 @@ export default function AttendancePage() {
         console.log('[Attendance] ✅ Timetable data loaded from API payload');
         if (timetablePayload) {
           setClientCache('timetable', timetablePayload);
+          setTimetableForOrder(timetablePayload);
           const occurrences = getSlotOccurrences(timetablePayload);
           if (occurrences.length > 0) {
             setSlotOccurrences(occurrences);
@@ -1499,47 +1565,53 @@ export default function AttendancePage() {
       .map((subject, originalIndex) => ({ subject, originalIndex }))
       .filter((item): item is { subject: AttendanceSubject; originalIndex: number } => Boolean(item.subject));
 
-    return withIndex.sort((a, b) => {
-      const aPrediction = (isPredictionMode || isOdmlMode)
-        ? predictionResults.find(
-            (p) =>
-              p.subject.subject_code === a.subject.subject_code &&
-              p.subject.category === a.subject.category
-          )
-        : null;
-      const bPrediction = (isPredictionMode || isOdmlMode)
-        ? predictionResults.find(
-            (p) =>
-              p.subject.subject_code === b.subject.subject_code &&
-              p.subject.category === b.subject.category
-          )
-        : null;
+    const pctForSort = (subject: AttendanceSubject) => {
+      const prediction =
+        isPredictionMode || isOdmlMode
+          ? predictionResults.find(
+              (p) =>
+                p.subject.subject_code === subject.subject_code &&
+                p.subject.category === subject.category
+            )
+          : null;
+      return Math.round(
+        prediction ? prediction.predictedAttendance : getAttendancePercentage(subject.attendance)
+      );
+    };
 
-      const aRequiredMargin = calculateRequiredMargin(a.subject);
-      const bRequiredMargin = calculateRequiredMargin(b.subject);
-      const aPredictedMargin = aPrediction ? getPredictedMargin(a.subject, aPrediction, aRequiredMargin) : null;
-      const bPredictedMargin = bPrediction ? getPredictedMargin(b.subject, bPrediction, bRequiredMargin) : null;
+    if (attendanceSortMode === 'general') {
+      return [...withIndex].sort((a, b) => a.originalIndex - b.originalIndex);
+    }
 
-      const aMarginMeta = aPredictedMargin ?? aRequiredMargin;
-      const bMarginMeta = bPredictedMargin ?? bRequiredMargin;
+    if (attendanceSortMode === 'lowToHigh') {
+      return [...withIndex].sort((a, b) => {
+        const d = pctForSort(a.subject) - pctForSort(b.subject);
+        if (d !== 0) return d;
+        return a.originalIndex - b.originalIndex;
+      });
+    }
 
-      if (aMarginMeta.type !== bMarginMeta.type) {
-        return aMarginMeta.type === 'required' ? -1 : 1;
-      }
-
-      if (aMarginMeta.type === 'required' && bMarginMeta.type === 'required' && aMarginMeta.value !== bMarginMeta.value) {
-        return bMarginMeta.value - aMarginMeta.value;
-      }
-
-      const aPct = Math.round(aPrediction ? aPrediction.predictedAttendance : getAttendancePercentage(a.subject.attendance));
-      const bPct = Math.round(bPrediction ? bPrediction.predictedAttendance : getAttendancePercentage(b.subject.attendance));
-      if (aPct !== bPct) {
-        return aPct - bPct;
-      }
-
-      return a.subject.course_title.localeCompare(b.subject.course_title);
+    const currentDayOrder = getCurrentDayOrderFromCalendar(calendarData);
+    const holiday = isHolidayDayOrder(currentDayOrder);
+    const slots = getTodaysTimetableCourseSlots(calendarData, timetableForOrder);
+    const subjectsOnly = withIndex.map((x) => x.subject);
+    const orderedSubjects = orderAttendanceSubjectsTodayFirstThenJson(subjectsOnly, slots, holiday);
+    return orderedSubjects.map((subject) => {
+      const found = withIndex.find(
+        (x) => x.subject.subject_code === subject.subject_code && x.subject.category === subject.category
+      );
+      return found!;
     });
-  }, [attendanceData, isPredictionMode, isOdmlMode, predictionResults, getPredictedMargin]);
+  }, [
+    attendanceData,
+    attendanceSortMode,
+    calendarData,
+    timetableForOrder,
+    isPredictionMode,
+    isOdmlMode,
+    predictionResults,
+    getAttendancePercentage,
+  ]);
 
   const subjectDisplayRows = useMemo(() => {
     return sortedAttendanceSubjects.map(({ subject, originalIndex }) => {
@@ -1999,28 +2071,74 @@ export default function AttendancePage() {
             <span className="text-[13px] text-sdash-text-secondary whitespace-nowrap">below 75%</span>
           </StatChip>
         </div>
-        <div className="inline-flex items-center rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 p-1">
-          <button
-            type="button"
-            onClick={() => setAttendanceViewMode('cards')}
-            className={`rounded-[5px] px-3 py-1.5 text-sm font-sora transition-colors ${              attendanceViewMode === 'cards'
-                ? 'bg-sdash-accent text-sdash-text-primary'
-                : 'text-sdash-text-secondary'
-            }`}
-          >
-            Cards
-          </button>
-          <button
-            type="button"
-            onClick={() => setAttendanceViewMode('list')}
-            className={`rounded-[5px] px-3 py-1.5 text-sm font-sora transition-colors ${
-              attendanceViewMode === 'list'
-                ? 'bg-sdash-accent text-sdash-text-primary'
-                : 'text-sdash-text-secondary'
-            }`}
-          >
-            List
-          </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="relative" ref={sortMenuRef}>
+            <button
+              type="button"
+              onClick={() => setSortMenuOpen((o) => !o)}
+              className="text-[11px] font-sora text-sdash-text-muted hover:text-sdash-text-secondary/90"
+              aria-expanded={sortMenuOpen}
+              aria-haspopup="menu"
+            >
+              sort
+            </button>
+            {sortMenuOpen ? (
+              <div
+                className="absolute right-0 top-full z-50 mt-1 min-w-[168px] rounded-lg border border-white/[0.08] bg-black/40 py-1 backdrop-blur-md shadow-lg"
+                role="menu"
+              >
+                {(
+                  [
+                    { id: 'today' as const, label: "Today's attendance" },
+                    { id: 'lowToHigh' as const, label: 'Sort by low to high' },
+                    { id: 'general' as const, label: 'General order' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAttendanceSortMode(opt.id);
+                      setSortMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-sora text-sdash-text-muted hover:bg-white/[0.06]"
+                  >
+                    <span className="inline-flex w-3.5 shrink-0 justify-center">
+                      {attendanceSortMode === opt.id ? (
+                        <Check className="h-3 w-3 text-sdash-text-muted" strokeWidth={2.5} />
+                      ) : null}
+                    </span>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="inline-flex items-center rounded-[8px] border border-white/[0.12] bg-sdash-surface-1 p-1">
+            <button
+              type="button"
+              onClick={() => setAttendanceViewMode('cards')}
+              className={`rounded-[5px] px-3 py-1.5 text-sm font-sora transition-colors ${
+                attendanceViewMode === 'cards'
+                  ? 'bg-sdash-accent text-sdash-text-primary'
+                  : 'text-sdash-text-secondary'
+              }`}
+            >
+              Cards
+            </button>
+            <button
+              type="button"
+              onClick={() => setAttendanceViewMode('list')}
+              className={`rounded-[5px] px-3 py-1.5 text-sm font-sora transition-colors ${
+                attendanceViewMode === 'list'
+                  ? 'bg-sdash-accent text-sdash-text-primary'
+                  : 'text-sdash-text-secondary'
+              }`}
+            >
+              List
+            </button>
+          </div>
         </div>
       </div>
 

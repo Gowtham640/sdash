@@ -62,6 +62,35 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
 
   const [fetchedCalendarFallback, setFetchedCalendarFallback] = useState<CalendarMonthGridEvent[]>([]);
 
+  // Normalize calendar rows to match the calendar page's `sortedEvents` shape,
+  // so month-cell DO values can be detected and rendered consistently.
+  const normalizeDayOrder = (raw: unknown): string | undefined => {
+    if (raw === undefined || raw === null) return undefined;
+    const s = String(raw).trim();
+    if (!s) return undefined;
+
+    const lower = s.toLowerCase();
+    if (s === '-' || lower === 'do -') return '-';
+    if (lower.includes('holiday')) return 'Holiday';
+
+    const match = s.match(/\d+/);
+    if (match && match[0]) return match[0];
+
+    return s;
+  };
+
+  const normalizeCalendarEvents = (raw: CalendarMonthGridEvent[]): CalendarMonthGridEvent[] => {
+    return raw.map((e: any) => ({
+      date: e.date,
+      day_name: e.day_name,
+      content: e.content ?? e.event ?? '',
+      day_order: normalizeDayOrder(e.day_order),
+      month: e.month,
+      month_name: e.month_name,
+      year: e.year,
+    }));
+  };
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -85,7 +114,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
 
   const sortedGridEvents = useMemo(() => {
     const raw = (calendarData?.length ? calendarData : fetchedCalendarFallback) ?? [];
-    const list = raw as CalendarMonthGridEvent[];
+    const list = normalizeCalendarEvents(raw as CalendarMonthGridEvent[]);
     return [...list].sort((a, b) => {
       if (!a.date || !b.date) return 0;
       const da = parseDdMmYyyy(a.date);
@@ -262,7 +291,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
           <label className="text-white font-sora text-lg font-bold mb-3 block">
             Add OD/ML Period:
           </label>
-          <div className={`bg-white/10 border border-white/20 rounded-2xl ${isCompact ? 'p-3' : 'p-4'}`}>
+          <div className={`bg-white/10 border border-white/20 rounded-2xl w-full ${isCompact ? 'p-3' : 'p-4'}`}>
             <CalendarMonthGrid
               sortedEvents={sortedGridEvents}
               viewMonth={viewMonth}
@@ -270,7 +299,7 @@ export const ODMLModal: React.FC<ODMLModalProps> = ({
               todayDateStr={todayDdMmYyyy}
               selectedRange={currentDateRange}
               onDayClick={handleMonthDayClick}
-              className="text-sdash-text-primary"
+              className="w-full"
             />
           </div>
           

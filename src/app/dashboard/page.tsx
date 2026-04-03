@@ -17,6 +17,13 @@ import PwaInstallPrompt from '@/components/PwaInstallPrompt';
 import { useRouter } from "next/navigation";
 import type { AttendanceData, MarksData } from "@/lib/apiTypes";
 import { trackPostRequest } from "@/lib/postAnalytics";
+import {
+  getCurrentDayOrderFromCalendar,
+  getTodaysTimetableCourseSlots,
+  isHolidayDayOrder,
+  orderAttendanceSubjectsTodayFirstThenJson,
+  type TimetableCourseSlot,
+} from "@/lib/attendanceDisplayOrder";
 import GlassCard from "@/components/sdash/GlassCard";
 import StatChip from "@/components/sdash/StatChip";
 import SwipeableCards from "@/components/sdash/SwipeableCards";
@@ -145,13 +152,6 @@ interface CalendarEvent {
   month?: string;
   month_name?: string;
   year?: number;
-}
-
-interface TimeSlot {
-  time: string;
-  course_title: string;
-  category: string;
-  room?: string;
 }
 
 type CachePayloadType = 'attendance' | 'marks' | 'timetable';
@@ -342,131 +342,6 @@ export default function Dashboard() {
     }
 
     return dates;
-  };
-
-  const normalizeDayOrderValue = (value?: string | null) => {
-    if (value === undefined || value === null) {
-      return null;
-    }
-    const trimmed = value.trim();
-    return trimmed || null;
-  };
-
-  const isHolidayDayOrder = (dayOrder?: string | null) => {
-    const normalized = normalizeDayOrderValue(dayOrder);
-    if (!normalized) {
-      return false;
-    }
-    return normalized === '-' || normalized.toLowerCase().includes('holiday');
-  };
-
-  // Get current day's day order
-  const getCurrentDayOrder = () => {
-    if (!calendarData || !Array.isArray(calendarData) || calendarData.length === 0) {
-      return null;
-    }
-    const currentDate = getCurrentDateString();
-    const currentEvent = calendarData.find(event => event && event.date === currentDate);
-    return normalizeDayOrderValue(currentEvent?.day_order);
-  };
-
-  // Get current day's day order number
-  const getCurrentDayOrderNumber = () => {
-    const dayOrder = getCurrentDayOrder();
-    if (!dayOrder || isHolidayDayOrder(dayOrder)) {
-      return null;
-    }
-
-    const match = dayOrder.match(/\d+/);
-    if (!match) {
-      return null;
-    }
-
-    const parsed = parseInt(match[0], 10);
-    return Number.isNaN(parsed) || parsed < 1 || parsed > 5 ? null : parsed;
-  };
-
-  // Get today's timetable based on day order
-  const getTodaysTimetable = () => {
-    console.log('[Dashboard] 🔍 getTodaysTimetable called');
-
-    const currentDayOrder = getCurrentDayOrder();
-    if (isHolidayDayOrder(currentDayOrder)) {
-      console.log('[Dashboard] ℹ️ Today is marked as holiday - skipping timetable rendering');
-      return [];
-    }
-
-    const doNumber = getCurrentDayOrderNumber();
-    if (doNumber == null) {
-      console.log('[Dashboard] ℹ️ Day order unavailable or non-working day, skipping timetable');
-      return [];
-    }
-
-    if (!timetableData?.timetable) {
-      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - missing timetable data');
-      return [];
-    }
-
-    const key = `DO ${doNumber}`;
-    console.log('[Dashboard] 📊 Timetable data lookup key:', key);
-    const timetableForToday = timetableData.timetable[key];
-
-    if (!timetableForToday?.time_slots) {
-      console.log('[Dashboard] ❌ getTodaysTimetable returning empty - no time_slots for', key);
-      return [];
-    }
-
-    // Convert to array of {time, course_title, category}
-    const timeSlots: TimeSlot[] = [];
-    if (!timetableForToday.time_slots || typeof timetableForToday.time_slots !== 'object') {
-      return timeSlots;
-    }
-    Object.entries(timetableForToday.time_slots).forEach(([time, slot]: [string, unknown]) => {
-      const typedSlot = slot as {
-        slot_code?: string;
-        slot_type?: string;
-        room?: string;
-        roomNo?: string;
-        room_number?: string;
-      };
-      if (typedSlot?.slot_code) {
-        // Find course title from slot mapping
-        const slotCode = typedSlot.slot_code;
-        const slotMapping = timetableData?.slot_mapping || {};
-        const courseTitle = slotMapping[slotCode] || '';
-
-        const roomValue = (typedSlot.room || typedSlot.roomNo || typedSlot.room_number || '').toString().trim();
-        timeSlots.push({
-          time,
-          course_title: courseTitle,
-          category: typedSlot.slot_type || '',
-          room: roomValue || undefined
-        });
-      }
-    });
-
-    // Sort by start time of the time slot
-    return timeSlots.sort((a, b) => {
-      // Extract start time from "HH:MM-HH:MM" format
-      const getStartTime = (timeStr: string): number => {
-        const startTime = timeStr.split('-')[0]; // Get "HH:MM"
-        const timeParts = startTime.split(':').map(Number);
-        let hours = timeParts[0];
-        const minutes = timeParts[1];
-
-        // Convert 12-hour format to 24-hour for proper sorting
-        // Times 01:xx through 07:xx are PM (13:xx to 19:xx in 24-hour)
-        // Times 08:xx onwards are AM (keep as is)
-        // Times 12:xx stay as 12:xx (noon)
-        if (hours < 8 && hours !== 0) {
-          hours += 12; // Convert 1PM-7PM to 13-19
-        }
-
-        const minutesValue = hours * 60 + minutes;
-        return minutesValue;
-      };
-      return getStartTime(a.time) - getStartTime(b.time);
-    });
   };
 
   useEffect(() => {
@@ -1267,9 +1142,9 @@ export default function Dashboard() {
   }
 
   const threeDayDates = getThreeDayDates();
-  const todaysTimetable = getTodaysTimetable();
-  const currentDayOrder = getCurrentDayOrder();
+  const currentDayOrder = getCurrentDayOrderFromCalendar(calendarData);
   const isHolidayToday = isHolidayDayOrder(currentDayOrder);
+  const todaysTimetable: TimetableCourseSlot[] = getTodaysTimetableCourseSlots(calendarData, timetableData);
 
   const parseSlotRangeToMinutes = (timeRange: string): { start: number; end: number } | null => {
     const parts = timeRange.split("-");
@@ -1337,30 +1212,10 @@ export default function Dashboard() {
   })();
 
   const attendanceSubjects = attendanceData?.all_subjects?.filter(Boolean) ?? [];
-  const normalizeSubjectTitle = (value: string | undefined | null): string =>
-    String(value ?? "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-
-  const todaysTimetableSubjectKeys = new Set(
-    todaysTimetable
-      .map((slot) => normalizeSubjectTitle(slot.course_title))
-      .filter((key) => key.length > 0)
-  );
-
-  const todaysAttendanceSubjects = attendanceSubjects.filter((subject) =>
-    todaysTimetableSubjectKeys.has(normalizeSubjectTitle(subject?.course_title))
-  );
-
-  const sortedAttendanceSubjects = [...todaysAttendanceSubjects].sort((a, b) => {
-    const aPct = Math.round(parseFloat(String(a?.attendance_percentage || "0").replace("%", "")) || 0);
-    const bPct = Math.round(parseFloat(String(b?.attendance_percentage || "0").replace("%", "")) || 0);
-    const aCritical = aPct < 75;
-    const bCritical = bPct < 75;
-
-    if (aCritical === bCritical) return 0;
-    return aCritical ? -1 : 1;
-  });
+  // Holiday: JSON order. Else: today’s timetable slot order, then remaining subjects in JSON order.
+  const displayAttendanceSubjects = isHolidayToday
+    ? [...attendanceSubjects]
+    : orderAttendanceSubjectsTodayFirstThenJson(attendanceSubjects, todaysTimetable, false);
   const avgAttendance =
     attendanceSubjects.length > 0
       ? Math.round(
@@ -1591,7 +1446,7 @@ export default function Dashboard() {
             <GlassCard className="p-4">
               <p className="text-sm text-sdash-text-secondary font-sora">
                 {isHolidayToday
-                  ? "Today is marked as a holiday."
+                  ? "Today is a holiday, yay!"
                   : currentDayOrder
                     ? "No classes today."
                     : "Unable to determine day order."}
@@ -1602,9 +1457,9 @@ export default function Dashboard() {
 
         <section>
           <p className="section-label mb-3 pt-2 !text-white !text-[15px]">ATTENDANCE</p>
-          {sortedAttendanceSubjects.length > 0 ? (
+          {displayAttendanceSubjects.length > 0 ? (
             <SwipeableCards>
-              {sortedAttendanceSubjects.map((subject) => {
+              {displayAttendanceSubjects.map((subject) => {
                 if (!subject?.attendance_percentage) return null;
                 const pctRaw = parseFloat(String(subject.attendance_percentage).replace("%", ""));
                 const pct = Math.round(Number.isFinite(pctRaw) ? pctRaw : 0);

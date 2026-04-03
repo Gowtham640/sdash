@@ -56,6 +56,38 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
 
   const [fetchedCalendarFallback, setFetchedCalendarFallback] = useState<CalendarMonthGridEvent[]>([]);
 
+  // The modals receive calendar rows from different codepaths (attendance page caches/API),
+  // so we normalize here to match the calendar page's `sortedEvents` shape:
+  // - `content` must exist for holiday detection
+  // - `day_order` must be numeric (1-5) when it's a DO row
+  const normalizeDayOrder = (raw: unknown): string | undefined => {
+    if (raw === undefined || raw === null) return undefined;
+    const s = String(raw).trim();
+    if (!s) return undefined;
+
+    const lower = s.toLowerCase();
+    if (s === '-' || lower === 'do -') return '-';
+    if (lower.includes('holiday')) return 'Holiday';
+
+    const match = s.match(/\d+/);
+    if (match && match[0]) return match[0];
+
+    return s;
+  };
+
+  const normalizeCalendarEvents = (raw: CalendarMonthGridEvent[]): CalendarMonthGridEvent[] => {
+    return raw.map((e: any) => ({
+      date: e.date,
+      day_name: e.day_name,
+      // Some codepaths use `event` instead of `content` (backend cache variance).
+      content: e.content ?? e.event ?? '',
+      day_order: normalizeDayOrder(e.day_order),
+      month: e.month,
+      month_name: e.month_name,
+      year: e.year,
+    }));
+  };
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -79,7 +111,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
 
   const sortedGridEvents = useMemo(() => {
     const raw = (calendarData?.length ? calendarData : fetchedCalendarFallback) ?? [];
-    const list = raw as CalendarMonthGridEvent[];
+    const list = normalizeCalendarEvents(raw as CalendarMonthGridEvent[]);
     return [...list].sort((a, b) => {
       if (!a.date || !b.date) return 0;
       const da = parseDdMmYyyy(a.date);
@@ -210,7 +242,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
           <label className="text-white font-sora text-lg font-bold mb-3 block">
             Add Leave Period:
           </label>
-          <div className={`bg-white/10 border border-white/20 rounded-2xl ${isCompact ? 'p-3' : 'p-4'}`}>
+          <div className={`bg-white/10 border border-white/20 rounded-2xl w-full ${isCompact ? 'p-3' : 'p-4'}`}>
             <CalendarMonthGrid
               sortedEvents={sortedGridEvents}
               viewMonth={viewMonth}
@@ -218,7 +250,7 @@ export const AttendancePredictionModal: React.FC<AttendancePredictionModalProps>
               todayDateStr={todayDdMmYyyy}
               selectedRange={currentDateRange}
               onDayClick={handleMonthDayClick}
-              className="text-sdash-text-primary"
+              className="w-full"
             />
           </div>
           
