@@ -1720,21 +1720,6 @@ export default function Dashboard() {
           )}
         </section>
 
-        <div className="flex w-full gap-2 pt-2">
-          <Link
-            href="/attendance?openTool=predict"
-            className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
-          >
-            Predict attendance
-          </Link>
-          <Link
-            href="/attendance?openTool=odml"
-            className="flex-1 rounded-full border border-white/[0.12] bg-sdash-surface-1 py-2.5 text-center text-sm font-sora text-sdash-text-primary touch-target"
-          >
-            Calculate ODML
-          </Link>
-        </div>
-
         <p className="text-center text-[11px] text-sdash-text-muted font-sora pb-4">
           SDash · Gowtham & Anas
         </p>
