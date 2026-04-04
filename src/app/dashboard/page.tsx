@@ -1423,7 +1423,12 @@ export default function Dashboard() {
         </section>
 
         <section>
-          <p className="section-label mb-3 pt-2 !text-white !text-[15px]">ATTENDANCE</p>
+          <div className="flex items-center justify-between gap-4 mb-3 pt-2">
+            <p className="section-label mb-0 !text-white !text-[15px]">ATTENDANCE</p>
+            <Link href="/attendance" className="text-sdash-accent text-[13px] font-sora font-medium shrink-0">
+              View full attendance
+            </Link>
+          </div>
           {displayAttendanceSubjects.length > 0 ? (
             <SwipeableCards>
               {displayAttendanceSubjects.map((subject) => {
@@ -1484,7 +1489,12 @@ export default function Dashboard() {
         </section>
 
         <section>
-          <p className="section-label mb-3 !text-white !text-[15px]">MARKS</p>
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <p className="section-label mb-0 !text-white !text-[15px]">MARKS</p>
+            <Link href="/marks" className="text-sdash-accent text-[13px] font-sora font-medium shrink-0">
+              View full marks
+            </Link>
+          </div>
           {marksData?.all_courses && marksData.all_courses.length > 0 ? (
             <SwipeableCards>
               {marksData.all_courses
@@ -1543,7 +1553,24 @@ export default function Dashboard() {
         </section>
 
         <p className="text-center text-[11px] text-sdash-text-muted font-sora pb-4">
-          SDash · Gowtham & Anas
+          SDash ·{" "}
+          <Link
+            href="https://github.com/Gowtham640"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sdash-text-secondary underline-offset-2 hover:text-sdash-accent hover:underline"
+          >
+            Gowtham
+          </Link>
+          {" "}&{" "}
+          <Link
+            href="https://github.com/SyedMohammadAnas"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sdash-text-secondary underline-offset-2 hover:text-sdash-accent hover:underline"
+          >
+            Anas
+          </Link>
         </p>
       </main>
 
