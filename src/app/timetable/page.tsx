@@ -1976,26 +1976,40 @@ export default function TimetablePage() {
       <main className="w-full max-w-lg mx-auto flex flex-col gap-6 px-4 pt-4 pb-2">
         {/* Post-save: merged grid is session-only; disappears on full page reload */}
 
-        {/* DO 1–5 tabs, then Save/Cancel (edit) or Edit — then slot cards */}
+        {/* DO 1–5 tabs + Edit on one row; Save/Cancel on the row below only while editing */}
         <div className="flex flex-col gap-3 -mx-4 px-4">
-          <div className="flex gap-2 overflow-x-auto hide-scrollbar">
-            {TIMETABLE_DAY_LABELS.map((d) => (
+          <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto hide-scrollbar">
+              {TIMETABLE_DAY_LABELS.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => {
+                    setHasUserSelectedDayOrder(true);
+                    setActiveDayOrder(d);
+                  }}
+                  className={`shrink-0 rounded-[6px] px-2 py-0 text-md font-sora font-medium transition-colors h-7 min-h-0 leading-none !touch-manipulation ${
+                    activeDayOrder === d
+                      ? "bg-sdash-accent text-sdash-text-primary"
+                      : "bg-sdash-surface-1 border border-white/[0.08] text-sdash-text-secondary"
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+            {!timetableEditMode ? (
               <button
-                key={d}
                 type="button"
-                onClick={() => {
-                  setHasUserSelectedDayOrder(true);
-                  setActiveDayOrder(d);
-                }}
-                className={`shrink-0 rounded-[6px] px-2 py-0 text-md font-sora font-medium transition-colors h-7 min-h-0 leading-none !touch-manipulation ${
-                  activeDayOrder === d
-                    ? "bg-sdash-accent text-sdash-text-primary"
-                    : "bg-sdash-surface-1 border border-white/[0.08] text-sdash-text-secondary"
-                }`}
+                onClick={() => void startTimetableEditMode()}
+                disabled={editorContextLoading || savingGlobalModification}
+                className="touch-target inline-flex shrink-0 items-center gap-1.5 self-center rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.09] hover:text-sdash-text-primary disabled:opacity-40"
+                title="Edit timetable (session preview until you save)"
               >
-                {d}
+                <Pencil className="h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={2} />
+                {editorContextLoading ? "…" : "Edit"}
               </button>
-            ))}
+            ) : null}
           </div>
 
           {timetableEditMode ? (
@@ -2019,20 +2033,7 @@ export default function TimetablePage() {
                 Cancel
               </button>
             </div>
-          ) : (
-            <div className="flex w-full justify-end">
-              <button
-                type="button"
-                onClick={() => void startTimetableEditMode()}
-                disabled={editorContextLoading || savingGlobalModification}
-                className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-[12px] font-sora font-medium text-sdash-text-secondary transition-colors hover:bg-white/[0.09] hover:text-sdash-text-primary disabled:opacity-40"
-                title="Edit timetable (session preview until you save)"
-              >
-                <Pencil className="h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={2} />
-                {editorContextLoading ? "…" : "Edit"}
-              </button>
-            </div>
-          )}
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-3">
